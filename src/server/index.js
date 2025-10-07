@@ -7,9 +7,17 @@ const database = require("./utils/Database");
 const logger = require("./utils/Logger");
 const baseUrl = require("./utils/BaseURL");
 
+// CORS configuration
+// Supports two modes:
+// 1. CROSS_ORIGIN=true - Enable CORS for all origins (legacy, not recommended for production)
+// 2. ALLOWED_ORIGINS=domain1.com,domain2.com - Whitelist specific origins (recommended)
 const CROSS_ORIGIN = process.env.CROSS_ORIGIN
   ? process.env.CROSS_ORIGIN.toLowerCase() === "true"
   : false;
+
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
+  : null;
 
 process.on("SIGINT", () => {
   logger.info("SIGINT received, exiting");
@@ -34,7 +42,24 @@ if (trustProxy) {
   logger.info("Trust proxy enabled - will use X-Forwarded-For for client IP");
 }
 
-if (CROSS_ORIGIN) {
+// Apply CORS configuration
+if (ALLOWED_ORIGINS && ALLOWED_ORIGINS.length > 0) {
+  app.use(cors({
+    origin: function (origin, callback) {
+      // Allow requests with no origin (like mobile apps, curl, Postman)
+      if (!origin) return callback(null, true);
+
+      if (ALLOWED_ORIGINS.indexOf(origin) !== -1) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    credentials: false,
+    methods: ['GET', 'POST', 'DELETE']
+  }));
+  logger.info(`CORS enabled for origins: ${ALLOWED_ORIGINS.join(', ')}`);
+} else if (CROSS_ORIGIN) {
   app.use(cors());
   logger.info("CORS enabled for all origins");
 }

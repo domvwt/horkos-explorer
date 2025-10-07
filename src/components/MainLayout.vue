@@ -407,7 +407,14 @@ export default {
       if (this.modeStore.isWasm) {
         return {};
       }
-      return (await Axios.get("/api/session/settings")).data;
+      try {
+        return (await Axios.get("/api/session/settings")).data;
+      } catch (error) {
+        // Session endpoint not available (DISABLE_SESSION_DB=true) - return empty
+        // Settings will be loaded from localStorage instead
+        console.debug('Server-side settings not available, using localStorage');
+        return {};
+      }
     },
     async reloadSchema() {
       await this.getSchema();

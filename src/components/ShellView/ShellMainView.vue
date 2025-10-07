@@ -4,7 +4,7 @@
     :class="{ 'is-maximized': maximizedCellIndex !== -1 }"
     :style="{ height: `${containerHeight}px` }"
   >
-    <div v-if="maximizedCellIndex < 0">
+    <div v-if="maximizedCellIndex < 0 && !isReadOnly">
       <div class="d-flex align-items-center gap-3 m-4">
         <button
           type="button"
@@ -38,6 +38,7 @@ import ShellCell from "./ShellCell.vue";
 import { v4 as uuidv4 } from 'uuid';
 import Axios from "@/utils/AxiosWrapper";
 import { MODES } from "@/utils/Constants";
+import { useModeStore } from "@/store/ModeStore";
 export default {
   name: "ShellMainView",
   components: {
@@ -56,6 +57,12 @@ export default {
     },
   },
   emits: ["reloadSchema"],
+  setup() {
+    const modeStore = useModeStore();
+    return {
+      modeStore,
+    };
+  },
   data: () => ({
     shellCell: [
       {
@@ -68,6 +75,11 @@ export default {
     maximizedCellIndex: -1,
     containerHeight: 0,
   }),
+  computed: {
+    isReadOnly() {
+      return this.modeStore.isReadOnly;
+    },
+  },
 
   async mounted() {
     try {
@@ -111,17 +123,19 @@ export default {
       if (!uuid) {
         return;
       }
-      try {
-        this.removeCellFromHistory(uuid);
-      } catch (e) {
-        // Ignore
-      }
+      // Remove from server history (if available)
+      this.removeCellFromHistory(uuid).catch(() => {
+        // Session endpoint not available - ignore
+      });
     },
     removeCellFromHistory(uuid) {
       if (this.isWasm) {
-        return;
+        return Promise.resolve();
       }
-      return Axios.delete(`/api/session/history/${uuid}`);
+      return Axios.delete(`/api/session/history/${uuid}`).catch((error) => {
+        // Session endpoint not available (DISABLE_SESSION_DB=true) - ignore
+        console.debug('Server-side history delete not available');
+      });
     },
     loadCellHistoryFromServer() {
       return Axios.get("/api/session/history").then(res => res.data);
@@ -130,26 +144,32 @@ export default {
       if (this.isWasm) {
         return;
       }
-      const history = await this.loadCellHistoryFromServer();
-      history.map(cell => {
-        return {
-          cellId: cell.uuid,
-        };
-      }).forEach(cell => {
-        if (this.isCellAddedToTheEnd) {
-          this.shellCell.unshift(cell);
-        }
-        else {
-          this.shellCell.push(cell);
-        }
-      });
-      this.$nextTick(() => {
-        history.forEach((cell) => {
-          const uuid = cell.uuid;
-          const cellRef = this.$refs[this.getCellRefById(uuid)][0];
-          cellRef.loadEditorFromHistory(cell);
+      try {
+        const history = await this.loadCellHistoryFromServer();
+        history.map(cell => {
+          return {
+            cellId: cell.uuid,
+          };
+        }).forEach(cell => {
+          if (this.isCellAddedToTheEnd) {
+            this.shellCell.unshift(cell);
+          }
+          else {
+            this.shellCell.push(cell);
+          }
         });
-      });
+        this.$nextTick(() => {
+          history.forEach((cell) => {
+            const uuid = cell.uuid;
+            const cellRef = this.$refs[this.getCellRefById(uuid)][0];
+            cellRef.loadEditorFromHistory(cell);
+          });
+        });
+      } catch (error) {
+        // Session endpoint not available (DISABLE_SESSION_DB=true) - gracefully ignore
+        // History will be loaded from localStorage instead
+        console.debug('Server-side history not available, using localStorage');
+      }
     },
     addCell() {
       const cell = this.createCell();
