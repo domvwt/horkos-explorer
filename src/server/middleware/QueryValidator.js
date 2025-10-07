@@ -75,7 +75,7 @@ class QueryValidator {
 
   /**
    * Strips comments from a Cypher statement
-   * Removes both line comments (//) and block comments (/* */)
+   * Removes both line comments and block comments
    * @param {string} statement - A Cypher statement
    * @returns {string} Statement with comments removed
    */
