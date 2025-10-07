@@ -163,11 +163,18 @@ export const useSettingsStore = defineStore("settings", {
       }
       g6Settings.style.fill = color;
       g6Settings.style.stroke = G6Utils.shadeColor(color);
-      let primaryKey = node.properties.filter((p) => p.isPrimaryKey)[0];
-      if (!primaryKey) {
-        primaryKey = node.properties[0];
+
+      // Prefer "name" property if it exists, otherwise use primary key
+      let label = "name";
+      const hasNameProperty = node.properties.some((p) => p.name === "name");
+      if (!hasNameProperty) {
+        let primaryKey = node.properties.filter((p) => p.isPrimaryKey)[0];
+        if (!primaryKey) {
+          primaryKey = node.properties[0];
+        }
+        label = primaryKey.name;
       }
-      const label = primaryKey.name;
+
       const nodeSettings = {
         name,
         g6Settings,
@@ -248,6 +255,13 @@ export const useSettingsStore = defineStore("settings", {
             this.graphViz.nodes[node.name].g6Settings.style.fill
           );
         this.graphViz.nodes[node.name].g6Settings.style.lineWidth = 3;
+
+        // Migrate label from primary key to "name" if name property exists and label is currently "_label" or "id"
+        const hasNameProperty = node.properties.some((p) => p.name === "name");
+        const currentLabel = this.graphViz.nodes[node.name].label;
+        if (hasNameProperty && (currentLabel === "_label" || currentLabel === "id")) {
+          this.graphViz.nodes[node.name].label = "name";
+        }
       });
 
       schema.relTables.forEach((rel) => {
@@ -326,7 +340,7 @@ export const useSettingsStore = defineStore("settings", {
       const nodeSettings = {
         name,
         g6Settings,
-        label: "_label",
+        label: "name",
       };
       this.graphViz.nodes[name] = nodeSettings;
     },

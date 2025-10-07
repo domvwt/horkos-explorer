@@ -317,7 +317,10 @@ export default {
           this.containerHeight = window.innerHeight - this.navbarHeight - editorHeight - 2 * UI_SIZE.DEFAULT_MARGIN - 50 + 'px';
         }
         else {
-          this.containerHeight = this.queryResultDefaultHeight + 'px';
+          // Use available space instead of fixed 400px
+          const availableHeight = window.innerHeight - this.navbarHeight - editorHeight - 2 * UI_SIZE.DEFAULT_MARGIN - 50;
+          // Use the larger of the default or available space
+          this.containerHeight = Math.max(this.queryResultDefaultHeight, availableHeight) + 'px';
         }
       }
     },

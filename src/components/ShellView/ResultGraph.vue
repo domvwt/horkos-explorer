@@ -92,10 +92,9 @@
             <h5>{{ sidePanelPropertyTitlePrefix }} Properties</h5>
           </div>
           <span
-            class="badge bg-primary"
+            class="badge"
+            :class="entityTypeBadgeClass"
             :style="{
-              backgroundColor: `${getColor(displayLabel)} !important`,
-              color: `white !important`,
               textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
             }"
           >
@@ -142,6 +141,46 @@
               </tr>
             </tbody>
           </table>
+
+          <!-- External Resource Links -->
+          <div
+            v-if="clickedIsNode && externalLinks.length > 0"
+            class="result-graph__external-links"
+          >
+            <h6>External Resources</h6>
+            <div class="result-graph__links-grid">
+              <a
+                v-for="link in externalLinks"
+                :key="link.label"
+                :href="link.url"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="btn btn-sm btn-outline-secondary result-graph__external-link"
+              >
+                <i :class="link.icon" /> {{ link.label }}
+              </a>
+            </div>
+          </div>
+
+          <!-- Source Provenance -->
+          <div
+            v-if="clickedIsNode && sourceRecords.length > 0"
+            class="result-graph__source-provenance"
+          >
+            <h6>Data Sources</h6>
+            <div class="result-graph__source-badges">
+              <span
+                v-for="source in sourceRecords"
+                :key="source.id"
+                class="badge result-graph__source-badge"
+                :style="{
+                  '--badge-bg-color': source.color,
+                }"
+              >
+                {{ source.label }}
+              </span>
+            </div>
+          </div>
         </div>
         <div v-else>
           <h5>Overview</h5>
@@ -362,6 +401,177 @@ export default {
     },
     numHiddenRels() {
       return Object.keys(this.hiddenElements.edges).length;
+    },
+    entityTypeBadgeClass() {
+      if (!this.displayLabel) {
+        return 'bg-primary';
+      }
+
+      const entityType = this.displayLabel;
+      if (entityType === 'Person') {
+        return 'bg-primary'; // Blue
+      } else if (entityType === 'Company') {
+        return 'bg-success'; // Green
+      } else if (entityType === 'Address') {
+        return 'bg-warning'; // Orange
+      }
+
+      // Default for relationships or unknown types
+      return 'bg-secondary';
+    },
+    externalLinks() {
+      if (!this.clickedIsNode || !this.displayLabel) {
+        return [];
+      }
+
+      const links = [];
+      const entityType = this.displayLabel;
+      const properties = this.clickedProperties;
+
+      // Get property value by name
+      const getProperty = (name) => {
+        const prop = properties.find(p => p.name === name);
+        return prop ? prop.value : null;
+      };
+
+      const entityName = getProperty('name');
+
+      // Common links for all entities
+      if (entityName) {
+        links.push({
+          label: 'Google Search',
+          url: `https://www.google.com/search?q=${encodeURIComponent(entityName)}`,
+          icon: 'fa-brands fa-google'
+        });
+        links.push({
+          label: 'Wikipedia',
+          url: `https://en.wikipedia.org/wiki/Special:Search?search=${encodeURIComponent(entityName)}`,
+          icon: 'fa-brands fa-wikipedia-w'
+        });
+      }
+
+      // Entity-specific links
+      if (entityType === 'Company') {
+        const companyNumber = getProperty('company_number');
+        const jurisdiction = getProperty('jurisdiction');
+
+        if (companyNumber && jurisdiction === 'GB') {
+          links.push({
+            label: 'Companies House',
+            url: `https://find-and-update.company-information.service.gov.uk/company/${encodeURIComponent(companyNumber)}`,
+            icon: 'fa-solid fa-building'
+          });
+        }
+
+        if (entityName) {
+          links.push({
+            label: 'OpenCorporates',
+            url: `https://opencorporates.com/companies?q=${encodeURIComponent(entityName)}`,
+            icon: 'fa-solid fa-briefcase'
+          });
+        }
+      } else if (entityType === 'Person') {
+        if (entityName) {
+          links.push({
+            label: 'Google News',
+            url: `https://news.google.com/search?q=${encodeURIComponent(entityName)}`,
+            icon: 'fa-solid fa-newspaper'
+          });
+        }
+      } else if (entityType === 'Address') {
+        const fullAddress = getProperty('full');
+        const postCode = getProperty('post_code');
+
+        const addressQuery = fullAddress || postCode;
+        if (addressQuery) {
+          links.push({
+            label: 'Google Maps',
+            url: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addressQuery)}`,
+            icon: 'fa-solid fa-map-marked-alt'
+          });
+          links.push({
+            label: 'Street View',
+            url: `https://www.google.com/maps/@?api=1&map_action=pano&parameters&query=${encodeURIComponent(addressQuery)}`,
+            icon: 'fa-solid fa-street-view'
+          });
+        }
+      }
+
+      return links;
+    },
+    sourceRecords() {
+      if (!this.clickedIsNode || !this.displayProperties) {
+        return [];
+      }
+
+      // Find source_systems property
+      const sourceProp = this.displayProperties.find(p => p.name === 'source_systems');
+      if (!sourceProp || !sourceProp.value) {
+        return [];
+      }
+
+      // Parse sources (could be array or string representation)
+      let sources = [];
+      if (Array.isArray(sourceProp.value)) {
+        sources = sourceProp.value;
+      } else if (typeof sourceProp.value === 'string') {
+        // Handle string representation like "['psc', 'companies_house']"
+        const cleaned = sourceProp.value.replace(/[\[\]'"]/g, '');
+        sources = cleaned.split(',').map(s => s.trim()).filter(s => s);
+      }
+
+      // Map source system names to display names
+      const sourceMap = {};
+      sources.forEach(source => {
+        let sourceType = 'Unknown';
+
+        switch (source) {
+          case 'companies_house':
+            sourceType = 'Companies House';
+            break;
+          case 'psc':
+            sourceType = 'PSC Register';
+            break;
+          case 'icij':
+            sourceType = 'ICIJ Offshore Leaks';
+            break;
+          default:
+            sourceType = source; // Show the raw value if unknown
+        }
+
+        if (!sourceMap[sourceType]) {
+          sourceMap[sourceType] = 0;
+        }
+        sourceMap[sourceType] += 1;
+      });
+
+      // Convert to array with badge colors
+      const sourceBadges = Object.entries(sourceMap).map(([type, count]) => {
+        let color = '#6c757d'; // Gray for unknown
+        let order = 999; // Default order for unknown sources
+
+        if (type === 'Companies House') {
+          color = '#28a745'; // Green
+          order = 1;
+        } else if (type === 'PSC Register') {
+          color = '#17a2b8'; // Blue
+          order = 2;
+        } else if (type === 'ICIJ Offshore Leaks') {
+          color = '#ffc107'; // Yellow
+          order = 3;
+        }
+
+        return {
+          id: type,
+          label: type,
+          color,
+          count: count,
+          order: order
+        };
+      });
+
+      // Sort by predefined order
+      return sourceBadges.sort((a, b) => a.order - b.order);
     },
   },
   watch: {
@@ -1628,6 +1838,80 @@ export default {
 
     .badge.bg-primary {
       color: white !important;
+    }
+
+    .result-graph__external-links {
+      margin-top: 1rem;
+
+      h6 {
+        font-size: 0.9rem;
+        font-weight: 600;
+        margin-bottom: 0.75rem;
+        color: var(--bs-body-text);
+      }
+
+      .result-graph__links-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0.5rem;
+      }
+
+      .result-graph__external-link {
+        padding: 0.4rem 0.6rem;
+        font-size: 0.85rem;
+        text-align: center;
+        background-color: var(--bs-body-bg);
+        color: var(--bs-body-text);
+        border-color: var(--bs-body-inactive);
+        border-radius: 0.375rem;
+        text-decoration: none;
+        transition: all 0.2s;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+
+        &:hover {
+          background-color: var(--bs-body-bg-hover);
+          border-color: var(--bs-body-text);
+          transform: translateY(-1px);
+          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        i {
+          margin-right: 0.25rem;
+        }
+      }
+    }
+
+    .result-graph__source-provenance {
+      margin-top: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--bs-body-inactive);
+
+      h6 {
+        font-size: 0.9rem;
+        font-weight: 600;
+        margin-bottom: 0.75rem;
+        color: var(--bs-body-text);
+      }
+
+      .result-graph__source-badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+
+        .badge {
+          padding: 0.375rem 0.75rem;
+          font-size: 0.8rem;
+          font-weight: 500;
+          border-radius: 0.375rem;
+        }
+
+        .result-graph__source-badge {
+          background-color: var(--badge-bg-color) !important;
+          color: white !important;
+        }
+      }
     }
   }
 
