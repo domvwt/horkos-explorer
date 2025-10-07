@@ -74,14 +74,89 @@ class QueryValidator {
   }
 
   /**
+   * Strips comments from a Cypher statement
+   * Removes both line comments (//) and block comments (/* */)
+   * @param {string} statement - A Cypher statement
+   * @returns {string} Statement with comments removed
+   */
+  static stripComments(statement) {
+    let result = '';
+    let inString = false;
+    let stringChar = null;
+    let escaped = false;
+    let i = 0;
+
+    while (i < statement.length) {
+      const char = statement[i];
+      const nextChar = i + 1 < statement.length ? statement[i + 1] : null;
+
+      if (escaped) {
+        result += char;
+        escaped = false;
+        i++;
+        continue;
+      }
+
+      if (char === '\\' && inString) {
+        escaped = true;
+        result += char;
+        i++;
+        continue;
+      }
+
+      // Track string boundaries
+      if ((char === "'" || char === '"') && !inString) {
+        inString = true;
+        stringChar = char;
+        result += char;
+        i++;
+      } else if (char === stringChar && inString) {
+        inString = false;
+        stringChar = null;
+        result += char;
+        i++;
+      } else if (!inString && char === '/' && nextChar === '/') {
+        // Line comment - skip until end of line
+        i += 2;
+        while (i < statement.length && statement[i] !== '\n') {
+          i++;
+        }
+        if (i < statement.length) {
+          result += '\n'; // Preserve newline
+          i++;
+        }
+      } else if (!inString && char === '/' && nextChar === '*') {
+        // Block comment - skip until */
+        i += 2;
+        while (i < statement.length - 1) {
+          if (statement[i] === '*' && statement[i + 1] === '/') {
+            i += 2;
+            result += ' '; // Replace comment with space
+            break;
+          }
+          i++;
+        }
+      } else {
+        result += char;
+        i++;
+      }
+    }
+
+    return result;
+  }
+
+  /**
    * Validates a single Cypher statement
    * @param {string} statement - A single Cypher statement
    * @throws {Error} If statement contains forbidden operations
    */
   static validateStatement(statement) {
+    // Strip comments before validation to prevent comment-based bypass
+    const cleanedStatement = QueryValidator.stripComments(statement);
+
     // Check for write operations
-    if (WRITE_OPERATIONS.test(statement)) {
-      const match = statement.match(WRITE_OPERATIONS);
+    if (WRITE_OPERATIONS.test(cleanedStatement)) {
+      const match = cleanedStatement.match(WRITE_OPERATIONS);
       throw new Error(
         `Write operation '${match[1]}' is not allowed in read-only mode. ` +
         `Only MATCH, RETURN, WITH, and read operations are permitted.`
@@ -89,8 +164,8 @@ class QueryValidator {
     }
 
     // Check for DDL operations
-    if (DDL_OPERATIONS.test(statement)) {
-      const match = statement.match(DDL_OPERATIONS);
+    if (DDL_OPERATIONS.test(cleanedStatement)) {
+      const match = cleanedStatement.match(DDL_OPERATIONS);
       throw new Error(
         `DDL operation '${match[1]}' is not allowed in read-only mode.`
       );
