@@ -8,10 +8,13 @@ const logger = require("../utils/Logger");
  * per IP address within a time window.
  */
 
+// Use higher limits in development to avoid issues with hot-reloading
+const isDevelopment = process.env.NODE_ENV === 'development';
+
 // General API rate limiter (applies to most endpoints)
 const apiLimiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 60 * 1000, // 1 minute window
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 60, // 60 requests per window
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || (isDevelopment ? 1000 : 60), // Relaxed in dev
   standardHeaders: true, // Return rate limit info in `RateLimit-*` headers
   legacyHeaders: false, // Disable `X-RateLimit-*` headers
   message: {
@@ -31,7 +34,7 @@ const apiLimiter = rateLimit({
 // Stricter rate limiter for query endpoints (more resource-intensive)
 const queryLimiter = rateLimit({
   windowMs: parseInt(process.env.QUERY_RATE_LIMIT_WINDOW_MS) || 60 * 1000, // 1 minute window
-  max: parseInt(process.env.QUERY_RATE_LIMIT_MAX_REQUESTS) || 30, // 30 queries per window
+  max: parseInt(process.env.QUERY_RATE_LIMIT_MAX_REQUESTS) || (isDevelopment ? 500 : 30), // Relaxed in dev
   standardHeaders: true,
   legacyHeaders: false,
   message: {
