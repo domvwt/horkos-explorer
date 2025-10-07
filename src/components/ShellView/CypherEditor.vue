@@ -44,21 +44,30 @@
                 <a
                   href="#"
                   :class="[
-                    !isQueryGenerationMode ? 'active-tab' : 'inactive-tab'
+                    activeMode === 'search' ? 'active-tab' : 'inactive-tab'
                   ]"
                   class="text-decoration-none"
-                  @click.prevent="isQueryGenerationMode = false"
-                >Cypher Query</a>
+                  @click.prevent="activeMode = 'search'"
+                >Search</a>
               </li>
-              <li class="nav-item">
+              <li class="nav-item text-[var(--bs-body-text)]">
                 <a
-                  v-if="!modeStore.isWasm"
                   href="#"
                   :class="[
-                    isQueryGenerationMode ? 'active-tab' : 'inactive-tab'
+                    activeMode === 'cypher' ? 'active-tab' : 'inactive-tab'
                   ]"
                   class="text-decoration-none"
-                  @click.prevent="isQueryGenerationMode = true"
+                  @click.prevent="activeMode = 'cypher'"
+                >Cypher Query</a>
+              </li>
+              <li v-if="!modeStore.isWasm && enableAIQuery" class="nav-item">
+                <a
+                  href="#"
+                  :class="[
+                    activeMode === 'ai' ? 'active-tab' : 'inactive-tab'
+                  ]"
+                  class="text-decoration-none"
+                  @click.prevent="activeMode = 'ai'"
                 >AI Query</a>
               </li>
             </ul>
@@ -68,12 +77,17 @@
         <!-- Main Content -->
         <main>
           <div
-            v-show="!isQueryGenerationMode"
+            v-show="activeMode === 'search'"
+          >
+            <NodeSearch @executeQuery="handleSearchQuery" />
+          </div>
+          <div
+            v-show="activeMode === 'cypher'"
             ref="editor"
           />
           <div
-            v-if="!modeStore.isWasm"
-            v-show="isQueryGenerationMode"
+            v-if="!modeStore.isWasm && enableAIQuery"
+            v-show="activeMode === 'ai'"
           >
             <textarea
               ref="gptQuestionTextArea"
@@ -94,10 +108,14 @@ import * as Monaco from "monaco-editor";
 import { UI_SIZE } from "../../utils/Constants";
 import { useModeStore } from "../../store/ModeStore";
 import { mapStores } from "pinia";
+import NodeSearch from "./NodeSearch.vue";
 
 // Make sure Monaco is not reactive. Otherwise, it will cause the Vue.js
 // app to crash.
 export default {
+  components: {
+    NodeSearch,
+  },
   props: {
     // eslint-disable-next-line vue/require-default-prop
     schema: {
@@ -130,7 +148,7 @@ export default {
       editorHeight: 0,
       toolbarWidth: UI_SIZE.SHELL_TOOL_BAR_WIDTH,
       isMaximized: false,
-      isQueryGenerationMode: false,
+      activeMode: "search", // 'cypher', 'ai', or 'search'
       gptQuestion: "",
       observer: null,
       editorResizeDebounce: null,
@@ -139,6 +157,10 @@ export default {
 
   computed: {
     ...mapStores(useModeStore),
+    enableAIQuery() {
+      // Feature flag for AI Query - set VUE_APP_ENABLE_AI_QUERY=true to enable
+      return process.env.VUE_APP_ENABLE_AI_QUERY === 'true';
+    },
     maximizeButtonClass() {
       return (this.isMaximized ? "fa-minimize" : "fa-maximize") + "  fa-solid";
     },
@@ -146,10 +168,14 @@ export default {
       return this.isMaximized ? "Minimize" : "Maximize";
     },
     gptButtonClass() {
-      return (this.isQueryGenerationMode ? "fa-file-code" : "fa-robot") + " fa-lg fa-solid";
+      return (this.activeMode === 'ai' ? "fa-file-code" : "fa-robot") + " fa-lg fa-solid";
     },
     gptButtonTitle() {
-      return this.isQueryGenerationMode ? "Cypher Code Editor" : "Query Generation (Powered by GPT)";
+      return this.activeMode === 'ai' ? "Cypher Code Editor" : "Query Generation (Powered by GPT)";
+    },
+    // Maintain backward compatibility for components that might check this
+    isQueryGenerationMode() {
+      return this.activeMode === 'ai';
     },
   },
 
@@ -174,6 +200,11 @@ export default {
       }
     });
     this.observer.observe(this.$refs.wrapper);
+
+    // If AI Query is disabled and activeMode is 'ai', switch to 'search'
+    if (this.activeMode === 'ai' && !this.enableAIQuery) {
+      this.activeMode = 'search';
+    }
   },
 
   beforeUnmount() {
@@ -251,16 +282,26 @@ export default {
     },
     evaluateCypher() {
       const cypher = this.editor.getValue();
-      this.$emit("evaluateCypher", cypher);
+      this.$emit("evaluateCypher", cypher, {});
     },
     generateAndEvaluateQuery() {
       this.$emit("generateAndEvaluateQuery", this.gptQuestion);
     },
     evaluateCell() {
-      if (this.isQueryGenerationMode) {
+      if (this.activeMode === 'ai') {
         this.generateAndEvaluateQuery();
-      } else {
+      } else if (this.activeMode === 'cypher') {
         this.evaluateCypher();
+      }
+      // For search mode, the NodeSearch component handles execution via handleSearchQuery
+    },
+    handleSearchQuery(queryData) {
+      // When search generates a query, execute it with params
+      // queryData is either a string (legacy) or { query, params } (new)
+      if (typeof queryData === 'string') {
+        this.$emit("evaluateCypher", queryData, {});
+      } else {
+        this.$emit("evaluateCypher", queryData.query, queryData.params);
       }
     },
     setEditorContent(content) {
@@ -270,13 +311,16 @@ export default {
       this.$emit("remove");
     },
     isActive() {
-      return (this.isQueryGenerationMode && this.$refs.gptQuestionTextArea === document.activeElement) ||
-        (!this.isQueryGenerationMode && this.editor && this.editor.hasTextFocus());
+      return (this.activeMode === 'ai' && this.$refs.gptQuestionTextArea === document.activeElement) ||
+        (this.activeMode === 'cypher' && this.editor && this.editor.hasTextFocus());
     },
     loadFromHistory(history) {
-      this.isQueryGenerationMode = history.isQueryGenerationMode;
-      this.gptQuestion = history.gptQuestion;
-      this.setEditorContent(history.cypherQuery);
+      // Note: activeMode is NOT restored from history - always defaults to 'search'
+      // to ensure the search interface is the primary entry point for users
+      this.gptQuestion = history.gptQuestion || "";
+      if (history.cypherQuery) {
+        this.setEditorContent(history.cypherQuery);
+      }
     },
   },
 }
