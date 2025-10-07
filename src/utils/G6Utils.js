@@ -38,7 +38,12 @@ class G6Utils {
     if (!graph) {
       return;
     }
-    return graph.fitView([20, 20]);
+    graph.fitView([150, 150]);
+    // Cap zoom to prevent extreme zoom-in with few nodes
+    const currentZoom = graph.getZoom();
+    if (currentZoom > 1.0) {
+      graph.zoomTo(1.0);
+    }
   }
 
   actualSize(graph) {

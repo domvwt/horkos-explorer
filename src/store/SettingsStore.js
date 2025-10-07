@@ -164,15 +164,23 @@ export const useSettingsStore = defineStore("settings", {
       g6Settings.style.fill = color;
       g6Settings.style.stroke = G6Utils.shadeColor(color);
 
-      // Prefer "name" property if it exists, otherwise use primary key
+      // Special handling for Address nodes - use "full" property
       let label = "name";
-      const hasNameProperty = node.properties.some((p) => p.name === "name");
-      if (!hasNameProperty) {
-        let primaryKey = node.properties.filter((p) => p.isPrimaryKey)[0];
-        if (!primaryKey) {
-          primaryKey = node.properties[0];
+      if (name === "Address") {
+        const hasFullProperty = node.properties.some((p) => p.name === "full");
+        if (hasFullProperty) {
+          label = "full";
         }
-        label = primaryKey.name;
+      } else {
+        // Prefer "name" property if it exists, otherwise use primary key
+        const hasNameProperty = node.properties.some((p) => p.name === "name");
+        if (!hasNameProperty) {
+          let primaryKey = node.properties.filter((p) => p.isPrimaryKey)[0];
+          if (!primaryKey) {
+            primaryKey = node.properties[0];
+          }
+          label = primaryKey.name;
+        }
       }
 
       const nodeSettings = {
@@ -257,10 +265,18 @@ export const useSettingsStore = defineStore("settings", {
         this.graphViz.nodes[node.name].g6Settings.style.lineWidth = 3;
 
         // Migrate label from primary key to "name" if name property exists and label is currently "_label" or "id"
-        const hasNameProperty = node.properties.some((p) => p.name === "name");
+        // Special case: Address nodes should use "full" property
         const currentLabel = this.graphViz.nodes[node.name].label;
-        if (hasNameProperty && (currentLabel === "_label" || currentLabel === "id")) {
-          this.graphViz.nodes[node.name].label = "name";
+        if (node.name === "Address") {
+          const hasFullProperty = node.properties.some((p) => p.name === "full");
+          if (hasFullProperty && (currentLabel === "_label" || currentLabel === "id" || currentLabel === "name")) {
+            this.graphViz.nodes[node.name].label = "full";
+          }
+        } else {
+          const hasNameProperty = node.properties.some((p) => p.name === "name");
+          if (hasNameProperty && (currentLabel === "_label" || currentLabel === "id")) {
+            this.graphViz.nodes[node.name].label = "name";
+          }
         }
       });
 
