@@ -3,6 +3,7 @@ const router = express.Router();
 const process = require("process");
 const logger = require("./utils/Logger");
 const MODES = require("./utils/Constants").MODES;
+const { apiLimiter, queryLimiter } = require("./middleware/RateLimit");
 
 
 const isWasmMode = process.env.KUZU_WASM &&
@@ -19,18 +20,18 @@ if (!isWasmMode) {
     const importApi = require("./Import");
     const gpt = require("./Gpt");
 
-    router.use("/schema", schema);
-    router.use("/cypher", cypher);
+    router.use("/schema", apiLimiter, schema);
+    router.use("/cypher", queryLimiter, cypher);
 
     // Only enable session endpoints if session storage is not disabled
     const isSessionDisabled = process.env.DISABLE_SESSION_DB === "true";
     if (!isSessionDisabled) {
         const session = require("./Session");
-        router.use("/session", session);
+        router.use("/session", apiLimiter, session);
     }
 
-    router.use("/", state);
-    router.use("/gpt", gpt);
+    router.use("/", apiLimiter, state);
+    router.use("/gpt", queryLimiter, gpt);
     if (currentMode === MODES.READ_WRITE) {
         router.use("/reset", reset);
         router.use("/import", importApi);
@@ -42,7 +43,7 @@ if (!isWasmMode) {
 // APIs that are available in both backend and wasm mode
 const datasets = require("./Datasets");
 const mode = require("./Mode");
-router.use("/datasets", datasets);
-router.use("/mode", mode);
+router.use("/datasets", apiLimiter, datasets);
+router.use("/mode", apiLimiter, mode);
 
 module.exports = router;

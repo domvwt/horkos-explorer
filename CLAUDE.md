@@ -60,6 +60,12 @@ export KUZU_NUM_CONNECTIONS=4            # Connection pool size
 # Security configuration for public deployments
 export DISABLE_SESSION_DB=true           # Disable server-side session storage (recommended for public deployments)
                                           # When enabled, query history and settings are stored only in browser localStorage
+
+# Rate limiting configuration (optional, defaults shown)
+export RATE_LIMIT_WINDOW_MS=60000        # Time window in ms (default: 60000 = 1 minute)
+export RATE_LIMIT_MAX_REQUESTS=60        # Max requests per window for general API endpoints
+export QUERY_RATE_LIMIT_WINDOW_MS=60000  # Time window for query endpoints
+export QUERY_RATE_LIMIT_MAX_REQUESTS=30  # Max queries per window (more restrictive for expensive operations)
 ```
 
 ## Common Development Commands
