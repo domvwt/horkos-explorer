@@ -302,6 +302,19 @@ export default {
       this.$refs.resultContainer.updateContainerHeight();
       this.$refs.resultContainer.handleGraphResize();
     },
+    redrawGraph() {
+      // Redraw graphs in all result containers for this cell
+      for (let i = 0; i < this.queryResults.length; i++) {
+        try {
+          const resultContainer = this.$refs[this.getRefName(i)][0];
+          if (resultContainer && resultContainer.redrawGraph) {
+            resultContainer.redrawGraph();
+          }
+        } catch (e) {
+          // Result container may not exist, ignore
+        }
+      }
+    },
   },
 }
 </script>

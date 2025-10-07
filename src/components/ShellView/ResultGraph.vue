@@ -390,6 +390,14 @@ export default {
       return this.clickedProperties;
     },
     ...mapStores(useSettingsStore, useModeStore),
+    labelColor() {
+      // Return white for dark mode, dark gray for light mode
+      return this.modeStore.theme === 'vs-dark' ? '#ffffff' : '#333333';
+    },
+    edgeColor() {
+      // Return darker grey for dark mode, light grey for light mode
+      return this.modeStore.theme === 'vs-dark' ? '#666666' : '#e2e2e2';
+    },
     getTextColor() {
       return (label) => {
         const isNode = this.schema.nodeTables.find((table) => table.name === label);
@@ -716,7 +724,7 @@ export default {
       const config = {
         type: 'd3-force',
         link: {
-          // Dynamic distance: 
+          // Dynamic distance:
           // Fixed distance for nodes with large number of neighbors will cause mass collision (a large circle)
           // Variable distance with multiple layers of variation will display the nodes in a spaced out manner (multiple circles around node)
           distance: (d) => {
@@ -724,8 +732,8 @@ export default {
             const sourceDegree = d.source.data?.degree || 1;
             const targetDegree = d.target.data?.degree || 1;
 
-            // Base distance for nodes with few connections
-            const baseDistance = 150;
+            // Base distance increased to account for labels below nodes
+            const baseDistance = 200;
 
             // For high-degree nodes (hubs), vary the distance based on connection index
             if (sourceDegree > 5 || targetDegree > 5) {
@@ -741,11 +749,13 @@ export default {
           strength: 2,
         },
         collide: {
-          radius: (d) => d.size / 2 + 20, // Add padding for better collision detection
-          strength: 1, // Positive strength for stronger collision avoidance
+          // Increase collision radius significantly to account for labels below nodes
+          // Node radius + label offset (8px) + label height (~50px for 3 lines) + padding
+          radius: (d) => d.size / 2 + 80,
+          strength: 1.2, // Stronger collision avoidance
         },
         manyBody: {
-          strength: -1200,  // Negative strength indicates repulsion
+          strength: -1800,  // Increased repulsion to spread nodes apart
         },
         radial: {
           radius: 200,
@@ -786,10 +796,21 @@ export default {
         node: {
           type: 'circle',
           style: {
-            labelFontSize: 14,
+            labelFontSize: 13,
             labelFontFamily: "Lexend, Helvetica Neue, Helvetica, Arial, sans-serif",
-            labelFontWeight: 300,
-            labelPlacement: 'center',
+            labelFontWeight: 400,
+            labelFill: this.labelColor,
+            labelPlacement: 'bottom',
+            labelOffsetY: 8,
+            labelMaxWidth: 200,
+            labelWordWrap: true,
+            labelWordWrapWidth: 200,
+            labelLineHeight: 16,
+            labelMaxLines: 3,
+            iconFontFamily: "Font Awesome 6 Free",
+            iconFontSize: 24,
+            iconFontWeight: 900,
+            iconFill: "#ffffff",
             zIndex: 10,
           },
           state: {
@@ -803,19 +824,14 @@ export default {
         edge: {
           style: {
             lineWidth: 5,
-            stroke: "#e2e2e2",
+            stroke: this.edgeColor,
             endArrow: true,
             labelFontSize: 12,
             labelFontFamily: "Lexend,Helvetica Neue, Helvetica, Arial, sans-serif",
             labelFontWeight: 350,
-            labelBackground: true,
-            labelBackgroundFill: "#ffffff",
-            labelPadding: [0, 8],
-            labelBackgroundRadius: 2,
+            labelFill: this.labelColor,
             labelAutoRotate: true,
             labelTextBaseline: 'bottom',
-            endArrow: true,
-            labelAutoRotate: true,
             labelOffsetY: -8,
             zIndex: 1,
           },
@@ -857,7 +873,22 @@ export default {
 
       this.g6Graph.setData({ nodes, edges, });
       await this.render();
-      this.fitToView();
+
+      // Auto-expand neighborhood for all nodes (1 hop)
+      const allNodes = Object.values(nodes);
+      for (const node of allNodes) {
+        if (!this.isNeighborExpanded(node)) {
+          await this.expandOnNode(node);
+        }
+      }
+
+      // Fit with padding, but cap max zoom to prevent extreme zoom-in on single nodes
+      // Disable animation so we can cap zoom without visible jump
+      this.g6Graph.fitView([150, 150], { duration: 0 });
+      const currentZoom = this.g6Graph.getZoom();
+      if (currentZoom > 1.0) {
+        this.g6Graph.zoomTo(1.0, { duration: 0 });
+      }
 
       // Fit the graph to view after rendering
       this.g6Graph.on(GraphEvent.AFTER_RENDER, () => {
@@ -1023,6 +1054,16 @@ export default {
       return `${id.table}_${id.offset}`;
     },
 
+    getNodeIcon(nodeLabel) {
+      // Font Awesome 6 unicode characters
+      const iconMap = {
+        'Person': '\uf007',      // fa-user
+        'Company': '\uf1ad',     // fa-building
+        'Address': '\uf3c5',     // fa-map-marker-alt
+      };
+      return iconMap[nodeLabel] || '\uf111'; // fa-circle as fallback
+    },
+
     extractGraphFromQueryResult(queryResult) {
       const rows = queryResult.rows;
       const dataTypes = queryResult.dataTypes;
@@ -1090,10 +1131,12 @@ export default {
             nodeLabel = ValueFormatter.beautifyValue(rawNode[nodeLabelProp], expectedPropertiesType[nodeLabelProp]);
           }
           nodeLabel = String(nodeLabel);
-          const nodeSize = nodeSettings.g6Settings.size;
-          const fontSize = nodeSettings.g6Settings.labelCfg.style.fontSize;
-          nodeLabel = G6Utils.fittingString(nodeLabel, nodeSize - 6, fontSize);
+          // Don't truncate - let G6's labelMaxWidth and word wrap handle it
         }
+
+        // Cap node size to prevent extreme zoom when there are few nodes
+        const maxNodeSize = 100;
+        const displaySize = Math.min(nodeSettings.g6Settings.size, maxNodeSize);
 
         const g6Node = {
           id: nodeId,
@@ -1102,12 +1145,17 @@ export default {
             ...nodeSettings.g6Settings,
           },
           style: {
-            size: nodeSettings.g6Settings.size,
+            size: displaySize,
             fill: nodeFill,
             stroke: G6Utils.shadeColor(nodeFill),
             lineWidth: nodeSettings.g6Settings.style.lineWidth || 0,
             labelText: nodeLabel,
-            labelFill: labelColor,
+            // labelFill inherited from graph-level config
+            iconText: this.getNodeIcon(rawNode._label),
+            iconFontFamily: "Font Awesome 6 Free",
+            iconFontWeight: 900,
+            iconFontSize: displaySize * 0.35,
+            iconFill: "#ffffff",
           },
         };
 
@@ -1544,15 +1592,202 @@ export default {
     },
 
     async redrawGraph() {
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      const { nodes, edges, counters } = this.extractGraphFromQueryResult(this.queryResult);
       if (!this.g6Graph) {
         return;
       }
-      this.g6Graph.setData({ nodes, edges });
-      this.render();
-      this.counters = counters;
-      this.expansions.forEach(e => this.addDataWithQueryResult(e.neighbors));
+
+      // Stop all running animations before redrawing
+      try {
+        this.g6Graph.stopTransformTransition();
+      } catch (e) {
+        // Method might not exist in this G6 version
+      }
+
+      // Wait a bit for any pending animations to clean up
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      // Save current graph state (all nodes and edges including expansions)
+      const currentData = this.g6Graph.getData();
+      const savedExpansions = [...this.expansions];
+
+      // Destroy and recreate the graph to pick up new configuration
+      if (this.graphCreated && this.g6Graph) {
+        this.g6Graph.destroy();
+      }
+
+      // Create new graph with updated configuration
+      const container = this.$refs.graph;
+      const width = container.offsetWidth;
+      const height = this.containerHeight === "auto" ? container.offsetHeight : parseInt(this.containerHeight);
+      const layoutConfig = this.getLayoutConfig(currentData.edges);
+
+      this.g6Graph = new Graph({
+        container,
+        width,
+        height,
+        layout: layoutConfig,
+        node: {
+          type: 'circle',
+          style: {
+            labelFontSize: 13,
+            labelFontFamily: "Lexend, Helvetica Neue, Helvetica, Arial, sans-serif",
+            labelFontWeight: 400,
+            labelFill: this.labelColor,
+            labelPlacement: 'bottom',
+            labelOffsetY: 8,
+            labelMaxWidth: 200,
+            labelWordWrap: true,
+            labelWordWrapWidth: 200,
+            labelLineHeight: 16,
+            labelMaxLines: 3,
+            iconFontFamily: "Font Awesome 6 Free",
+            iconFontSize: 24,
+            iconFontWeight: 900,
+            iconFill: "#ffffff",
+            zIndex: 10,
+          },
+          state: {
+            active: {
+              lineWidth: 10,
+              stroke: '#1890FF',
+            },
+          },
+        },
+        edge: {
+          style: {
+            lineWidth: 5,
+            stroke: this.edgeColor,
+            endArrow: true,
+            labelFontSize: 12,
+            labelFontFamily: "Lexend,Helvetica Neue, Helvetica, Arial, sans-serif",
+            labelFontWeight: 350,
+            labelFill: this.labelColor,
+            labelAutoRotate: true,
+            labelTextBaseline: 'bottom',
+            labelOffsetY: -8,
+            zIndex: 1,
+          },
+          state: {
+            active: {
+              lineWidth: 10,
+              stroke: '#1890FF',
+            },
+          },
+        },
+        behaviors: ['zoom-canvas', 'drag-canvas',
+          {
+            type: 'optimize-viewport-transform',
+            debounce: 300,
+          },
+          {
+            type: 'drag-element-force',
+            fixed: true,
+          },
+          {
+            type: 'click-select',
+            key: 'click-select-element',
+            degree: 0,
+            state: 'active',
+            enable: true,
+          },
+          {
+            type: 'click-select',
+            key: 'click-highlight',
+            degree: 1,
+            state: 'active',
+            unselectedState: 'inactive',
+            enable: false,
+            neighborState: 'active',
+          },
+        ],
+      });
+
+      // Register graph event handlers
+      this.g6Graph.on('node:pointerenter', (e) => {
+        const id = e.target.id;
+        const nodeData = this.g6Graph.getNodeData(id);
+        this.$refs.hoverContainer.handleHover(nodeData, e);
+      });
+
+      this.g6Graph.on('node:pointerleave', (e) => {
+        this.$refs.hoverContainer.resetHover();
+      });
+
+      this.g6Graph.on('node:pointermove', (e) => {
+        this.$refs.hoverContainer.showTooltip(e);
+      });
+
+      this.g6Graph.on('edge:pointerenter', (e) => {
+        const id = e.target.id;
+        const edgeData = this.g6Graph.getEdgeData(id);
+        this.$refs.hoverContainer.handleHover(edgeData, e);
+      });
+
+      this.g6Graph.on('edge:pointerleave', (e) => {
+        this.$refs.hoverContainer.resetHover();
+      });
+
+      this.g6Graph.on('edge:pointermove', (e) => {
+        this.$refs.hoverContainer.showTooltip(e);
+      });
+
+      this.g6Graph.on('node:click', (e) => {
+        this.$refs.hoverContainer.resetHover();
+        const clickedId = e.target.config.id;
+        const nodeData = this.g6Graph.getNodeData(clickedId);
+        this.handleClick(nodeData);
+        if (!this.isSidePanelOpen) {
+          window.setTimeout(() => {
+            this.isSidePanelOpen = true;
+            this.$nextTick(() => {
+              this.handleResize();
+            });
+          }, 200);
+        }
+      });
+
+      this.g6Graph.on('edge:click', (e) => {
+        this.$refs.hoverContainer.resetHover();
+        const clickedId = e.target.config.id;
+        const edgeData = this.g6Graph.getEdgeData(clickedId);
+        this.handleClick(edgeData);
+        if (!this.isSidePanelOpen) {
+          this.isSidePanelOpen = true;
+        }
+      });
+
+      this.g6Graph.on('node:dblclick', (e) => {
+        const itemId = e.target.id;
+        const isCurrentNodeExpanded = this.isNeighborExpanded(e.target);
+        if (isCurrentNodeExpanded) {
+          this.collapseNode(itemId);
+          this.deselectAll();
+          return this.redrawGraph();
+        }
+        const nodeData = this.g6Graph.getNodeData(itemId);
+        this.expandOnNode(nodeData);
+        this.deselectAll();
+      });
+
+      this.g6Graph.on('node:dragend', () => {
+        const layout = this.g6Graph.getLayout();
+        if (layout && layout.simulation) {
+          layout.simulation.alpha(0.3).restart();
+        }
+      });
+
+      this.g6Graph.on('canvas:click', () => {
+        this.deselectAll();
+      });
+
+      this.graphCreated = true;
+
+      // Restore the saved data (preserves expanded nodes)
+      this.g6Graph.setData(currentData);
+      await this.render();
+
+      // Restore expansion state
+      this.expansions = savedExpansions;
     },
 
     startResize(e) {

@@ -7,40 +7,14 @@
       <div class="main-layout__sidebar">
         <ul class="main-layout__sidebar-nav">
           <li>
-            <ul
-              v-if="modeStore.isReadOnly"
-              class="navbar-nav hide-on-collapse"
-            >
-              <li class="nav-item">
-                <span
-                  class="badge"
-                  @click="accessModeModal.show()"
-                >Read-only Mode</span>
-              </li>
-            </ul>
-            <ul
-              v-if="modeStore.isDemo"
-              class="navbar-nav hide-on-collapse"
-            >
-              <li class="nav-item">
-                <span
-                  class="badge"
-                  @click="accessModeModal.show()"
-                >Instructions</span>
-              </li>
-            </ul>
             <div class="main-layout__sidebar-header flex justify-between items-center">
               <a
-                class="navbar-brand hide-on-collapse"
-                href="//kuzudb.com"
+                class="navbar-brand hide-on-collapse horkos-brand"
+                href="https://github.com/domvwt/horkos"
                 target="_blank"
               >
-                <img
-                  :key="logoUrl"
-                  :src="logoUrl"
-                  alt="Logo"
-                  class="main-layout__sidebar-logo"
-                >
+                <span class="trident-icon">🔱</span>
+                <span class="brand-text">horkos</span>
               </a>
 
               <a
@@ -109,7 +83,7 @@
           <li class="nav-item">
             <a
               aria-hidden="true"
-              href="https://docs.kuzudb.com"
+              href="https://github.com/domvwt/horkos"
               target="_blank"
             >
               <i class="fa-solid fa-book" />
@@ -125,16 +99,6 @@
               >
                 <i class="fa-solid fa-cog" />
                 <span class="hide-on-collapse">Settings</span>
-              </a>
-            </li>
-            <li class="nav-item">
-              <a
-                aria-hidden="true"
-                href="#"
-                @click.prevent="handleThemeToggle()"
-              >
-                <i :class="['fa-solid', modeStore.theme === 'vs-dark' ? 'fa-sun' : 'fa-moon']" />
-                <span class="hide-on-collapse">{{ modeStore.theme === 'vs-dark' ? 'Light' : 'Dark' }}</span>
               </a>
             </li>
           </div>
@@ -166,6 +130,7 @@
             v-if="showSettings"
             ref="settings"
             :schema="schema"
+            @settingsSaved="handleSettingsSaved"
           />
           <DatasetMainView
             v-show="showLoader"
@@ -555,12 +520,11 @@ export default {
       }
       return null;
     },
-    // Handle theme toggle, save to cookie, then update store
-    handleThemeToggle() {
-      const currentTheme = this.modeStore.theme;
-      const nextTheme = currentTheme === 'vs-dark' ? 'vs-light' : 'vs-dark';
-      this.setCookie('themePreference', nextTheme, 365); // Save preference for 365 days
-      this.modeStore.toggleTheme(); // Let the store handle the actual theme change
+    // Handle settings saved from settings modal - redraw graphs
+    handleSettingsSaved() {
+      if (this.$refs.shellView) {
+        this.$refs.shellView.redrawAllGraphs();
+      }
     },
   },
 };
@@ -594,6 +558,30 @@ body {
 .main-layout__sidebar-logo {
   height: 28px;
   image-rendering: crisp-edges;
+}
+
+.horkos-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--bs-body-text) !important;
+  text-decoration: none !important;
+}
+
+.horkos-brand .trident-icon {
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.horkos-brand .brand-text {
+  font-family: "Lexend", sans-serif;
+  letter-spacing: 0.05em;
+}
+
+.horkos-brand:hover {
+  opacity: 0.8;
 }
 
 .wrapper {

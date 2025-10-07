@@ -364,6 +364,11 @@ export default {
     toggleGraphSidebar() {
       this.graphSidebarOpen = !this.graphSidebarOpen;
     },
+    redrawGraph() {
+      if (this.$refs.resultGraph) {
+        this.$refs.resultGraph.redrawGraph();
+      }
+    },
   },
 };
 </script>

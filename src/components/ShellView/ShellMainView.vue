@@ -227,6 +227,19 @@ MATCH (a)-[r]->(b) RETURN * LIMIT 5;`,
         // Do nothing, there is no cell to evaluate
       }
     },
+    // Redraw all graphs in all cells (called when theme changes)
+    redrawAllGraphs() {
+      for (let i = 0; i < this.shellCell.length; i++) {
+        try {
+          const cellRef = this.$refs[this.getCellRef(i)][0];
+          if (cellRef && cellRef.redrawGraph) {
+            cellRef.redrawGraph();
+          }
+        } catch (e) {
+          // Cell may not have a graph, ignore
+        }
+      }
+    },
   },
 
 }

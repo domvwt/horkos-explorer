@@ -12,6 +12,29 @@
         >
           <!-- Viewing Options -->
           <h2> Viewing Options </h2>
+          <div class="settings-row">
+            <h4>Theme</h4>
+            <div>
+              <button
+                :class="{
+                  'active-btn': modeStore.theme === 'vs-light',
+                  'inactive-btn': modeStore.theme !== 'vs-light'
+                }"
+                @click="setTheme('vs-light')"
+              >
+                Light
+              </button>
+              <button
+                :class="{
+                  'active-btn': modeStore.theme === 'vs-dark',
+                  'inactive-btn': modeStore.theme !== 'vs-dark'
+                }"
+                @click="setTheme('vs-dark')"
+              >
+                Dark
+              </button>
+            </div>
+          </div>
           <hr>
 
           <!-- Graph Visualization Options -->
@@ -238,7 +261,7 @@
           <hr>
 
           <!-- Query Generation Options -->
-          <div v-if="!modeStore.isWasm">
+          <div v-if="!modeStore.isWasm && enableAIQuery">
             <h2> Query Generation Options </h2>
 
             <div class="settings-row">
@@ -441,19 +464,16 @@ export default {
     databaseResetStateText: "",
     databaseResetStateClass: "primary",
     showPassword: false,
+    wasSaved: false,
   }),
   computed: {
     ...mapStores(useSettingsStore, useModeStore),
+    enableAIQuery() {
+      // Feature flag for AI Query - set VUE_APP_ENABLE_AI_QUERY=true to enable
+      return process.env.VUE_APP_ENABLE_AI_QUERY === 'true';
+    },
     isOpenAIApi() {
       return this.currentSettings.gpt.llmProvider === LLM_PROVIDERS.OPENAI.key || this.currentSettings.gpt.llmProvider === LLM_PROVIDERS.GEMINI.key;
-    },
-    isDarkMode: {
-      get() {
-        return this.modeStore.theme === 'vs-light';
-      },
-      set() {
-        // Toggling is handled by toggleDarkMode method
-      }
     },
     gptModelOptions() {
       // Only show GPT models for OpenAI
@@ -470,10 +490,10 @@ export default {
   },
   mounted() {
     this.modal = new Modal(this.$refs.modal);
-    this.$refs.modal.addEventListener('hidden.bs.modal', this.resetSettings);
+    this.$refs.modal.addEventListener('hidden.bs.modal', this.handleModalClose);
   },
   beforeUnmount() {
-    this.$refs.modal.removeEventListener('hidden.bs.modal', this.resetSettings);
+    this.$refs.modal.removeEventListener('hidden.bs.modal', this.handleModalClose);
     this.modal.dispose();
   },
   methods: {
@@ -486,9 +506,11 @@ export default {
     showModal() {
       this.copyCurrentSettings();
       this.databaseResetStateText = "";
+      this.wasSaved = false;
       this.modal.show();
     },
     hideModal() {
+      this.wasSaved = false;
       this.modal.hide();
     },
     copyCurrentSettings() {
@@ -497,8 +519,9 @@ export default {
     },
     saveAndHideModal() {
       this.settingsStore.updateSettings(this.currentSettings);
+      this.wasSaved = true;
       this.$nextTick(() => {
-        this.hideModal();
+        this.modal.hide();
       });
     },
     handleLlmProviderChange() {
@@ -545,6 +568,15 @@ export default {
     getPlaceholderRelLabel() {
       return this.schema.relTables.find(t => t.isPlaceholder).name;
     },
+    handleModalClose() {
+      // If settings were saved, emit event to redraw all graphs
+      if (this.wasSaved) {
+        this.$emit('settingsSaved');
+      }
+      // Reset state
+      this.wasSaved = false;
+      this.resetSettings();
+    },
     resetSettings() {
       // Bootstrap modal can also be closed by clicking outside of the modal.
       // This way ensures that we can get the event when the modal is closed.
@@ -560,8 +592,20 @@ export default {
       }
       rel.g6Settings.style.endArrow.fill = rel.g6Settings.style.stroke;
     },
-    toggleDarkMode() {
-      this.modeStore.toggleTheme();
+    setTheme(theme) {
+      // Save theme preference to cookie
+      this.setCookie('themePreference', theme, 365);
+      // Update store
+      this.modeStore.setTheme(theme);
+    },
+    setCookie(name, value, days) {
+      let expires = "";
+      if (days) {
+        const date = new Date();
+        date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+        expires = "; expires=" + date.toUTCString();
+      }
+      document.cookie = name + "=" + (value || "") + expires + "; path=/";
     },
   },
 }
