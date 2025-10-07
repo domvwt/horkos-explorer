@@ -14,7 +14,6 @@ if (!isWasmMode) {
     const currentMode = database.getAccessModeString();
     const schema = require("./Schema");
     const cypher = require("./Cypher");
-    const session = require("./Session");
     const state = require("./State");
     const reset = require("./Reset");
     const importApi = require("./Import");
@@ -22,7 +21,14 @@ if (!isWasmMode) {
 
     router.use("/schema", schema);
     router.use("/cypher", cypher);
-    router.use("/session", session);
+
+    // Only enable session endpoints if session storage is not disabled
+    const isSessionDisabled = process.env.DISABLE_SESSION_DB === "true";
+    if (!isSessionDisabled) {
+        const session = require("./Session");
+        router.use("/session", session);
+    }
+
     router.use("/", state);
     router.use("/gpt", gpt);
     if (currentMode === MODES.READ_WRITE) {

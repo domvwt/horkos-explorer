@@ -3,6 +3,7 @@ const fs = require("fs").promises;
 const sqlite3 = require("sqlite3");
 const sqlite = require("sqlite");
 const constants = require("./Constants");
+const logger = require("./Logger");
 
 const MODES = constants.MODES;
 const DB_FILE_NAME = "explorer.db";
@@ -10,6 +11,13 @@ const DB_FILE_NAME = "explorer.db";
 class SessionDatabase {
   constructor() {
     this.isInitialized = false;
+    this.isDisabled = process.env.DISABLE_SESSION_DB === "true";
+
+    if (this.isDisabled) {
+      logger.info("Server-side session storage is disabled (DISABLE_SESSION_DB=true). Query history and settings will be stored in browser localStorage only.");
+      return;
+    }
+
     const dbPath = process.env.KUZU_DIR;
     if (!dbPath) {
       return;
@@ -107,6 +115,9 @@ class SessionDatabase {
   }
 
   async getSetting(key = "allSettings") {
+    if (this.isDisabled) {
+      return {};
+    }
     await this.initSqlite();
     if (!this.isInitialized) {
       return {};
@@ -120,6 +131,9 @@ class SessionDatabase {
   }
 
   async setSetting(value, key = "allSettings") {
+    if (this.isDisabled) {
+      return;
+    }
     await this.initSqlite();
     if (!this.isWritable()) {
       return;
@@ -132,6 +146,9 @@ class SessionDatabase {
   }
 
   async upsertHistoryItem(historyItem) {
+    if (this.isDisabled) {
+      return;
+    }
     await this.initSqlite();
     if (!this.isWritable()) {
       return;
@@ -174,6 +191,9 @@ class SessionDatabase {
   }
 
   async deleteHistoryItem(uuid) {
+    if (this.isDisabled) {
+      return;
+    }
     await this.initSqlite();
     if (!this.isWritable()) {
       return;
@@ -182,6 +202,9 @@ class SessionDatabase {
   }
 
   async getHistoryItems() {
+    if (this.isDisabled) {
+      return [];
+    }
     await this.initSqlite();
     if (!this.isInitialized) {
       return [];
