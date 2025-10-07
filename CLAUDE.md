@@ -95,6 +95,33 @@ npm run eslint
 npm run eslint-fix
 ```
 
+### Testing
+
+#### Security Testing
+
+Run the comprehensive security test suite to validate query validation, rate limiting, and session storage:
+
+```bash
+# Run all security tests (requires server to be running)
+npm run test-security
+
+# Or run directly
+./scripts/test-security.sh
+```
+
+The security test suite validates:
+- **Query Validation**: Blocks CREATE, DROP, DELETE, ALTER, and other write operations in READ_ONLY mode
+- **Multi-Statement Protection**: Detects and blocks malicious queries in multi-statement batches
+- **Comment Bypass Prevention**: Strips comments before validation to prevent bypass attempts
+- **Rate Limiting**: Verifies 30 queries/min limit is enforced
+- **Session Storage**: Confirms stateless operation when DISABLE_SESSION_DB=true
+- **Legitimate Queries**: Ensures MATCH and read operations work correctly
+
+**Prerequisites:**
+- Server must be running (`npm run serve`)
+- `jq` must be installed (`sudo apt install jq`)
+- Environment variables must be set (MODE=READ_ONLY, DISABLE_SESSION_DB=true, etc.)
+
 ### Rebuilding Components
 
 ```bash

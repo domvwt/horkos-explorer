@@ -243,6 +243,31 @@ Include `-fix` for automatic correction of fixable styles.
 npm run eslint-fix
 ```
 
+### Security Testing
+
+Run the comprehensive security test suite to validate security features:
+
+```bash
+npm run test-security
+```
+
+This tests:
+- Query validation (blocks CREATE, DROP, DELETE, etc. in READ_ONLY mode)
+- Multi-statement query protection
+- Comment bypass prevention
+- Rate limiting (30 queries/min default)
+- Session storage isolation (when DISABLE_SESSION_DB=true)
+
+**Prerequisites:**
+- Server must be running with security configuration:
+  ```bash
+  export MODE=READ_ONLY
+  export DISABLE_SESSION_DB=true
+  export TRUST_PROXY=true
+  npm run serve
+  ```
+- `jq` must be installed: `sudo apt install jq`
+
 ## Troubleshooting
 
 ### Kuzu Submodule Initialization Hangs

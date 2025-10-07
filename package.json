@@ -13,7 +13,8 @@
     "generate-grammar": "python3 kuzu/scripts/antlr4/keywordhandler.py kuzu/src/antlr4/Cypher.g4 kuzu/src/antlr4/keywords.txt ./Cypher.g4 /tmp/header.h && rm /tmp/header.h && rm -rf src/utils/CypherParser/ && npx antlr4ng-cli -o src/utils/CypherParser -Dlanguage=TypeScript -no-visitor -no-listener Cypher.g4 && rm Cypher.g4 && cd src/utils/CypherParser && mv CypherParser.ts CypherParserOld.ts && grep -v \"notify\" CypherParserOld.ts > CypherParser.ts && rm CypherParserOld.ts",
     "clean": "rm -rf node_modules dist datasets src/utils/CypherParser && git submodule deinit --all",
     "eslint": "eslint --ext .js,.vue src",
-    "eslint-fix": "eslint --ext .js,.vue src --fix"
+    "eslint-fix": "eslint --ext .js,.vue src --fix",
+    "test-security": "bash scripts/test-security.sh"
   },
   "dependencies": {
     "@antv/g6": "^5.0.49",
