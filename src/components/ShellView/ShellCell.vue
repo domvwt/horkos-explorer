@@ -297,11 +297,22 @@ export default {
       return this.$refs.editor.editorHeight;
     },
     handleEditorResize() {
-      if (!this.$refs.resultContainer) {
-        return;
+      // Update all result containers when editor height changes
+      for (let i = 0; i < this.queryResults.length; i++) {
+        try {
+          const resultContainer = this.$refs[this.getRefName(i)][0];
+          if (resultContainer) {
+            resultContainer.updateContainerHeight();
+            resultContainer.handleGraphResize();
+          }
+        } catch (e) {
+          // Result container may not exist, ignore
+        }
       }
-      this.$refs.resultContainer.updateContainerHeight();
-      this.$refs.resultContainer.handleGraphResize();
+      // Also update error container if it exists
+      if (this.$refs.resultErrorContainer) {
+        this.$refs.resultErrorContainer.updateContainerHeight();
+      }
     },
     redrawGraph() {
       // Redraw graphs in all result containers for this cell

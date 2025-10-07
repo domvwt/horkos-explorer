@@ -1,109 +1,39 @@
 <template>
   <div class="main-layout">
-    <div
-      class="wrapper"
-      :class="{ 'toggled': isSidebarCollapsed }"
-    >
-      <div class="main-layout__sidebar">
-        <ul class="main-layout__sidebar-nav">
-          <li>
-            <div class="main-layout__sidebar-header flex justify-between items-center">
-              <a
-                class="navbar-brand hide-on-collapse horkos-brand"
-                href="https://github.com/domvwt/horkos"
-                target="_blank"
-              >
-                <span class="trident-icon">🔱</span>
-                <span class="brand-text">horkos</span>
-              </a>
+    <!-- Top Header -->
+    <header ref="header" class="main-layout__header">
+      <div class="main-layout__header-content">
+        <a
+          class="horkos-brand"
+          href="https://github.com/domvwt/horkos"
+          target="_blank"
+        >
+          <span class="trident-icon">🔱</span>
+          <span class="brand-text">horkos</span>
+        </a>
 
-              <a
-                class="menu-toggle"
-                @click="toggleSidebar"
-              >
-                <button
-                  :class="['fa-solid', isSidebarCollapsed ? 'fa-angle-right' : 'fa-angle-left']"
-                  aria-hidden="true"
-                />
-              </a>
-            </div>
-            <hr>
-          </li>
-
-          <li :class="['nav-item', { active: showShell }]">
-            <a
-              aria-hidden="true"
-              href="#query"
-              @click="toggleShell()"
-            >
-              <i class="fa-solid fa-terminal" />
-              <span class="hide-on-collapse">Query</span>
-            </a>
-          </li>
-          <li
-            v-if="!modeStore.isReadOnly"
-            :class="['nav-item', { active: showSchema }]"
+        <div class="main-layout__header-actions">
+          <a
+            href="https://github.com/domvwt/horkos"
+            target="_blank"
+            class="header-link"
           >
-            <a
-              aria-hidden="true"
-              href="#schema"
-              @click="toggleSchema()"
-            >
-              <i class="fa-solid fa-circle-nodes" />
-              <span class="hide-on-collapse">Schema</span>
-            </a>
-          </li>
-          <li
-            :class="['nav-item', { active: showLoader }]"
-            hidden
+            <i class="fa-solid fa-book" />
+            <span>Docs</span>
+          </a>
+          <button
+            class="header-link"
+            @click="showSettingsModal()"
           >
-            <a
-              aria-hidden="true"
-              href="#datasets"
-              @click="toggleLoader()"
-            >
-              <i class="fa-solid fa-database" />
-              <span class="hide-on-collapse">Datasets</span>
-            </a>
-          </li>
-          <li
-            v-if="!modeStore.isReadOnly"
-            :class="['nav-item', { active: showImporter || showLoader }]"
-          >
-            <a
-              aria-hidden="true"
-              href="#importer"
-              @click="toggleImporter()"
-            >
-              <i class="fa-solid fa-upload" />
-              <span class="hide-on-collapse">Import</span>
-            </a>
-          </li>
-
-          <li class="nav-item">
-            <a
-              aria-hidden="true"
-              href="https://github.com/domvwt/horkos"
-              target="_blank"
-            >
-              <i class="fa-solid fa-book" />
-              <span class="hide-on-collapse">Docs</span>
-            </a>
-          </li>
-          <div class="main-layout__sidebar-bottom">
-            <li class="nav-item">
-              <a
-                aria-hidden="true"
-                href="#settings"
-                @click="showSettingsModal()"
-              >
-                <i class="fa-solid fa-cog" />
-                <span class="hide-on-collapse">Settings</span>
-              </a>
-            </li>
-          </div>
-        </ul>
+            <i class="fa-solid fa-cog" />
+            <span>Settings</span>
+          </button>
+        </div>
       </div>
+    </header>
+
+    <!-- Main Container -->
+    <div class="wrapper">
       <div class="main-layout__main-container">
         <div class="container-fluid">
           <SchemaViewMain
@@ -124,6 +54,7 @@
             v-show="showShell"
             ref="shellView"
             :schema="schema"
+            :navbar-height="headerHeight"
             @reload-schema="reloadSchema"
           />
           <SettingsMainView
@@ -259,19 +190,16 @@ export default {
     showSettings: false,
     schema: null,
     isKuzuWasmInitialized: false,
-    isSidebarCollapsed: false,
+    headerHeight: 0,
   }),
   computed: {
     ...mapStores(useModeStore),
-    logoUrl() {
-      return this.modeStore.theme === 'vs-dark'
-        ? '/img/kuzu-logo-dark.png'
-        : '/img/kuzu-logo-light.png';
-    },
   },
   mounted() {
     this.accessModeModal = new Modal(this.$refs.modal);
-    window.addEventListener("resize", this.updateNavbarHeight);
+    this.$nextTick(() => {
+      this.measureHeaderHeight();
+    });
     window.addEventListener("hashchange", this.handleHashChange);
     // Handle initial hash on page load
     this.handleHashChange();
@@ -281,7 +209,6 @@ export default {
   },
   beforeUnmount() {
     this.accessModeModal.dispose();
-    window.removeEventListener("resize", this.updateNavbarHeight);
     window.removeEventListener("hashchange", this.handleHashChange);
   },
   async created() {
@@ -312,10 +239,16 @@ export default {
 
   },
   methods: {
+    measureHeaderHeight() {
+      if (this.$refs.header) {
+        this.headerHeight = this.$refs.header.offsetHeight;
+      }
+    },
     handleHashChange() {
       const hash = window.location.hash.substring(1);
       switch (hash) {
         case 'shell':
+        case 'query':
           this.toggleShell();
           break;
         case 'schema':
@@ -487,10 +420,6 @@ export default {
         this.$refs.settings.showModal();
       });
     },
-    toggleSidebar() {
-      this.isSidebarCollapsed = !this.isSidebarCollapsed;
-      window.dispatchEvent(new Event('resize'));
-    },
     ...mapActions(useSettingsStore, [
       'initSettings',
       'loadSettingsFromLocalStorage',
@@ -531,19 +460,14 @@ export default {
 </script>
 
 <style>
-:root {
-  --sidebar-width: 180px;
-  --sidebar-collapsed-width: 60px;
-}
-
 /* Scrollbar styling */
 body {
   scrollbar-gutter: stable both-edges;
   scrollbar-width: thin;
   scrollbar-color: var(--bs-body-bg-accent) var(--bs-body-bg);
+  overflow-x: hidden;
 }
 
-.main-layout__sidebar,
 .result-container__side-panel,
 .schema_side-panel__wrapper,
 .code-block {
@@ -551,13 +475,26 @@ body {
   margin-right: 0 !important;
 }
 
-body {
-  overflow-x: hidden;
+.main-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
 }
 
-.main-layout__sidebar-logo {
-  height: 28px;
-  image-rendering: crisp-edges;
+.main-layout__header {
+  background-color: var(--bs-body-bg-secondary);
+  border-bottom: 1px solid var(--bs-border-color);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  z-index: 1000;
+  position: relative;
+}
+
+.main-layout__header-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1.5rem;
+  max-width: 100%;
 }
 
 .horkos-brand {
@@ -568,6 +505,11 @@ body {
   font-weight: 600;
   color: var(--bs-body-text) !important;
   text-decoration: none !important;
+  transition: opacity 0.2s;
+
+  &:hover {
+    opacity: 0.7;
+  }
 }
 
 .horkos-brand .trident-icon {
@@ -580,44 +522,45 @@ body {
   letter-spacing: 0.05em;
 }
 
-.horkos-brand:hover {
-  opacity: 0.8;
+.main-layout__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.header-link {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--bs-body-text);
+  text-decoration: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.5rem;
+  transition: opacity 0.2s;
+  font-size: 0.95rem;
+
+  &:hover {
+    opacity: 0.7;
+  }
+
+  i {
+    font-size: 1rem;
+  }
 }
 
 .wrapper {
-  padding-left: var(--sidebar-width);
-  transition: all 0.6s ease;
-}
-
-.wrapper.toggled {
-  padding-left: var(--sidebar-collapsed-width);
-}
-
-.main-layout__sidebar {
-  z-index: 1000;
-  position: fixed;
-  left: 0;
-  width: var(--sidebar-width);
-  height: 100%;
-  margin-left: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  background-color: var(--bs-body-bg-secondary);
-  border-right: var(--bs-body-bg);
-  border-radius: 4px;
-  transition: all 0.5s ease;
-  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.2);
-}
-
-.wrapper.toggled .main-layout__sidebar {
-  width: var(--sidebar-collapsed-width);
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .main-layout__main-container {
   width: 100%;
+  height: 100%;
   position: relative;
-  transition: all 0.6s ease;
-  height: 100vh;
   overflow: hidden;
 
   .container-fluid {
@@ -626,130 +569,10 @@ body {
   }
 }
 
-.nav-item {
-  padding-left: 10px;
-  padding-top: 4px;
-}
-
-.main-layout__sidebar-nav {
-  top: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  padding-left: 4px;
-  list-style: none;
-  position: relative;
-  padding-bottom: 100px;
-
-  li {
-    line-height: 1.5;
-
-    a {
-      display: flex;
-      align-items: center;
-      text-decoration: none;
-      color: var(--bs-body-text);
-      padding: 8px 10px;
-      gap: 8px;
-
-      &.hover {
-        text-decoration: none;
-      }
-    }
-
-    hr {
-      margin: 10px;
-      background-color: var(--bs-body-inactive);
-    }
-
-    span {
-      color: var(--bs-body-text);
-    }
-  }
-
-  .main-layout__sidebar-bottom {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    width: 100%;
-    z-index: 1;
-    display: flex;
-    flex-direction: column;
-    padding: 10px 0;
-
-    .nav-item {
-      padding-left: 14px;
-    }
-  }
-}
-
-.wrapper.toggled .hide-on-collapse {
-  opacity: 0;
-  visibility: hidden;
-  width: 0;
-  overflow: hidden;
-}
-
-.wrapper.toggled .main-layout__sidebar-header {
-  justify-content: center;
-  padding: 0.5rem;
-}
-
-.wrapper.toggled .main-layout__sidebar-nav li a {
-  justify-content: center;
-  padding: 8px 0;
-}
-
-.wrapper.toggled .main-layout__sidebar-nav li i {
-  margin-right: 0;
-}
-
-.wrapper.toggled .menu-toggle {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  width: 100%;
-}
-
-.wrapper.toggled .main-layout__sidebar-header .navbar-brand {
-  display: none;
-}
-
 .badge {
   margin-left: 4px;
   margin-top: 4px;
   background-color: var(--bs-body-bg-accent);
   color: white !important;
-}
-
-.main-layout__sidebar-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.5rem;
-  gap: 1rem;
-
-  .navbar-brand {
-    display: flex;
-    align-items: center;
-  }
-
-  .menu-toggle {
-    display: flex;
-    align-items: center;
-    cursor: pointer;
-
-    button {
-      background: none;
-      border: none;
-      color: var(--bs-body-text);
-      padding: 0;
-      transition: transform 0.3s ease;
-
-      &:hover {
-        opacity: 0.7;
-      }
-    }
-  }
 }
 </style>

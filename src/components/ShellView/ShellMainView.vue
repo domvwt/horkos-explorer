@@ -2,7 +2,6 @@
   <div
     class="shell-main-view__wrapper"
     :class="{ 'is-maximized': maximizedCellIndex !== -1 }"
-    :style="{ height: `${containerHeight}px` }"
   >
     <div v-if="maximizedCellIndex < 0 && !isReadOnly">
       <div class="d-flex align-items-center gap-3 m-4">
@@ -73,7 +72,6 @@ export default {
     isWasm: false,
     isDemo: false,
     maximizedCellIndex: -1,
-    containerHeight: 0,
   }),
   computed: {
     isReadOnly() {
@@ -91,15 +89,12 @@ export default {
     }
     this.$nextTick(() => {
       this.loadDemoCell();
-      this.updateContainerHeight();
     });
-    window.addEventListener("resize", this.updateContainerHeight);
     document.addEventListener("keydown", this.handleKeyDown);
     this.loadCellsFromHistory();
   },
 
   beforeUnmount() {
-    window.removeEventListener("resize", this.updateContainerHeight);
     document.removeEventListener("keydown", this.handleKeyDown);
   },
 
@@ -108,9 +103,6 @@ export default {
       return {
         cellId: uuidv4(),
       }
-    },
-    updateContainerHeight() {
-      this.containerHeight = window.innerHeight - this.navbarHeight;
     },
     removeCell(index) {
       const uuid = this.shellCell[index].cellId;
@@ -248,7 +240,8 @@ MATCH (a)-[r]->(b) RETURN * LIMIT 5;`,
 <style lang="scss" scoped>
 .shell-main-view__wrapper {
   width: 100%;
-  overflow-y: scroll;
+  height: 100%;
+  overflow-y: auto;
 
   &.is-maximized {
     overflow-y: hidden;

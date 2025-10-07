@@ -36,8 +36,6 @@
           v-if="clickedIsNode"
           class="result-graph__actions"
         >
-          <br>
-
           <h5>Actions</h5>
           <button
             class="btn btn-sm btn-outline-secondary"
@@ -45,8 +43,6 @@
           >
             <i class="fa-solid fa-eye-slash" /> Hide Node
           </button>
-
-          &nbsp;
 
           <button
             v-if="!isHighlightedMode"
@@ -64,8 +60,6 @@
             <i class="fa-solid fa-arrows-to-circle" />
             Disable Highlight Mode
           </button>
-
-          &nbsp;
 
           <button
             v-if="!isCurrentNodeExpanded"
@@ -199,6 +193,23 @@
               >
                 <i class="fa-solid fa-eye" />
                 Show All
+              </button>
+              <button
+                v-if="hasUnexpandedNodes"
+                class="btn btn-sm btn-outline-secondary"
+                @click="expandOneMoreHop()"
+              >
+                <i class="fa-solid fa-diagram-project" />
+                Expand Graph
+              </button>
+              <button
+                v-else
+                class="btn btn-sm btn-outline-secondary"
+                disabled
+                style="opacity: 0.6; cursor: not-allowed;"
+              >
+                <i class="fa-solid fa-check-circle" />
+                Fully Expanded
               </button>
             </div>
             <hr>
@@ -580,6 +591,18 @@ export default {
 
       // Sort by predefined order
       return sourceBadges.sort((a, b) => a.order - b.order);
+    },
+    hasUnexpandedNodes() {
+      if (!this.g6Graph) return false;
+
+      try {
+        const allNodes = this.g6Graph.getNodeData();
+        const expandedNodeIds = new Set(this.expansions.map(e => e.id));
+        const leafNodes = allNodes.filter(node => !expandedNodeIds.has(node.id));
+        return leafNodes.length > 0;
+      } catch (e) {
+        return false;
+      }
     },
   },
   watch: {
@@ -972,6 +995,14 @@ export default {
       });
 
       this.graphCreated = true;
+
+      // Automatically open sidebar to show overview after initial graph load
+      if (!this.isSidePanelOpen) {
+        this.isSidePanelOpen = true;
+        this.$nextTick(() => {
+          this.handleResize();
+        });
+      }
     },
 
     hideNode() {
@@ -1436,6 +1467,96 @@ export default {
     expandSelectedNode() {
       const nodeData = this.g6Graph.getNodeData(this.clickedId);
       this.expandOnNode(nodeData);
+    },
+
+    async expandOneMoreHop() {
+      if (!this.g6Graph) return;
+
+      const sizeLimit = this.settingsStore.performance.maxNumberOfNodesToExpand;
+
+      // Get all currently visible nodes
+      const allNodes = this.g6Graph.getNodeData();
+
+      // Find leaf nodes (nodes that are visible but not yet expanded)
+      const expandedNodeIds = new Set(this.expansions.map(e => e.id));
+      const leafNodes = allNodes.filter(node => !expandedNodeIds.has(node.id));
+
+      if (leafNodes.length === 0) {
+        // This shouldn't happen since button is disabled, but just in case
+        return;
+      }
+
+      // Prepare to fetch neighbors for all leaf nodes
+      const fetchPromises = leafNodes.map(async (node) => {
+        try {
+          const { tableName, primaryKeyName, primaryKeyValue } = this.getInfoForExpansion(node);
+
+          const neighbors = await NeighborsFetcher.fetchNeighbors(
+            tableName,
+            primaryKeyName,
+            primaryKeyValue,
+            sizeLimit,
+            this.modeStore.isWasm
+          );
+
+          return { nodeId: node.id, neighbors };
+        } catch (e) {
+          console.error("Failed to fetch neighbors:", e);
+          return { nodeId: node.id, neighbors: null };
+        }
+      });
+
+      const results = await Promise.all(fetchPromises);
+      const validResults = results.filter(r => r.neighbors !== null && r.neighbors.rows && r.neighbors.rows.length > 0);
+
+      if (validResults.length === 0) {
+        alert("No new neighbors found");
+        return;
+      }
+
+      // Count total new entities that would be added
+      let newNodes = new Set();
+      let newEdges = new Set();
+
+      validResults.forEach(({ neighbors }) => {
+        const { nodes, edges } = this.extractGraphFromQueryResult(neighbors);
+        nodes.forEach(n => {
+          // Only count if not already in graph
+          try {
+            this.g6Graph.getNodeData(n.id);
+          } catch (e) {
+            newNodes.add(n.id);
+          }
+        });
+        edges.forEach(e => {
+          try {
+            this.g6Graph.getEdgeData(e.id);
+          } catch (err) {
+            newEdges.add(e.id);
+          }
+        });
+      });
+
+      const newEntityCount = newNodes.size + newEdges.size;
+      const currentEntityCount = this.counters.total.node + this.counters.total.rel;
+      const totalAfterExpansion = currentEntityCount + newEntityCount;
+
+      // Check if total would exceed 100
+      if (totalAfterExpansion > 100) {
+        alert(`Cannot expand: would add ${newEntityCount} new entities (current: ${currentEntityCount}, limit: 100). Total would be ${totalAfterExpansion}.`);
+        return;
+      }
+
+      // Add all the new neighbors
+      validResults.forEach(({ nodeId, neighbors }) => {
+        this.addDataWithQueryResult(neighbors);
+        this.expansions.push({
+          id: nodeId,
+          neighbors: neighbors
+        });
+      });
+
+      this.deselectAll();
     },
 
     collapseNode(id) {
@@ -1932,8 +2053,14 @@ export default {
     }
 
     .result-graph__actions {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
 
-      gap: 3px;
+      h5 {
+        margin-bottom: 0.5rem;
+      }
     }
 
     table {

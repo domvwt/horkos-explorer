@@ -6,34 +6,6 @@
   >
     <!-- Layout -->
     <div class="shell-editor__layout">
-      <!-- Sidebar -->
-      <aside :style="{ width: toolbarWidth + 'px' }">
-        <ul>
-          <button @click="evaluateCell">
-            <i
-              class="fa-solid fa-play"
-              data-bs-toggle="tooltip"
-              data-bs-placement="right"
-              title="Run"
-            />
-          </button>
-          <button @click="toggleMaximize">
-            <i
-              :class="maximizeButtonClass"
-              data-bs-toggle="tooltip"
-              data-bs-placement="right"
-              :data-bs-original-title="maximizeButtonTitle"
-            />
-          </button>
-          <button
-            v-if="!isMaximized"
-            @click="removeCell"
-          >
-            <i class="fa-solid fa-times" />
-          </button>
-        </ul>
-      </aside>
-
       <!-- Content Area -->
       <div class="shell-editor__content">
         <!-- Topbar -->
@@ -44,30 +16,30 @@
                 <a
                   href="#"
                   :class="[
-                    activeMode === 'search' ? 'active-tab' : 'inactive-tab'
+                    activeMode === 'search' && !isPanelMinimized ? 'active-tab' : 'inactive-tab'
                   ]"
                   class="text-decoration-none"
-                  @click.prevent="activeMode = 'search'"
+                  @click.prevent="handleTabClick('search')"
                 >Search</a>
               </li>
               <li class="nav-item text-[var(--bs-body-text)]">
                 <a
                   href="#"
                   :class="[
-                    activeMode === 'cypher' ? 'active-tab' : 'inactive-tab'
+                    activeMode === 'cypher' && !isPanelMinimized ? 'active-tab' : 'inactive-tab'
                   ]"
                   class="text-decoration-none"
-                  @click.prevent="activeMode = 'cypher'"
+                  @click.prevent="handleTabClick('cypher')"
                 >Cypher Query</a>
               </li>
               <li v-if="!modeStore.isWasm && enableAIQuery" class="nav-item">
                 <a
                   href="#"
                   :class="[
-                    activeMode === 'ai' ? 'active-tab' : 'inactive-tab'
+                    activeMode === 'ai' && !isPanelMinimized ? 'active-tab' : 'inactive-tab'
                   ]"
                   class="text-decoration-none"
-                  @click.prevent="activeMode = 'ai'"
+                  @click.prevent="handleTabClick('ai')"
                 >AI Query</a>
               </li>
             </ul>
@@ -75,25 +47,42 @@
         </header>
 
         <!-- Main Content -->
-        <main>
+        <main v-show="!isPanelMinimized">
           <div
             v-show="activeMode === 'search'"
+            class="mode-content"
           >
             <NodeSearch @executeQuery="handleSearchQuery" />
           </div>
           <div
             v-show="activeMode === 'cypher'"
-            ref="editor"
-          />
+            class="mode-content mode-content--with-actions"
+          >
+            <div ref="editor" class="editor-container" />
+            <div class="editor-actions">
+              <button class="run-button" @click="evaluateCell">
+                <i class="fa-solid fa-play" />
+                Run
+              </button>
+            </div>
+          </div>
           <div
             v-if="!modeStore.isWasm && enableAIQuery"
             v-show="activeMode === 'ai'"
+            class="mode-content mode-content--with-actions"
           >
             <textarea
               ref="gptQuestionTextArea"
               v-model="gptQuestion"
+              class="editor-container"
               placeholder="Type your question here..."
             />
+            <div class="editor-actions">
+              <button class="run-button" @click="evaluateCell">
+                <i class="fa-solid fa-play" />
+                Generate & Run
+              </button>
+            </div>
           </div>
         </main>
       </div>
@@ -149,6 +138,7 @@ export default {
       toolbarWidth: UI_SIZE.SHELL_TOOL_BAR_WIDTH,
       isMaximized: false,
       activeMode: "search", // 'cypher', 'ai', or 'search'
+      isPanelMinimized: false,
       gptQuestion: "",
       observer: null,
       editorResizeDebounce: null,
@@ -187,17 +177,48 @@ export default {
       this.editorResizeDebounce = setTimeout(() => {
         this.$emit("editorResize", this.editorHeight);
         this.editorResizeDebounce = null;
-      }, 200);
+      }, 50);
+    },
+    activeMode() {
+      // When switching modes, force a resize check
+      this.$nextTick(() => {
+        if (this.$refs.wrapper) {
+          this.editorHeight = this.$refs.wrapper.offsetHeight;
+        }
+      });
+    },
+    isPanelMinimized() {
+      // When minimizing/unminimizing, force immediate resize
+      this.$nextTick(() => {
+        if (this.$refs.wrapper) {
+          const newHeight = this.$refs.wrapper.offsetHeight;
+          if (Math.abs(this.editorHeight - newHeight) > 1) {
+            this.editorHeight = newHeight;
+            // Emit immediately without debounce for panel minimize/maximize
+            this.$emit("editorResize", newHeight);
+          }
+        }
+      });
     },
   },
 
   mounted() {
     this.initMonacoEditor();
     // Set height mutation observer for wrapper element
+    let rafId;
     this.observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        this.editorHeight = entry.contentRect.height;
+      if (rafId) {
+        cancelAnimationFrame(rafId);
       }
+      rafId = requestAnimationFrame(() => {
+        for (const entry of entries) {
+          const newHeight = entry.contentRect.height;
+          // Only update if height actually changed (prevents feedback loop)
+          if (Math.abs(this.editorHeight - newHeight) > 1) {
+            this.editorHeight = newHeight;
+          }
+        }
+      });
     });
     this.observer.observe(this.$refs.wrapper);
 
@@ -218,6 +239,16 @@ export default {
   },
 
   methods: {
+    handleTabClick(mode) {
+      if (this.activeMode === mode && !this.isPanelMinimized) {
+        // Clicking the active tab minimizes the panel
+        this.isPanelMinimized = true;
+      } else {
+        // Clicking a different tab or clicking while minimized shows that tab
+        this.activeMode = mode;
+        this.isPanelMinimized = false;
+      }
+    },
     initMonacoEditor() {
       const theme = document.documentElement.getAttribute('data-bs-theme') === 'dark'
         ? 'vs-dark'
@@ -365,10 +396,11 @@ $margin: 1rem;
   }
 
   a {
-    padding: 1rem;
+    padding: 0.75rem 1rem;
     border-top-left-radius: 0.5rem;
     border-top-right-radius: 0.5rem;
     color: var(--bs-body-inactive);
+    margin-bottom: -1px;
 
     &.active-tab {
       font-weight: bold;
@@ -383,11 +415,12 @@ $margin: 1rem;
       }
     }
   }
+
 }
 
 .shell-editor__layout {
   display: flex;
-  min-height: 132px;
+  min-height: auto;
 
   aside {
     display: flex;
@@ -424,42 +457,77 @@ $margin: 1rem;
 }
 
 main {
-  flex: 1;
+  flex: 0 1 auto;
   background-color: var(--bs-body-shell);
   padding: 1rem;
-  /* Ensure main takes up available space and handles overflow */
   overflow: hidden;
-  /* Prevent content overflow from affecting layout */
   display: flex;
-  /* Use flexbox for inner layout */
   flex-direction: column;
-  /* Stack inner divs vertically */
 
-  div {
+  .mode-content {
     height: 100%;
     width: 100%;
-    resize: vertical;
-    overflow: auto;
-    min-height: 100px;
-    /* Add flex-grow to make the editor div fill the available space */
-    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
 
-    &::-webkit-scrollbar {
-      display: none;
+    &.mode-content--with-actions {
+      gap: 0.75rem;
     }
 
-    -ms-overflow-style: none;
-    scrollbar-width: none;
+    .editor-container {
+      flex: 1;
+      min-height: 100px;
+      overflow: auto;
+      resize: vertical;
 
-    textarea {
+      &::-webkit-scrollbar {
+        display: none;
+      }
+
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+
+    textarea.editor-container {
       width: 100%;
-      height: 100%;
       border: none;
       padding: 0.5rem;
       background-color: var(--bs-body-bg);
       color: var(--bs-body-text);
-      min-height: 100px;
       resize: none;
+    }
+
+    .editor-actions {
+      flex-shrink: 0;
+      display: flex;
+      justify-content: flex-start;
+
+      .run-button {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 1rem;
+        background-color: var(--bs-primary);
+        color: white;
+        border: none;
+        border-radius: 0.375rem;
+        font-size: 0.875rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: opacity 0.2s;
+
+        &:hover {
+          opacity: 0.9;
+        }
+
+        &:active {
+          opacity: 0.8;
+        }
+
+        i {
+          font-size: 0.75rem;
+        }
+      }
     }
   }
 }

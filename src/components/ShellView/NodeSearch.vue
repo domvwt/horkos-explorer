@@ -106,14 +106,16 @@
           </button>
           <button
             v-if="showQuery"
-            class="btn btn-sm btn-outline-secondary py-0"
+            class="btn btn-sm py-0"
+            :class="copiedToClipboard ? 'btn-success' : 'btn-outline-secondary'"
             @click="copyQuery"
           >
-            <i class="fa-solid fa-copy" />
+            <i class="fa-solid" :class="copiedToClipboard ? 'fa-check' : 'fa-copy'" />
+            <span v-if="copiedToClipboard" class="ms-1" style="font-size: 0.7rem;">Copied!</span>
           </button>
         </div>
         <div v-if="showQuery" class="generated-query mt-1">
-          <code>{{ generatedQuery }}</code>
+          <code>{{ displayQuery }}</code>
         </div>
       </div>
     </div>
@@ -136,7 +138,9 @@ export default {
       },
       resultLimit: "25",
       generatedQuery: "",
+      queryParams: {},
       showQuery: false,
+      copiedToClipboard: false,
     };
   },
   computed: {
@@ -154,6 +158,21 @@ export default {
         return 'Search by address...';
       }
       return 'Search by name...';
+    },
+    displayQuery() {
+      // Substitute parameter values into the query for copy-paste
+      let query = this.generatedQuery;
+
+      if (this.queryParams && Object.keys(this.queryParams).length > 0) {
+        for (const [key, value] of Object.entries(this.queryParams)) {
+          const paramPlaceholder = `$${key}`;
+          // Escape single quotes in the value and wrap in quotes
+          const escapedValue = String(value).replace(/'/g, "\\'");
+          query = query.replace(new RegExp(`\\${paramPlaceholder}`, 'g'), `'${escapedValue}'`);
+        }
+      }
+
+      return query;
     },
   },
   mounted() {
@@ -229,6 +248,7 @@ export default {
         city: "",
       };
       this.generatedQuery = "";
+      this.queryParams = {};
       // Clear URL parameters
       window.history.pushState({}, '', window.location.pathname);
     },
@@ -285,11 +305,19 @@ export default {
     executeSearch() {
       const { query, params } = this.generateQuery();
       this.generatedQuery = query;
+      this.queryParams = params;
       this.updateUrl();
       this.$emit("executeQuery", { query, params });
     },
     copyQuery() {
-      navigator.clipboard.writeText(this.generatedQuery);
+      // Copy the query with values substituted
+      navigator.clipboard.writeText(this.displayQuery);
+
+      // Show visual feedback
+      this.copiedToClipboard = true;
+      setTimeout(() => {
+        this.copiedToClipboard = false;
+      }, 2000);
     },
   },
 };
@@ -341,8 +369,12 @@ export default {
   font-size: 0.75rem;
   white-space: pre-wrap;
   word-break: break-all;
-  max-height: 100px;
+  max-height: 150px;
   overflow-y: auto;
+
+  code {
+    display: block;
+  }
 }
 
 button:disabled {
