@@ -22,6 +22,18 @@ process.on("SIGTERM", () => {
 });
 
 const app = express();
+
+// Trust proxy for rate limiting when behind nginx/reverse proxy
+// This enables req.ip to contain the real client IP from X-Forwarded-For header
+const trustProxy = process.env.TRUST_PROXY
+  ? process.env.TRUST_PROXY.toLowerCase() === "true"
+  : true; // Default to true for production deployments
+
+if (trustProxy) {
+  app.set('trust proxy', true);
+  logger.info("Trust proxy enabled - will use X-Forwarded-For for client IP");
+}
+
 if (CROSS_ORIGIN) {
   app.use(cors());
   logger.info("CORS enabled for all origins");

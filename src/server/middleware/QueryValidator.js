@@ -16,6 +16,88 @@ const DDL_OPERATIONS = /^\s*(DROP|ALTER|CREATE\s+INDEX|CREATE\s+CONSTRAINT)/im;
 
 class QueryValidator {
   /**
+   * Splits a Cypher query into individual statements
+   * Handles semicolons within strings properly
+   * @param {string} query - The full query string
+   * @returns {string[]} Array of individual statements
+   */
+  static splitStatements(query) {
+    const statements = [];
+    let currentStatement = '';
+    let inString = false;
+    let stringChar = null;
+    let escaped = false;
+
+    for (let i = 0; i < query.length; i++) {
+      const char = query[i];
+
+      if (escaped) {
+        currentStatement += char;
+        escaped = false;
+        continue;
+      }
+
+      if (char === '\\') {
+        escaped = true;
+        currentStatement += char;
+        continue;
+      }
+
+      // Track string boundaries (single or double quotes)
+      if ((char === "'" || char === '"') && !inString) {
+        inString = true;
+        stringChar = char;
+        currentStatement += char;
+      } else if (char === stringChar && inString) {
+        inString = false;
+        stringChar = null;
+        currentStatement += char;
+      } else if (char === ';' && !inString) {
+        // Found statement separator outside of string
+        const trimmed = currentStatement.trim();
+        if (trimmed) {
+          statements.push(trimmed);
+        }
+        currentStatement = '';
+      } else {
+        currentStatement += char;
+      }
+    }
+
+    // Add final statement if exists
+    const trimmed = currentStatement.trim();
+    if (trimmed) {
+      statements.push(trimmed);
+    }
+
+    return statements;
+  }
+
+  /**
+   * Validates a single Cypher statement
+   * @param {string} statement - A single Cypher statement
+   * @throws {Error} If statement contains forbidden operations
+   */
+  static validateStatement(statement) {
+    // Check for write operations
+    if (WRITE_OPERATIONS.test(statement)) {
+      const match = statement.match(WRITE_OPERATIONS);
+      throw new Error(
+        `Write operation '${match[1]}' is not allowed in read-only mode. ` +
+        `Only MATCH, RETURN, WITH, and read operations are permitted.`
+      );
+    }
+
+    // Check for DDL operations
+    if (DDL_OPERATIONS.test(statement)) {
+      const match = statement.match(DDL_OPERATIONS);
+      throw new Error(
+        `DDL operation '${match[1]}' is not allowed in read-only mode.`
+      );
+    }
+  }
+
+  /**
    * Validates a Cypher query for read-only compliance
    * @param {string} query - The Cypher query to validate
    * @param {string} mode - The access mode (READ_ONLY, READ_WRITE, etc.)
@@ -31,23 +113,6 @@ class QueryValidator {
       return true;
     }
 
-    // Check for write operations
-    if (WRITE_OPERATIONS.test(query)) {
-      const match = query.match(WRITE_OPERATIONS);
-      throw new Error(
-        `Write operation '${match[1]}' is not allowed in read-only mode. ` +
-        `Only MATCH, RETURN, WITH, and read operations are permitted.`
-      );
-    }
-
-    // Check for DDL operations
-    if (DDL_OPERATIONS.test(query)) {
-      const match = query.match(DDL_OPERATIONS);
-      throw new Error(
-        `DDL operation '${match[1]}' is not allowed in read-only mode.`
-      );
-    }
-
     // Check query length (prevent extremely large queries)
     const MAX_QUERY_LENGTH = 50000; // 50KB
     if (query.length > MAX_QUERY_LENGTH) {
@@ -55,6 +120,21 @@ class QueryValidator {
         `Query too long (${query.length} characters). ` +
         `Maximum allowed: ${MAX_QUERY_LENGTH} characters.`
       );
+    }
+
+    // Split into individual statements and validate each one
+    const statements = QueryValidator.splitStatements(query);
+
+    for (let i = 0; i < statements.length; i++) {
+      try {
+        QueryValidator.validateStatement(statements[i]);
+      } catch (error) {
+        // Add statement number to error message for multi-statement queries
+        if (statements.length > 1) {
+          error.message = `Statement ${i + 1}: ${error.message}`;
+        }
+        throw error;
+      }
     }
 
     return true;
