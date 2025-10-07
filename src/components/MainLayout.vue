@@ -66,7 +66,10 @@
               <span class="hide-on-collapse">Query</span>
             </a>
           </li>
-          <li :class="['nav-item', { active: showSchema }]">
+          <li
+            v-if="!modeStore.isReadOnly"
+            :class="['nav-item', { active: showSchema }]"
+          >
             <a
               aria-hidden="true"
               href="#schema"
