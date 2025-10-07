@@ -874,14 +874,6 @@ export default {
       this.g6Graph.setData({ nodes, edges, });
       await this.render();
 
-      // Auto-expand neighborhood for all nodes (1 hop)
-      const allNodes = Object.values(nodes);
-      for (const node of allNodes) {
-        if (!this.isNeighborExpanded(node)) {
-          await this.expandOnNode(node);
-        }
-      }
-
       // Fit with padding, but cap max zoom to prevent extreme zoom-in on single nodes
       // Disable animation so we can cap zoom without visible jump
       this.g6Graph.fitView([150, 150], { duration: 0 });
