@@ -1,4 +1,8 @@
-# Kuzu Explorer
+# Horkos Explorer
+
+> **Note:** This is a fork of [Kuzu Explorer](https://github.com/kuzudb/explorer) customized for the [Horkos OSINT toolkit](https://github.com/domvwt/horkos).
+>
+> **Research & Planning Documentation:** See [`research-notes/README.md`](research-notes/README.md) for architecture research, security analysis, and implementation roadmap.
 
 Browser-based user interface for the [Kuzu](https://github.com/kuzudb/kuzu) graph database.
 
@@ -205,8 +209,26 @@ npm run fetch-datasets
 
 ### Run development server (with hot-reloading)
 
+```bash
+# Set environment variables
+export MODE=READ_ONLY                           # Force read-only mode
+export KUZU_DIR=/path/to/database/directory     # Directory containing .kuzu file
+export KUZU_FILE=database.kuzu                  # Database filename
+
+# Required for grammar generation
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+export PATH=$JAVA_HOME/bin:$PATH
+
+# Switch to Node.js v20 (if using nvm)
+source ~/.nvm/nvm.sh && nvm use 20
+
+# Start server
+npm run serve
 ```
-env KUZU_DIR={directory containing kuzu database} KUZU_FILE={database file name} npm run serve
+
+**Quick start:** Use the convenience script:
+```bash
+./scripts/start-dev.sh /path/to/database.kuzu
 ```
 
 ### Check code style with ESLint
@@ -219,6 +241,70 @@ Include `-fix` for automatic correction of fixable styles.
 
 ```
 npm run eslint-fix
+```
+
+## Troubleshooting
+
+### Kuzu Submodule Initialization Hangs
+
+If `git submodule update --init --recursive` times out or takes too long:
+
+```bash
+# Clean and use shallow clone instead
+git submodule deinit -f kuzu
+rm -rf .git/modules/kuzu
+git submodule update --init --depth 1
+```
+
+### Monaco Editor Font Issues
+
+**Problem:** Webpack error about missing `codicon.ttf`
+
+**Solution:** The project pins `monaco-editor@0.39.0` in package.json. If you see font errors:
+
+```bash
+npm install monaco-editor@0.39.0
+```
+
+**Note:** Do NOT upgrade monaco-editor to v0.41.0+ as it removes embedded fonts.
+
+### Java Version Issues
+
+**Problem:** ANTLR grammar generation fails with "UnsupportedClassVersionError"
+
+**Solution:** Use Java 21 (not just JDK 11+):
+
+```bash
+# Check Java version
+java -version
+
+# If needed, set Java 21
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+export PATH=$JAVA_HOME/bin:$PATH
+```
+
+### SQLite3 Binding Errors
+
+**Problem:** "Cannot find module 'node_sqlite3.node'" after switching Node.js versions
+
+**Solution:** Rebuild SQLite3 for your current Node version:
+
+```bash
+source ~/.nvm/nvm.sh && nvm use 20
+npm rebuild sqlite3
+```
+
+### Node.js Version Issues
+
+This project requires **Node.js v20**. If you encounter module loading errors:
+
+```bash
+# Check current version
+node --version
+
+# Switch to v20 (using nvm)
+nvm install 20
+nvm use 20
 ```
 
 ## Build and serve for production

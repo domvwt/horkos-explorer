@@ -32,8 +32,19 @@ module.exports = defineConfig({
     },
   },
   configureWebpack: {
+    module: {
+      rules: [
+        {
+          test: /\.ttf$/,
+          type: 'asset/resource'
+        }
+      ]
+    },
     plugins: [
-      new MonacoWebpackPlugin(),
+      new MonacoWebpackPlugin({
+        publicPath: BASE_URL,
+        filename: '[name].worker.js'
+      }),
       new CopyWebpackPlugin({
         patterns: [
           {
