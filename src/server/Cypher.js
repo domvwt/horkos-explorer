@@ -3,6 +3,7 @@ const router = express.Router();
 const logger = require("./utils/Logger");
 const MODES = require("./utils/Constants").MODES;
 const database = require("./utils/Database");
+const QueryValidator = require("./middleware/QueryValidator");
 let sessionDb;
 const queryMap = new Map();
 try {
@@ -46,7 +47,7 @@ const int128Replacer = (_, value) => {
   return value;
 };
 
-router.post("/", async (req, res) => {
+router.post("/", QueryValidator.middleware(database), async (req, res) => {
   const mode = database.getAccessModeString();
   if (!schema && mode === MODES.READ_WRITE) {
     try {
