@@ -108,7 +108,7 @@ export default {
     getRefName(index) {
       return `resultContainer_${index}`;
     },
-    evaluateCypher(query) {
+    evaluateCypher(query, params = {}) {
       this.queryResults = [];
       this.errorMessage = "";
       this.isLoading = true;
@@ -142,6 +142,7 @@ export default {
         Axios.post("/api/cypher",
           {
             query,
+            params,
             uuid: this.cellId,
             isQueryGenerationMode: this.$refs.editor.isQueryGenerationMode,
             updateHistory: true,
