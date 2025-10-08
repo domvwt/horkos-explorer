@@ -85,56 +85,36 @@
           <div class="result-graph__summary-section">
             <h5>{{ sidePanelPropertyTitlePrefix }} Properties</h5>
           </div>
-          <span
-            class="badge"
-            :class="entityTypeBadgeClass"
-            :style="{
-              textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
-            }"
-          >
-            {{ displayLabel }}</span>
-          <hr>
-          <table class="table table-sm table-borderless result-graph__result-table">
-            <tbody>
-              <tr
-                v-for="property in displayProperties"
-                :key="property.name"
+          <div class="result-graph__properties-list">
+            <div
+              v-for="(property, index) in displayProperties"
+              :key="property.name"
+              class="property-item"
+              :class="{ 'property-item--expanded': expandedProperties[index] }"
+            >
+              <div class="property-name">
+                <span class="property-label">{{ property.name }}</span>
+                <span
+                  v-if="property.isPrimaryKey"
+                  class="badge bg-primary pk-badge"
+                >PK</span>
+              </div>
+              <div
+                class="property-value copyable-cell"
+                @click="togglePropertyExpansion(index)"
               >
-                <th
-                  scope="row"
-                  class="copyable-cell"
+                <span class="value-text">{{ property.value }}</span>
+                <button
+                  class="copy-button"
+                  @click.stop="copyToClipboard(property.value)"
+                  @mouseenter="showCopyButton($event)"
+                  @mouseleave="hideCopyButton($event)"
                 >
-                  {{ property.name }}
-                  <span
-                    v-if="property.isPrimaryKey"
-                    class="badge bg-primary"
-                    style="
-                      text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000; 
-                      color: white !important;"
-                  >PK</span>
-                  <button
-                    class="copy-button"
-                    @click="copyToClipboard(property.name)"
-                    @mouseenter="showCopyButton($event)"
-                    @mouseleave="hideCopyButton($event)"
-                  >
-                    <i class="fa-solid fa-copy" />
-                  </button>
-                </th>
-                <td class="copyable-cell">
-                  {{ property.value }}
-                  <button
-                    class="copy-button"
-                    @click="copyToClipboard(property.value)"
-                    @mouseenter="showCopyButton($event)"
-                    @mouseleave="hideCopyButton($event)"
-                  >
-                    <i class="fa-solid fa-copy" />
-                  </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+                  <i class="fa-solid fa-copy" />
+                </button>
+              </div>
+            </div>
+          </div>
 
           <!-- External Resource Links -->
           <div
@@ -366,7 +346,8 @@ export default {
     minSidebarWidth: 350,
     maxSidebarWidth: 800,
     isInitialRender: true,
-    drawPromise: null
+    drawPromise: null,
+    expandedProperties: {}
   }),
   computed: {
     graphVizSettings() {
@@ -1413,9 +1394,17 @@ export default {
       this.clickedId = model.id;
       this.clickedProperties = ValueFormatter.filterAndBeautifyProperties(properties, this.schema);
       this.clickedIsNode = !(properties._src && properties._dst);
+      this.expandedProperties = {}; // Reset expanded properties when clicking a new node/edge
       if (this.clickedIsNode) {
         this.isCurrentNodeExpanded = this.isNeighborExpanded(model);
       }
+    },
+
+    togglePropertyExpansion(index) {
+      this.expandedProperties = {
+        ...this.expandedProperties,
+        [index]: !this.expandedProperties[index]
+      };
     },
 
     getInfoForExpansion(model) {
@@ -2082,38 +2071,6 @@ export default {
         padding-right: 30px;
       }
 
-      .copyable-cell {
-        position: relative;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-
-      .copy-button {
-        position: absolute;
-        right: 4px;
-        top: 50%;
-        transform: translateY(-50%);
-        background: var(--bs-body-bg-accent);
-        color: white;
-        border: none;
-        border-radius: 4px;
-        width: 24px;
-        height: 24px;
-        font-size: 12px;
-        cursor: pointer;
-        opacity: 0;
-        transition: opacity 0.2s;
-        z-index: 1000;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-
-        &:hover {
-          opacity: 1;
-        }
-      }
-
       th {
         padding-left: 6px;
         padding-top: 8px;
@@ -2135,16 +2092,126 @@ export default {
         }
       }
 
-      &.result-graph__result-table {
-        font-family: "Lexend", Lexend, sans-serif;
+      scrollbar-width: none;
+      scrollbar-color: transparent transparent;
+    }
 
-        td {
-          word-break: normal;
+    .result-graph__properties-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      margin-bottom: 1rem;
+
+      .property-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+        background-color: var(--bs-body-bg);
+        border-radius: 0.375rem;
+        padding: 0.375rem 0.5rem;
+        transition: background-color 0.15s ease;
+        min-height: 28px;
+
+        &:hover {
+          background-color: var(--bs-body-bg-hover);
+        }
+
+        &.property-item--expanded {
+          align-items: flex-start;
+
+          .property-value .value-text {
+            white-space: normal;
+            word-break: break-word;
+          }
         }
       }
 
-      scrollbar-width: none;
-      scrollbar-color: transparent transparent;
+      .property-name {
+        display: flex;
+        align-items: center;
+        gap: 0.375rem;
+        font-size: 0.65rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+        color: var(--bs-body-text-secondary);
+        flex-shrink: 0;
+
+        .property-label {
+          white-space: nowrap;
+        }
+
+        .pk-badge {
+          font-size: 0.6rem;
+          padding: 0.1rem 0.3rem;
+          text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+          color: white !important;
+          flex-shrink: 0;
+        }
+      }
+
+      .property-value {
+        font-size: 0.8rem;
+        font-family: "Lexend", sans-serif;
+        color: var(--bs-body-text);
+        line-height: 1.3;
+        position: relative;
+        padding-right: 0;
+        text-align: right;
+        flex: 1;
+        min-width: 0;
+        cursor: pointer;
+
+        .value-text {
+          display: block;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          padding-right: 0;
+        }
+
+        &:hover {
+          .value-text {
+            opacity: 0.8;
+          }
+        }
+      }
+
+      .copyable-cell {
+        position: relative;
+
+        .copy-button {
+          position: absolute;
+          right: 0;
+          top: 50%;
+          transform: translateY(-50%);
+          background: var(--bs-body-bg-accent);
+          color: white;
+          border: none;
+          border-radius: 3px;
+          width: 22px;
+          height: 22px;
+          font-size: 10px;
+          cursor: pointer;
+          opacity: 0;
+          transition: opacity 0.15s, background 0.2s;
+          z-index: 10;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+
+          &:hover {
+            opacity: 1 !important;
+            background: var(--bs-primary);
+          }
+        }
+
+        &:hover .copy-button {
+          opacity: 0.9;
+        }
+      }
     }
 
     h5 {
