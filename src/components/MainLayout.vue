@@ -5,8 +5,7 @@
       <div class="main-layout__header-content">
         <a
           class="horkos-brand"
-          href="https://github.com/domvwt/horkos"
-          target="_blank"
+          :href="homeUrl"
         >
           <span class="trident-icon">🔱</span>
           <span class="brand-text">horkos</span>
@@ -194,6 +193,10 @@ export default {
   }),
   computed: {
     ...mapStores(useModeStore),
+    homeUrl() {
+      const search = window.location.search;
+      return search ? `/${search}#shell` : '/#shell';
+    },
   },
   mounted() {
     this.accessModeModal = new Modal(this.$refs.modal);
