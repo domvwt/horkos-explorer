@@ -22,6 +22,13 @@ const COLOR_PALETTE = [
   "#4e79a7", // blue
 ];
 
+// Fixed color mappings for Horkos entity types (colorblind-friendly)
+const ENTITY_TYPE_COLORS = {
+  "Person": "#76b7b2",
+  "Company": "#d97f27",
+  "Address": "#af7aa1",
+};
+
 function randomChromaColor() {
   const randomSaturation = Math.random() * 0.2 + 0.6;  //Sets saturation to a random value between 0.6 and 0.8
   const randomLightness = Math.random() * 0.2 + 0.6;   //Sets lightness to a random value between 0.6 and 0.8
@@ -157,10 +164,17 @@ export const useSettingsStore = defineStore("settings", {
       const nodeDefault = this.graphViz.default.node;
       const name = node.name;
       const g6Settings = JSON.parse(JSON.stringify(nodeDefault));
-      let color = this.colors.pop();
-      if (!color) {
-        color = randomChromaColor();
+
+      let color;
+      if (ENTITY_TYPE_COLORS[name]) {
+        color = ENTITY_TYPE_COLORS[name];
+      } else {
+        color = this.colors.pop();
+        if (!color) {
+          color = randomChromaColor();
+        }
       }
+
       g6Settings.style.fill = color;
       g6Settings.style.stroke = G6Utils.shadeColor(color);
 
@@ -348,10 +362,17 @@ export const useSettingsStore = defineStore("settings", {
     addNewNodeTable(name) {
       const nodeDefault = this.graphViz.default.node;
       const g6Settings = JSON.parse(JSON.stringify(nodeDefault));
-      let color = this.colors.pop();
-      if (!color) {
-        color = randomChromaColor();
+
+      let color;
+      if (ENTITY_TYPE_COLORS[name]) {
+        color = ENTITY_TYPE_COLORS[name];
+      } else {
+        color = this.colors.pop();
+        if (!color) {
+          color = randomChromaColor();
+        }
       }
+
       g6Settings.style.fill = color;
       const nodeSettings = {
         name,
