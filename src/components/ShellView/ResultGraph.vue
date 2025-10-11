@@ -80,6 +80,29 @@
           </button>
         </div>
 
+        <!-- Neighbor Count Info -->
+        <div
+          v-if="clickedIsNode && currentNodeNeighborInfo && currentNodeNeighborInfo.hasCount"
+          class="result-graph__neighbor-info"
+        >
+          <div class="neighbor-info-row">
+            <span class="neighbor-info-label">
+              <i class="fa-solid fa-diagram-project" /> Connections
+            </span>
+            <span
+              class="neighbor-info-value"
+              :class="{ 'neighbor-info-value--profligate': currentNodeNeighborInfo.isProfligate }"
+            >
+              {{ currentNodeNeighborInfo.count }} new
+              <i
+                v-if="currentNodeNeighborInfo.isProfligate"
+                class="fa-solid fa-triangle-exclamation"
+                title="High connectivity (>10 connections)"
+              />
+            </span>
+          </div>
+        </div>
+
         <br>
         <div v-if="displayLabel">
           <div class="result-graph__summary-section">
@@ -183,7 +206,12 @@
                 @click="expandOneMoreHop()"
               >
                 <i class="fa-solid fa-diagram-project" />
-                Expand Graph
+                <span v-if="expandGraphInfo.hasCount">
+                  Expand Graph (+{{ expandGraphInfo.willExpand }})
+                </span>
+                <span v-else>
+                  Expand Graph
+                </span>
               </button>
               <button
                 v-else
@@ -268,6 +296,24 @@
     >
       <i class="fa-lg fa-solid fa-angle-left" />
     </button>
+
+    <!-- Toast Notification -->
+    <div
+      v-if="toastMessage"
+      class="result-graph__toast"
+      :style="{ right: (isSidePanelOpen ? sidebarWidth + 16 : 16) + 'px' }"
+    >
+      <div class="toast-content">
+        <i class="fa-solid fa-info-circle" />
+        <span>{{ toastMessage }}</span>
+      </div>
+      <button
+        class="toast-close"
+        @click="dismissToast"
+      >
+        <i class="fa-solid fa-times" />
+      </button>
+    </div>
   </div>
 </template>
 
@@ -350,7 +396,13 @@ export default {
     maxSidebarWidth: 800,
     isInitialRender: true,
     drawPromise: null,
-    expandedProperties: {}
+    expandedProperties: {},
+    neighborCounts: {},
+    profligateNodes: new Set(),
+    neighborCountsLoading: new Set(),
+    toastMessage: null,
+    toastTimeout: null,
+    shownProfligateWarnings: new Set()
   }),
   computed: {
     graphVizSettings() {
@@ -586,6 +638,51 @@ export default {
         return leafNodes.length > 0;
       } catch (e) {
         return false;
+      }
+    },
+    currentNodeNeighborInfo() {
+      if (!this.clickedIsNode || !this.clickedId) {
+        return null;
+      }
+
+      const neighborCount = this.neighborCounts[this.clickedId];
+      const isProfligate = this.profligateNodes.has(this.clickedId);
+      const isLoading = this.neighborCountsLoading.has(this.clickedId);
+
+      return {
+        count: neighborCount,
+        isProfligate,
+        isLoading,
+        hasCount: neighborCount !== undefined
+      };
+    },
+    expandGraphInfo() {
+      if (!this.g6Graph || !this.hasUnexpandedNodes) {
+        return { willExpand: 0, hasCount: false };
+      }
+
+      try {
+        const allNodes = this.g6Graph.getNodeData();
+        const expandedNodeIds = new Set(this.expansions.map(e => e.id));
+        const leafNodes = allNodes.filter(node => !expandedNodeIds.has(node.id));
+
+        let totalNodesToAdd = 0;
+        let countedNodes = 0;
+
+        leafNodes.forEach(node => {
+          const count = this.neighborCounts[node.id];
+          if (count !== undefined && !this.profligateNodes.has(node.id)) {
+            totalNodesToAdd += count;
+            countedNodes++;
+          }
+        });
+
+        return {
+          willExpand: totalNodesToAdd,
+          hasCount: countedNodes > 0
+        };
+      } catch (e) {
+        return { willExpand: 0, hasCount: false };
       }
     },
   },
@@ -987,6 +1084,11 @@ export default {
           this.handleResize();
         });
       }
+
+      // Trigger neighbor count update for all leaf nodes
+      this.$nextTick(() => {
+        this.updateNeighborCounts();
+      });
     },
 
     hideNode() {
@@ -1400,6 +1502,10 @@ export default {
       this.expandedProperties = {}; // Reset expanded properties when clicking a new node/edge
       if (this.clickedIsNode) {
         this.isCurrentNodeExpanded = this.isNeighborExpanded(model);
+        // Trigger neighbor count if not already counted
+        if (this.neighborCounts[model.id] === undefined) {
+          this.countNewNeighbors(model.id);
+        }
       }
     },
 
@@ -1420,6 +1526,98 @@ export default {
       const primaryKeyValue = properties[primaryKey.name];
       const primaryKeyName = primaryKey.name;
       return { tableName, primaryKey, primaryKeyValue, primaryKeyName };
+    },
+
+    async countNewNeighbors(nodeId) {
+      // Check if already loading or cached
+      if (this.neighborCountsLoading.has(nodeId)) {
+        return null;
+      }
+      if (this.neighborCounts[nodeId] !== undefined) {
+        return this.neighborCounts[nodeId];
+      }
+
+      // Mark as loading
+      this.neighborCountsLoading.add(nodeId);
+
+      try {
+        const nodeData = this.g6Graph.getNodeData(nodeId);
+        const { tableName, primaryKeyName, primaryKeyValue } = this.getInfoForExpansion(nodeData);
+        const sizeLimit = this.settingsStore.performance.maxNumberOfNodesToExpand;
+
+        // Fetch neighbors
+        const neighbors = await NeighborsFetcher.fetchNeighbors(
+          tableName,
+          primaryKeyName,
+          primaryKeyValue,
+          sizeLimit,
+          this.modeStore.isWasm
+        );
+
+        if (!neighbors || !neighbors.rows) {
+          this.neighborCounts[nodeId] = 0;
+          console.log(`[Neighbor Count] Node ${nodeId}: 0 neighbors (no results)`);
+          return 0;
+        }
+
+        // Count NEW neighbor NODES only (not edges)
+        let newCount = 0;
+        const { nodes } = this.extractGraphFromQueryResult(neighbors);
+
+        nodes.forEach(n => {
+          try {
+            this.g6Graph.getNodeData(n.id);
+            // Node exists, don't count
+          } catch (e) {
+            // Node doesn't exist, count it
+            newCount++;
+          }
+        });
+
+        this.neighborCounts[nodeId] = newCount;
+        console.log(`[Neighbor Count] Node ${nodeId}: ${newCount} new neighbors`);
+
+        // Mark as profligate if >10 new neighbors
+        if (newCount > 10) {
+          this.profligateNodes.add(nodeId);
+          console.log(`[Profligate] Node ${nodeId} marked as profligate (${newCount} > 10)`);
+          this.updateNodeBadge(nodeId, true);
+        } else {
+          this.profligateNodes.delete(nodeId);
+          this.updateNodeBadge(nodeId, false);
+        }
+
+        return newCount;
+      } catch (e) {
+        console.error("Failed to count neighbors:", e);
+        this.neighborCounts[nodeId] = 0;
+        return 0;
+      } finally {
+        this.neighborCountsLoading.delete(nodeId);
+      }
+    },
+
+    async updateNeighborCounts() {
+      if (!this.g6Graph) return;
+
+      try {
+        // Get all currently visible nodes
+        const allNodes = this.g6Graph.getNodeData();
+
+        // Find leaf nodes (nodes that are visible but not yet expanded)
+        const expandedNodeIds = new Set(this.expansions.map(e => e.id));
+        const leafNodes = allNodes.filter(node => !expandedNodeIds.has(node.id));
+
+        // Count neighbors for all leaf nodes asynchronously
+        // Don't await - let this run in the background
+        Promise.all(
+          leafNodes.map(node => this.countNewNeighbors(node.id))
+        ).catch(e => {
+          console.error("Error updating neighbor counts:", e);
+        });
+      } catch (e) {
+        console.error("Failed to update neighbor counts:", e);
+      }
     },
 
     async expandOnNode(model) {
@@ -1447,6 +1645,11 @@ export default {
         id: model.id, neighbors
       });
       this.deselectAll();
+
+      // Trigger neighbor count update for any new leaf nodes
+      this.$nextTick(() => {
+        this.updateNeighborCounts();
+      });
     },
 
     isNeighborExpanded(model) {
@@ -1502,18 +1705,65 @@ export default {
       const validResults = results.filter(r => r.neighbors !== null && r.neighbors.rows && r.neighbors.rows.length > 0);
 
       if (validResults.length === 0) {
-        alert("No new neighbors found");
+        this.showToast("No new neighbors found", 3000);
         return;
       }
 
-      // Count total new entities that would be added
+      // Count NEW neighbors for each node and classify as profligate or normal
+      const nodesToExpand = [];
+      const profligateNodes = [];
+
+      for (const result of validResults) {
+        const { nodeId, neighbors } = result;
+        const { nodes } = this.extractGraphFromQueryResult(neighbors);
+
+        // Count NEW neighbor NODES only (not edges)
+        let newCount = 0;
+        nodes.forEach(n => {
+          try {
+            this.g6Graph.getNodeData(n.id);
+            // Node exists, don't count
+          } catch (e) {
+            // Node doesn't exist, count it
+            newCount++;
+          }
+        });
+
+        // Classify node based on new neighbor count
+        if (newCount > 10) {
+          profligateNodes.push({ nodeId, neighbors, newCount });
+          // Mark as profligate
+          this.profligateNodes.add(nodeId);
+          this.neighborCounts[nodeId] = newCount;
+          this.updateNodeBadge(nodeId, true);
+        } else {
+          nodesToExpand.push({ nodeId, neighbors, newCount });
+        }
+      }
+
+      if (nodesToExpand.length === 0 && profligateNodes.length > 0) {
+        // Only profligate nodes remain - check if we need to warn
+        let needsWarning = false;
+        profligateNodes.forEach(p => {
+          if (!this.shownProfligateWarnings.has(p.nodeId)) {
+            needsWarning = true;
+            this.shownProfligateWarnings.add(p.nodeId);
+          }
+        });
+
+        if (needsWarning) {
+          this.showToast(`All ${profligateNodes.length} nodes have >10 connections. Double-click to expand individually.`, 4000);
+        }
+        return;
+      }
+
+      // Calculate total entities from normal nodes only
       let newNodes = new Set();
       let newEdges = new Set();
 
-      validResults.forEach(({ neighbors }) => {
+      nodesToExpand.forEach(({ neighbors }) => {
         const { nodes, edges } = this.extractGraphFromQueryResult(neighbors);
         nodes.forEach(n => {
-          // Only count if not already in graph
           try {
             this.g6Graph.getNodeData(n.id);
           } catch (e) {
@@ -1529,18 +1779,8 @@ export default {
         });
       });
 
-      const newEntityCount = newNodes.size + newEdges.size;
-      const currentEntityCount = this.counters.total.node + this.counters.total.rel;
-      const totalAfterExpansion = currentEntityCount + newEntityCount;
-
-      // Check if total would exceed 100
-      if (totalAfterExpansion > 100) {
-        alert(`Cannot expand: would add ${newEntityCount} new entities (current: ${currentEntityCount}, limit: 100). Total would be ${totalAfterExpansion}.`);
-        return;
-      }
-
-      // Add all the new neighbors
-      validResults.forEach(({ nodeId, neighbors }) => {
+      // Add normal nodes only
+      nodesToExpand.forEach(({ nodeId, neighbors }) => {
         this.addDataWithQueryResult(neighbors);
         this.expansions.push({
           id: nodeId,
@@ -1549,6 +1789,26 @@ export default {
       });
 
       this.deselectAll();
+
+      // Show message about profligate nodes (only once)
+      if (profligateNodes.length > 0) {
+        let needsWarning = false;
+        profligateNodes.forEach(p => {
+          if (!this.shownProfligateWarnings.has(p.nodeId)) {
+            needsWarning = true;
+            this.shownProfligateWarnings.add(p.nodeId);
+          }
+        });
+
+        if (needsWarning) {
+          this.showToast(`Skipped ${profligateNodes.length} highly-connected nodes (>10 connections). Double-click to expand individually.`, 5000);
+        }
+      }
+
+      // Trigger neighbor count update for any new leaf nodes
+      this.$nextTick(() => {
+        this.updateNeighborCounts();
+      });
     },
 
     collapseNode(id) {
@@ -1579,7 +1839,7 @@ export default {
       this.addData(nodes, edges);
     },
 
-    addData(nodes, edges) {
+    async addData(nodes, edges) {
       if (!this.g6Graph) {
         return;
       }
@@ -1624,7 +1884,12 @@ export default {
         edges: currentEdges.concat(edgesToAdd),
       };
       this.g6Graph.setData(newData);
-      this.render();
+      await this.render();
+
+      // Trigger neighbor count update for any new leaf nodes
+      this.$nextTick(() => {
+        this.updateNeighborCounts();
+      });
     },
 
     deselectAll() {
@@ -1893,6 +2158,11 @@ export default {
 
       // Restore expansion state
       this.expansions = savedExpansions;
+
+      // Trigger neighbor count update for all leaf nodes
+      this.$nextTick(() => {
+        this.updateNeighborCounts();
+      });
     },
 
     startResize(e) {
@@ -1914,6 +2184,62 @@ export default {
 
     stopResize() {
       this.isResizing = false;
+    },
+
+    showToast(message, duration = 5000) {
+      // Clear existing timeout
+      if (this.toastTimeout) {
+        clearTimeout(this.toastTimeout);
+      }
+
+      this.toastMessage = message;
+
+      // Auto-dismiss after duration
+      this.toastTimeout = setTimeout(() => {
+        this.dismissToast();
+      }, duration);
+    },
+
+    dismissToast() {
+      this.toastMessage = null;
+      if (this.toastTimeout) {
+        clearTimeout(this.toastTimeout);
+        this.toastTimeout = null;
+      }
+    },
+
+    updateNodeBadge(nodeId, isProfligate) {
+      if (!this.g6Graph) return;
+
+      try {
+        const nodeData = this.g6Graph.getNodeData(nodeId);
+
+        if (isProfligate) {
+          // Add thick semi-transparent red border to profligate nodes
+          this.g6Graph.updateNodeData([{
+            id: nodeId,
+            style: {
+              stroke: 'rgba(220, 53, 69, 0.6)',
+              lineWidth: 6,
+            }
+          }]);
+        } else {
+          // Restore normal styling - get original node color
+          const properties = nodeData.data.properties;
+          const nodeSettings = this.settingsStore.settingsForLabel(properties._label);
+          const nodeFill = nodeSettings.g6Settings.style.fill;
+
+          this.g6Graph.updateNodeData([{
+            id: nodeId,
+            style: {
+              stroke: G6Utils.shadeColor(nodeFill),
+              lineWidth: nodeSettings.g6Settings.style.lineWidth || 0,
+            }
+          }]);
+        }
+      } catch (e) {
+        console.error("Failed to update node badge:", e);
+      }
     },
   },
 };
@@ -2073,6 +2399,55 @@ export default {
 
       h5 {
         margin-bottom: 0.5rem;
+      }
+    }
+
+    .result-graph__neighbor-info {
+      background-color: var(--bs-body-bg);
+      border-radius: 0.5rem;
+      padding: 0.75rem;
+      margin-bottom: 1rem;
+
+      .neighbor-info-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .neighbor-info-label {
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: var(--bs-body-text);
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+
+        i {
+          color: var(--bs-body-text-secondary);
+        }
+      }
+
+      .neighbor-info-value {
+        font-size: 0.8rem;
+        font-weight: 500;
+        color: var(--bs-body-text-secondary);
+        display: flex;
+        align-items: center;
+        gap: 0.375rem;
+
+        &.neighbor-info-value--profligate {
+          color: #ffc107;
+          font-weight: 600;
+
+          i {
+            color: #ffc107;
+          }
+        }
+
+        i {
+          font-size: 0.75rem;
+        }
       }
     }
 
@@ -2393,6 +2768,74 @@ export default {
 
     i {
       font-size: 1.2rem;
+    }
+  }
+
+  .result-graph__toast {
+    position: absolute;
+    top: 1rem;
+    background-color: var(--bs-body-bg-secondary);
+    border: 1px solid var(--bs-body-bg-accent);
+    border-radius: 0.375rem;
+    padding: 0.75rem 1rem;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    max-width: 400px;
+    animation: slideInRight 0.3s ease-out;
+
+    @keyframes slideInRight {
+      from {
+        opacity: 0;
+        transform: translateX(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateX(0);
+      }
+    }
+
+    .toast-content {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex: 1;
+      color: var(--bs-body-text);
+
+      i {
+        color: var(--bs-body-bg-accent);
+        font-size: 1rem;
+        flex-shrink: 0;
+      }
+
+      span {
+        font-size: 0.85rem;
+        line-height: 1.3;
+      }
+    }
+
+    .toast-close {
+      background: none;
+      border: none;
+      color: var(--bs-body-text-secondary);
+      cursor: pointer;
+      padding: 0.125rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 0.25rem;
+      transition: background-color 0.2s, color 0.2s;
+
+      &:hover {
+        background-color: var(--bs-body-bg-hover);
+        color: var(--bs-body-text);
+      }
+
+      i {
+        font-size: 0.875rem;
+      }
     }
   }
 }
