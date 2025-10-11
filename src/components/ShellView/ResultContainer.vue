@@ -126,6 +126,7 @@
           v-show="showGraph"
           ref="resultGraph"
           :query-result="queryResult"
+          :query-info="queryInfo"
           :schema="schema"
           :container-height="containerHeight"
           :is-maximized="isMaximized"
@@ -204,6 +205,7 @@ export default {
     isGraphEmpty: false,
     schema: null,
     queryResult: null,
+    queryInfo: null, // Tracks current query {query, params, timestamp}
     errorMessage: "",
     emptyResultMessage: "The query executed successfully but the result is empty.",
     containerHeight: "auto",
@@ -246,11 +248,12 @@ export default {
     window.removeEventListener('resize', this.handleWindowResize);
   },
   methods: {
-    handleDataChange(schema, queryResult, errorMessage) {
+    handleDataChange(schema, queryResult, errorMessage, queryInfo = null) {
 
       this.isGraphEmpty = false;
       this.schema = schema;
       this.queryResult = queryResult;
+      this.queryInfo = queryInfo;
       this.errorMessage = errorMessage;
       if (this.queryResult && this.queryResult.rows.length === 0) {
         this.queryResult = null;

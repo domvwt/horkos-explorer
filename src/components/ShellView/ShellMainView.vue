@@ -38,6 +38,7 @@ import { v4 as uuidv4 } from 'uuid';
 import Axios from "@/utils/AxiosWrapper";
 import { MODES } from "@/utils/Constants";
 import { useModeStore } from "@/store/ModeStore";
+import { getStateFromUrl } from "@/utils/InvestigationState";
 export default {
   name: "ShellMainView",
   components: {
@@ -72,6 +73,7 @@ export default {
     isWasm: false,
     isDemo: false,
     maximizedCellIndex: -1,
+    isRestoringInvestigation: false,
   }),
   computed: {
     isReadOnly() {
@@ -87,11 +89,22 @@ export default {
     } catch (e) {
       // Ignore
     }
-    this.$nextTick(() => {
-      this.loadDemoCell();
-    });
+
+    // Check for investigation state in URL
+    const investigationState = getStateFromUrl();
+
+    if (investigationState) {
+      // Restore investigation from URL
+      await this.restoreInvestigation(investigationState);
+    } else {
+      // Normal loading - load demo or history
+      this.$nextTick(() => {
+        this.loadDemoCell();
+      });
+      this.loadCellsFromHistory();
+    }
+
     document.addEventListener("keydown", this.handleKeyDown);
-    this.loadCellsFromHistory();
   },
 
   beforeUnmount() {
@@ -230,6 +243,56 @@ MATCH (a)-[r]->(b) RETURN * LIMIT 5;`,
         } catch (e) {
           // Cell may not have a graph, ignore
         }
+      }
+    },
+
+    /**
+     * Restore investigation state from URL parameter
+     * Loads saved graph data directly without re-executing queries
+     */
+    async restoreInvestigation(state) {
+      if (!state) {
+        console.warn('[ShellMainView] Invalid investigation state');
+        return;
+      }
+
+      if (!state.graphData || !state.graphData.nodes || state.graphData.nodes.length === 0) {
+        console.error('[ShellMainView] Invalid investigation state: missing graph data');
+        return;
+      }
+
+      this.isRestoringInvestigation = true;
+
+      try {
+        // Use the first (default) cell for restoration
+        await this.$nextTick();
+
+        const cell = this.$refs[this.getCellRef(0)][0];
+        if (!cell) {
+          console.error('[ShellMainView] Failed to get cell reference for restoration');
+          return;
+        }
+
+        // Load the query text into the editor (without executing)
+        if (state.queries && state.queries.length > 0) {
+          const lastQuery = state.queries[state.queries.length - 1];
+          cell.loadEditorFromHistory({
+            cypherQuery: lastQuery.query,
+            isQueryGenerationMode: false,
+            gptQuestion: "",
+          });
+        }
+
+        // Wait for editor to load
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        // Load saved graph data directly into the cell
+        await cell.loadSavedGraphData(state);
+
+      } catch (error) {
+        console.error('[ShellMainView] Failed to restore investigation:', error);
+      } finally {
+        this.isRestoringInvestigation = false;
       }
     },
   },

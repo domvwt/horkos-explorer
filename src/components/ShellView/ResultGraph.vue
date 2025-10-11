@@ -32,6 +32,20 @@
           <i class="fa-solid fa-times" />
         </button>
 
+        <!-- Share Investigation Button - Always Visible -->
+        <div
+          v-if="queryInfo && queryInfo.query"
+          class="result-graph__share-section"
+        >
+          <button
+            class="btn btn-sm btn-primary w-100"
+            @click="generateShareUrl()"
+          >
+            <i class="fa-solid fa-share-nodes" />
+            Share Investigation
+          </button>
+        </div>
+
         <div
           v-if="clickedIsNode"
           class="result-graph__actions"
@@ -184,6 +198,7 @@
         </div>
         <div v-else>
           <h5>Overview</h5>
+
           <div v-if="counters.total.node > 0">
             <div class="result-graph__summary-section">
               <p>
@@ -314,6 +329,84 @@
         <i class="fa-solid fa-times" />
       </button>
     </div>
+
+    <!-- Share Investigation Modal -->
+    <div
+      v-if="shareModalVisible"
+      class="result-graph__share-modal"
+      @click.self="closeShareModal"
+    >
+      <div class="share-modal-content">
+        <div class="share-modal-header">
+          <h5>Share Investigation</h5>
+          <button
+            class="btn-close"
+            @click="closeShareModal"
+          >
+            <i class="fa-solid fa-times" />
+          </button>
+        </div>
+
+        <div class="share-modal-body">
+          <p class="share-modal-description">
+            Copy this URL to share your investigation. It includes all queries, expanded nodes, and hidden elements.
+          </p>
+
+          <!-- URL Size Warning -->
+          <div
+            v-if="shareUrlTooLarge"
+            class="alert alert-warning"
+          >
+            <i class="fa-solid fa-triangle-exclamation" />
+            <strong>Warning:</strong> This URL is very long ({{ shareUrlLength }} chars).
+            Some browsers may not support URLs longer than 2000 characters.
+          </div>
+
+          <!-- Shareable URL -->
+          <div class="share-url-container">
+            <input
+              ref="shareUrlInput"
+              v-model="shareUrl"
+              type="text"
+              class="form-control"
+              readonly
+              @focus="$event.target.select()"
+            >
+            <button
+              class="btn btn-primary"
+              :class="{ 'btn-success': shareUrlCopied }"
+              @click="copyShareUrl"
+            >
+              <i
+                class="fa-solid"
+                :class="shareUrlCopied ? 'fa-check' : 'fa-copy'"
+              />
+              {{ shareUrlCopied ? 'Copied!' : 'Copy' }}
+            </button>
+          </div>
+
+          <!-- State Info -->
+          <div class="share-state-info">
+            <small class="text-muted">
+              <i class="fa-solid fa-info-circle" />
+              This URL contains your current query
+              <span v-if="Object.keys(hiddenElements.nodes).length + Object.keys(hiddenElements.edges).length > 0">
+                and {{ Object.keys(hiddenElements.nodes).length + Object.keys(hiddenElements.edges).length }} hidden elements
+              </span>.
+            </small>
+          </div>
+        </div>
+
+        <div class="share-modal-footer">
+          <button
+            class="btn btn-secondary"
+            @click="closeShareModal"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -330,6 +423,7 @@ import { mapStores } from 'pinia'
 import ValueFormatter from "../../utils/ValueFormatter";
 import HoverContainer from "./HoverContainer.vue";
 import g6Utils from '../../utils/G6Utils';
+import { generateShareableUrl } from "../../utils/InvestigationState";
 
 export default {
   name: "ResultGraph",
@@ -338,6 +432,11 @@ export default {
   },
   props: {
     queryResult: {
+      type: Object,
+      required: false,
+      default: null,
+    },
+    queryInfo: {
       type: Object,
       required: false,
       default: null,
@@ -357,11 +456,15 @@ export default {
       required: false,
       default: false,
     },
+    isSidePanelOpen: {
+      type: Boolean,
+      required: false,
+      default: false,
+    },
   },
-  emits: ["graphEmpty"],
+  emits: ["graphEmpty", "requestSidebarToggle"],
   data: () => ({
     graphCreated: false,
-    isSidePanelOpen: false,
     isHighlightedMode: false,
     margin: UI_SIZE.DEFAULT_MARGIN,
     toolbarContainerWidth: UI_SIZE.SHELL_TOOL_BAR_WIDTH,
@@ -402,7 +505,13 @@ export default {
     neighborCountsLoading: new Set(),
     toastMessage: null,
     toastTimeout: null,
-    shownProfligateWarnings: new Set()
+    shownProfligateWarnings: new Set(),
+    // Investigation state sharing
+    shareModalVisible: false,
+    shareUrl: '',
+    shareUrlCopied: false,
+    shareUrlLength: 0,
+    shareUrlTooLarge: false,
   }),
   computed: {
     graphVizSettings() {
@@ -874,6 +983,211 @@ export default {
 
       return config;
     },
+    /**
+     * Initialize an empty G6 graph instance without processing query results.
+     *
+     * This method creates a new G6 graph with force layout configuration but doesn't
+     * extract data from queryResult, preventing the graphEmpty event from firing.
+     * Used exclusively for investigation restoration where graph data is loaded directly
+     * from saved state rather than query execution.
+     *
+     * @param {Array} edges - Array of edge objects from saved graph state, used to determine optimal force layout configuration
+     * @returns {Promise<void>}
+     */
+    async initializeEmptyGraph(edges = []) {
+      if (this.graphCreated && this.g6Graph) {
+        this.g6Graph.destroy();
+      }
+
+      const container = this.$refs.graph;
+      const width = container.offsetWidth;
+      const height = this.containerHeight === "auto" ? container.offsetHeight : parseInt(this.containerHeight);
+      // Apply force layout to loaded graphs for better visualization
+      const layoutConfig = this.getLayoutConfig(edges);
+
+      this.g6Graph = new Graph({
+        container,
+        width,
+        height,
+        layout: layoutConfig,
+        node: {
+          type: 'circle',
+          style: {
+            labelFontSize: 13,
+            labelFontFamily: "Lexend, Helvetica Neue, Helvetica, Arial, sans-serif",
+            labelFontWeight: 400,
+            labelFill: this.labelColor,
+            labelPlacement: 'bottom',
+            labelOffsetY: 8,
+            labelMaxWidth: 200,
+            labelWordWrap: true,
+            labelWordWrapWidth: 200,
+            labelLineHeight: 16,
+            labelMaxLines: 3,
+            iconFontFamily: "Font Awesome 6 Free",
+            iconFontSize: 24,
+            iconFontWeight: 900,
+            iconFill: "#ffffff",
+            zIndex: 10,
+          },
+          state: {
+            active: {
+              lineWidth: 10,
+              stroke: '#1890FF',
+            },
+          },
+        },
+        edge: {
+          style: {
+            lineWidth: 5,
+            stroke: this.edgeColor,
+            endArrow: true,
+            labelFontSize: 12,
+            labelFontFamily: "Lexend,Helvetica Neue, Helvetica, Arial, sans-serif",
+            labelFontWeight: 350,
+            labelFill: this.labelColor,
+            labelAutoRotate: true,
+            labelTextBaseline: 'bottom',
+            labelOffsetY: -8,
+            zIndex: 1,
+          },
+          state: {
+            active: {
+              lineWidth: 10,
+              stroke: '#1890FF',
+            },
+          },
+        },
+        behaviors: ['zoom-canvas', 'drag-canvas',
+          {
+            type: 'optimize-viewport-transform',
+            debounce: 300,
+          },
+          {
+            type: 'drag-element-force',
+            fixed: true,
+          },
+          {
+            type: 'click-select',
+            key: 'click-select-element',
+            degree: 0,
+            state: 'active',
+            enable: true,
+          },
+          {
+            type: 'click-select',
+            key: 'click-highlight',
+            degree: 1,
+            state: 'active',
+            unselectedState: 'inactive',
+            enable: false,
+            neighborState: 'active',
+          },
+        ],
+      });
+
+      // Set up event handlers
+      this.setupGraphEventHandlers();
+
+      this.graphCreated = true;
+    },
+
+    /**
+     * Register all G6 graph event handlers for user interactions.
+     *
+     * Sets up listeners for:
+     * - Node/edge hover (shows hover tooltip)
+     * - Node/edge click (opens sidebar with properties)
+     * - Node double-click (expands/collapses neighbors)
+     * - Node drag (restarts force simulation)
+     * - Canvas click (deselects all elements)
+     *
+     * This method is extracted from drawGraph() to enable code reuse in both
+     * normal query execution flow and investigation restoration flow.
+     *
+     * @returns {void}
+     */
+    setupGraphEventHandlers() {
+      // Show hover container on node and edge hover
+      this.g6Graph.on('node:pointerenter', (e) => {
+        const id = e.target.id;
+        const nodeData = this.g6Graph.getNodeData(id);
+        this.$refs.hoverContainer.handleHover(nodeData, e);
+      });
+
+      this.g6Graph.on('node:pointerleave', () => {
+        this.$refs.hoverContainer.resetHover();
+      });
+
+      this.g6Graph.on('node:pointermove', (e) => {
+        this.$refs.hoverContainer.showTooltip(e);
+      });
+
+      this.g6Graph.on('edge:pointerenter', (e) => {
+        const id = e.target.id;
+        const edgeData = this.g6Graph.getEdgeData(id);
+        this.$refs.hoverContainer.handleHover(edgeData, e);
+      });
+
+      this.g6Graph.on('edge:pointerleave', () => {
+        this.$refs.hoverContainer.resetHover();
+      });
+
+      this.g6Graph.on('edge:pointermove', (e) => {
+        this.$refs.hoverContainer.showTooltip(e);
+      });
+
+      // Click node and edge to select it and open side panel
+      this.g6Graph.on('node:click', (e) => {
+        this.$refs.hoverContainer.resetHover();
+        const clickedId = e.target.config.id;
+        const nodeData = this.g6Graph.getNodeData(clickedId);
+        this.handleClick(nodeData);
+        if (!this.isSidePanelOpen) {
+          window.setTimeout(() => {
+            this.$emit('requestSidebarToggle');
+            this.$nextTick(() => {
+              this.handleResize();
+            });
+          }, 200);
+        }
+      });
+
+      this.g6Graph.on('edge:click', (e) => {
+        this.$refs.hoverContainer.resetHover();
+        const clickedId = e.target.config.id;
+        const edgeData = this.g6Graph.getEdgeData(clickedId);
+        this.handleClick(edgeData);
+        if (!this.isSidePanelOpen) {
+          this.$emit('requestSidebarToggle');
+        }
+      });
+
+      this.g6Graph.on('node:dblclick', (e) => {
+        const itemId = e.target.id;
+        const isCurrentNodeExpanded = this.isNeighborExpanded(e.target);
+        if (isCurrentNodeExpanded) {
+          this.collapseNode(itemId);
+          this.deselectAll();
+          return this.redrawGraph();
+        }
+        const nodeData = this.g6Graph.getNodeData(itemId);
+        this.expandOnNode(nodeData);
+        this.deselectAll();
+      });
+
+      this.g6Graph.on('node:dragend', () => {
+        const layout = this.g6Graph.getLayout();
+        if (layout && layout.simulation) {
+          layout.simulation.alpha(0.3).restart();
+        }
+      });
+
+      this.g6Graph.on('canvas:click', () => {
+        this.deselectAll();
+      });
+    },
+
     async drawGraph() {
       if (this.graphCreated && this.g6Graph) {
         this.g6Graph.destroy();
@@ -991,95 +1305,14 @@ export default {
         console.timeEnd("G6 graph render");
       });
 
-      // Show hover container on node and edge hover
-      this.g6Graph.on('node:pointerenter', (e) => {
-        const id = e.target.id;
-        const nodeData = this.g6Graph.getNodeData(id);
-        this.$refs.hoverContainer.handleHover(nodeData, e);
-      });
-
-      this.g6Graph.on('node:pointerleave', (e) => {
-        this.$refs.hoverContainer.resetHover();
-      });
-
-      this.g6Graph.on('node:pointermove', (e) => {
-        this.$refs.hoverContainer.showTooltip(e);
-      });
-
-      this.g6Graph.on('edge:pointerenter', (e) => {
-        const id = e.target.id;
-        const edgeData = this.g6Graph.getEdgeData(id);
-        this.$refs.hoverContainer.handleHover(edgeData, e);
-      });
-
-      this.g6Graph.on('edge:pointerleave', (e) => {
-        this.$refs.hoverContainer.resetHover();
-      });
-
-      this.g6Graph.on('edge:pointermove', (e) => {
-        this.$refs.hoverContainer.showTooltip(e);
-      });
-      // End of hover container setup
-
-      // Click node and edge to select it and open side panel
-      this.g6Graph.on('node:click', (e) => {
-        this.$refs.hoverContainer.resetHover();
-        const clickedId = e.target.config.id;
-        const nodeData = this.g6Graph.getNodeData(clickedId);
-        this.handleClick(nodeData);
-        if (!this.isSidePanelOpen) {
-          // Add a small delay to avoid conflicting with double click
-          window.setTimeout(() => {
-            this.isSidePanelOpen = true;
-            this.$nextTick(() => {
-              this.handleResize();
-            });
-          }, 200);
-        }
-      });
-
-      this.g6Graph.on('edge:click', (e) => {
-        this.$refs.hoverContainer.resetHover();
-        const clickedId = e.target.config.id;
-        const edgeData = this.g6Graph.getEdgeData(clickedId);
-        this.handleClick(edgeData);
-        if (!this.isSidePanelOpen) {
-          this.isSidePanelOpen = true;
-        }
-      });
-      // End of click to select node and edge
-
-      this.g6Graph.on('node:dblclick', (e) => {
-        const itemId = e.target.id;
-        const isCurrentNodeExpanded = this.isNeighborExpanded(e.target);
-        if (isCurrentNodeExpanded) {
-          this.collapseNode(itemId);
-          this.deselectAll();
-          return this.redrawGraph();
-        }
-        const nodeData = this.g6Graph.getNodeData(itemId);
-        this.expandOnNode(nodeData);
-        this.deselectAll();
-      });
-
-      // Ensure force simulation continues after node dragging
-      this.g6Graph.on('node:dragend', () => {
-        // Restart the force simulation to ensure proper collision detection
-        const layout = this.g6Graph.getLayout();
-        if (layout && layout.simulation) {
-          layout.simulation.alpha(0.3).restart();
-        }
-      });
-
-      this.g6Graph.on('canvas:click', () => {
-        this.deselectAll();
-      });
+      // Set up event handlers (hover, click, double-click, etc.)
+      this.setupGraphEventHandlers();
 
       this.graphCreated = true;
 
       // Automatically open sidebar to show overview after initial graph load
       if (!this.isSidePanelOpen) {
-        this.isSidePanelOpen = true;
+        this.$emit('requestSidebarToggle');
         this.$nextTick(() => {
           this.handleResize();
         });
@@ -1556,7 +1789,6 @@ export default {
 
         if (!neighbors || !neighbors.rows) {
           this.neighborCounts[nodeId] = 0;
-          console.log(`[Neighbor Count] Node ${nodeId}: 0 neighbors (no results)`);
           return 0;
         }
 
@@ -1575,12 +1807,10 @@ export default {
         });
 
         this.neighborCounts[nodeId] = newCount;
-        console.log(`[Neighbor Count] Node ${nodeId}: ${newCount} new neighbors`);
 
         // Mark as profligate if >10 new neighbors
         if (newCount > 10) {
           this.profligateNodes.add(nodeId);
-          console.log(`[Profligate] Node ${nodeId} marked as profligate (${newCount} > 10)`);
           this.updateNodeBadge(nodeId, true);
         } else {
           this.profligateNodes.delete(nodeId);
@@ -1910,7 +2140,7 @@ export default {
     },
 
     toggleSidePanel() {
-      this.isSidePanelOpen = !this.isSidePanelOpen;
+      this.$emit('requestSidebarToggle');
       this.$nextTick(() => {
         this.handleResize();
       });
@@ -2108,7 +2338,7 @@ export default {
         this.handleClick(nodeData);
         if (!this.isSidePanelOpen) {
           window.setTimeout(() => {
-            this.isSidePanelOpen = true;
+            this.$emit('requestSidebarToggle');
             this.$nextTick(() => {
               this.handleResize();
             });
@@ -2122,7 +2352,7 @@ export default {
         const edgeData = this.g6Graph.getEdgeData(clickedId);
         this.handleClick(edgeData);
         if (!this.isSidePanelOpen) {
-          this.isSidePanelOpen = true;
+          this.$emit('requestSidebarToggle');
         }
       });
 
@@ -2240,6 +2470,235 @@ export default {
       } catch (e) {
         console.error("Failed to update node badge:", e);
       }
+    },
+
+    // Investigation State Management Methods
+
+    /**
+     * Capture the complete current investigation state for URL sharing.
+     *
+     * Extracts all graph data (nodes and edges with full properties), executed queries,
+     * hidden elements, and viewport settings. The returned state object can be serialized
+     * and compressed for URL parameters, allowing users to share their exact investigation
+     * view with colleagues.
+     *
+     * Note: This saves the complete graph data rather than just expansion IDs, trading
+     * URL size for guaranteed accuracy and avoiding additional database queries during
+     * restoration. For very large graphs (>1000 nodes), consider implementing server-side
+     * storage with short URL codes.
+     *
+     * @returns {Object} Investigation state object with structure:
+     *   - queries: Array of {query, params, timestamp} objects
+     *   - graphData: {nodes: Array, edges: Array} with complete G6 graph data
+     *   - hiddenElements: {nodes: Object, edges: Object} map of hidden element IDs
+     *   - viewport: {zoom: number} current zoom level (null if default)
+     */
+    getInvestigationState() {
+      // Build queries array from current queryInfo prop
+      const queries = [];
+      if (this.queryInfo && this.queryInfo.query) {
+        queries.push({
+          query: this.queryInfo.query,
+          params: this.queryInfo.params || {},
+          timestamp: this.queryInfo.timestamp || Date.now(),
+        });
+      }
+
+      // Get complete graph data
+      // Note: Saving full data makes URLs larger, but ensures accurate restoration
+      // without additional DB queries. For large graphs, consider implementing
+      // a server-side storage solution with short URL codes.
+      let graphData = { nodes: [], edges: [] };
+      if (this.g6Graph) {
+        graphData = {
+          nodes: this.g6Graph.getNodeData() || [],
+          edges: this.g6Graph.getEdgeData() || [],
+        };
+      }
+
+      return {
+        queries,
+        graphData, // Save entire graph instead of just expansion IDs
+        hiddenElements: this.hiddenElements,
+        viewport: this.getViewportState(),
+      };
+    },
+
+    /**
+     * Get list of expanded node IDs (in order they were expanded)
+     */
+    getExpandedNodeIds() {
+      return this.expansions.map(exp => exp.id);
+    },
+
+    /**
+     * Get current viewport state (zoom, pan position)
+     */
+    getViewportState() {
+      if (!this.g6Graph) return null;
+
+      try {
+        const zoom = this.g6Graph.getZoom();
+        // G6 doesn't expose viewport position directly in v5
+        // We can add this later if needed
+        return { zoom };
+      } catch (e) {
+        return null;
+      }
+    },
+
+
+    /**
+     * Restore a previously saved investigation state into the graph visualization.
+     *
+     * This method reconstructs the exact graph view from a shared investigation link by:
+     * 1. Initializing an empty G6 graph (if needed) with appropriate force layout
+     * 2. Loading all saved nodes and edges with their complete properties
+     * 3. Re-applying hidden element states
+     * 4. Restoring the viewport zoom level
+     *
+     * The parent component (ShellCell) is responsible for loading the query text into
+     * the editor. This method focuses solely on reconstructing the graph visualization.
+     *
+     * @param {Object} state - Investigation state object from getInvestigationState()
+     * @param {Array} state.queries - Array of executed queries (unused here, handled by parent)
+     * @param {Object} state.graphData - Complete graph data {nodes: Array, edges: Array}
+     * @param {Object} state.hiddenElements - Map of hidden elements {nodes: Object, edges: Object}
+     * @param {Object} [state.viewport] - Optional viewport state {zoom: number}
+     * @returns {Promise<void>}
+     */
+    async restoreInvestigationState(state) {
+      if (!state) return;
+
+      // Wait for graph to be initialized
+      await this.$nextTick();
+
+      // If we have saved graph data, load it directly
+      if (state.graphData && state.graphData.nodes && state.graphData.nodes.length > 0) {
+        // Initialize the graph if not already initialized
+        if (!this.g6Graph) {
+          // Initialize graph without processing queryResult (to avoid graphEmpty event)
+          // Pass edges to set up force layout
+          await this.initializeEmptyGraph(state.graphData.edges);
+          await this.$nextTick();
+        }
+
+        // Clear existing graph and load saved data
+        if (this.g6Graph) {
+          this.g6Graph.clear();
+
+          // Add all nodes and edges to the graph
+          this.g6Graph.addData({
+            nodes: state.graphData.nodes,
+            edges: state.graphData.edges,
+          });
+
+          // Render the graph
+          await this.render();
+        } else {
+          console.error('[ResultGraph] Failed to initialize graph');
+          return;
+        }
+      }
+
+      // Restore hidden elements
+      if (state.hiddenElements) {
+        this.hiddenElements = {
+          nodes: { ...(state.hiddenElements.nodes || {}) },
+          edges: { ...(state.hiddenElements.edges || {}) }
+        };
+
+        // Apply hidden state to graph
+        Object.keys(this.hiddenElements.nodes).forEach(nodeId => {
+          if (this.hiddenElements.nodes[nodeId]) {
+            this.hideGraphElement(nodeId, 'node');
+          }
+        });
+        Object.keys(this.hiddenElements.edges).forEach(edgeId => {
+          if (this.hiddenElements.edges[edgeId]) {
+            this.hideGraphElement(edgeId, 'edge');
+          }
+        });
+      }
+
+      // Restore viewport (zoom level)
+      if (state.viewport && state.viewport.zoom && this.g6Graph) {
+        try {
+          await this.$nextTick();
+          this.g6Graph.zoomTo(state.viewport.zoom, { duration: 300 });
+        } catch (e) {
+          console.warn('[ResultGraph] Failed to restore viewport zoom:', e);
+        }
+      }
+    },
+
+    /**
+     * Helper to hide a graph element by ID
+     */
+    hideGraphElement(id, type) {
+      if (!this.g6Graph) return;
+
+      try {
+        if (type === 'node') {
+          this.g6Graph.hideNode(id);
+        } else if (type === 'edge') {
+          this.g6Graph.hideEdge(id);
+        }
+      } catch (e) {
+        // Element may not exist yet, that's okay
+        console.debug(`Failed to hide ${type} ${id}:`, e);
+      }
+    },
+
+
+    /**
+     * Generate shareable URL and show modal
+     */
+    generateShareUrl() {
+      const state = this.getInvestigationState();
+      const result = generateShareableUrl(state);
+
+      this.shareUrl = result.url;
+      this.shareUrlLength = result.estimatedLength;
+      this.shareUrlTooLarge = result.isOversized;
+      this.shareUrlCopied = false;
+      this.shareModalVisible = true;
+
+      // Auto-select the URL input after modal renders
+      this.$nextTick(() => {
+        if (this.$refs.shareUrlInput) {
+          this.$refs.shareUrlInput.select();
+        }
+      });
+    },
+
+    /**
+     * Copy share URL to clipboard
+     */
+    async copyShareUrl() {
+      try {
+        await navigator.clipboard.writeText(this.shareUrl);
+        this.shareUrlCopied = true;
+
+        // Reset copied state after 2 seconds
+        setTimeout(() => {
+          this.shareUrlCopied = false;
+        }, 2000);
+      } catch (error) {
+        console.error('Failed to copy URL:', error);
+        // Fallback: select the text so user can manually copy
+        if (this.$refs.shareUrlInput) {
+          this.$refs.shareUrlInput.select();
+        }
+      }
+    },
+
+    /**
+     * Close share modal
+     */
+    closeShareModal() {
+      this.shareModalVisible = false;
+      this.shareUrlCopied = false;
     },
   },
 };
@@ -2836,6 +3295,189 @@ export default {
       i {
         font-size: 0.875rem;
       }
+    }
+  }
+
+  // Share Investigation Section
+  .result-graph__share-section {
+    margin-bottom: 1rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--bs-border-color);
+
+    button {
+      transition: all 0.2s;
+
+      &:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+      }
+
+      i {
+        margin-right: 0.5rem;
+      }
+    }
+  }
+
+  // Share Modal
+  .result-graph__share-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    padding: 1rem;
+
+    .share-modal-content {
+      background-color: var(--bs-body-bg);
+      border-radius: 0.5rem;
+      box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.3);
+      max-width: 600px;
+      width: 100%;
+      max-height: 90vh;
+      overflow: auto;
+      animation: modalSlideIn 0.2s ease-out;
+    }
+
+    @keyframes modalSlideIn {
+      from {
+        opacity: 0;
+        transform: translateY(-20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .share-modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1.25rem;
+      border-bottom: 1px solid var(--bs-border-color);
+
+      h5 {
+        margin: 0;
+        font-size: 1.25rem;
+        color: var(--bs-body-text);
+      }
+
+      .btn-close {
+        background: none;
+        border: none;
+        color: var(--bs-body-text-secondary);
+        cursor: pointer;
+        padding: 0.25rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 0.25rem;
+        transition: background-color 0.2s, color 0.2s;
+
+        &:hover {
+          background-color: var(--bs-body-bg-hover);
+          color: var(--bs-body-text);
+        }
+
+        i {
+          font-size: 1.25rem;
+        }
+      }
+    }
+
+    .share-modal-body {
+      padding: 1.25rem;
+
+      .share-modal-description {
+        color: var(--bs-body-text-secondary);
+        margin-bottom: 1rem;
+        font-size: 0.95rem;
+      }
+
+      .alert {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.5rem;
+        padding: 0.75rem;
+        border-radius: 0.375rem;
+        margin-bottom: 1rem;
+        background-color: rgba(255, 193, 7, 0.1);
+        border: 1px solid rgba(255, 193, 7, 0.3);
+        color: var(--bs-body-text);
+
+        i {
+          color: #ffc107;
+          font-size: 1rem;
+          margin-top: 0.125rem;
+        }
+      }
+
+      .share-url-container {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+
+        input {
+          flex: 1;
+          font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+          font-size: 0.85rem;
+          padding: 0.5rem 0.75rem;
+          border: 1px solid var(--bs-border-color);
+          border-radius: 0.375rem;
+          background-color: var(--bs-body-bg-secondary);
+          color: var(--bs-body-text);
+
+          &:focus {
+            outline: none;
+            border-color: var(--bs-primary);
+            box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+          }
+        }
+
+        button {
+          white-space: nowrap;
+          transition: all 0.2s;
+
+          &.btn-success {
+            background-color: #28a745;
+            border-color: #28a745;
+          }
+
+          i {
+            margin-right: 0.375rem;
+          }
+        }
+      }
+
+      .share-state-info {
+        padding: 0.75rem;
+        background-color: var(--bs-body-bg-secondary);
+        border-radius: 0.375rem;
+        border: 1px solid var(--bs-border-color);
+
+        small {
+          display: flex;
+          align-items: flex-start;
+          gap: 0.5rem;
+
+          i {
+            color: var(--bs-body-bg-accent);
+            margin-top: 0.125rem;
+          }
+        }
+      }
+    }
+
+    .share-modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      padding: 1rem 1.25rem;
+      border-top: 1px solid var(--bs-border-color);
     }
   }
 }

@@ -48,9 +48,9 @@ export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 export PATH=$JAVA_HOME/bin:$PATH
 
 # Database configuration
-export MODE=READ_ONLY                    # Force read-only mode (recommended)
-export KUZU_DIR=/path/to/database/dir    # Directory containing .kuzu database
-export KUZU_FILE=database_name.kuzu      # Database filename
+export MODE=READ_ONLY                                         # Force read-only mode (recommended)
+export KUZU_DIR=/home/domvwt/projects/horkos/data            # Directory containing .kuzu database
+export KUZU_FILE=horkos_dev_pl_graph.kuzu                    # Database filename (use dev database for development)
 
 # Optional configurations
 export KUZU_BUFFER_POOL_SIZE=1073741824  # 1GB buffer (default: 80% of RAM)
@@ -303,11 +303,19 @@ This enables tracing back to original data sources for validation.
 
 ## Testing Database
 
+**Always use the development database for local development:**
+
 Development testing uses `horkos_dev_pl_graph.kuzu`:
+- **Location**: `/home/domvwt/projects/horkos/data/horkos_dev_pl_graph.kuzu`
 - **Size**: 48MB (PL postcode area)
 - **Contents**: ~25K companies, persons, addresses
 - **Schema**: See "Horkos Graph Schema" section above
-- **Location**: Set via `KUZU_DIR` and `KUZU_FILE` env vars
+
+Set via environment variables:
+```bash
+export KUZU_DIR=/home/domvwt/projects/horkos/data
+export KUZU_FILE=horkos_dev_pl_graph.kuzu
+```
 
 ## Deployment
 

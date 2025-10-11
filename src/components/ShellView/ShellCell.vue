@@ -117,12 +117,12 @@ export default {
       // TODO: Refactor
       if (this.modeStore.isWasm) {
         Kuzu.query(query).then(data => {
-          this.handleEvaluationDataChange(data, query);
+          this.handleEvaluationDataChange(data, query, params);
         }).catch(error => {
           this.errorMessage = error.message;
           this.$nextTick(() => {
             const errorContainer = this.$refs.resultErrorContainer;
-            errorContainer.handleDataChange(this.schema, null, this.errorMessage);
+            errorContainer.handleDataChange(this.schema, null, this.errorMessage, null);
           });
         }).finally(() => {
           this.isLoading = false;
@@ -149,7 +149,7 @@ export default {
             progress: true
           })
           .then((res) => {
-            this.handleEvaluationDataChange(res.data, query);
+            this.handleEvaluationDataChange(res.data, query, params);
           })
           .catch((error) => {
             if (!error.response) {
@@ -168,7 +168,7 @@ export default {
             if (this.errorMessage) {
               this.$nextTick(() => {
                 const errorContainer = this.$refs.resultErrorContainer;
-                errorContainer.handleDataChange(this.schema, null, this.errorMessage);
+                errorContainer.handleDataChange(this.schema, null, this.errorMessage, null);
               });
             }
           }).finally(() => {
@@ -179,20 +179,25 @@ export default {
       }
       this.isEvaluated = true;
     },
-    handleEvaluationDataChange(data, query) {
+    handleEvaluationDataChange(data, query, params = {}) {
       this.loadingText = LOADING_STATUS.PROCESS;
       this.queryResults = data.isMultiStatement ? data.results : [data];
       if (this.queryResults.length > 1) {
         this.minimize();
       }
       this.queryString = query;
+      const queryInfo = {
+        query: query,
+        params: params,
+        timestamp: Date.now(),
+      };
       this.$nextTick(() => {
         for (let i = 0; i < this.queryResults.length; ++i) {
           const resultContainer =
             this.$refs[
             this.getRefName(i)
             ][0];
-          resultContainer.handleDataChange(this.schema, this.queryResults[i], "");
+          resultContainer.handleDataChange(this.schema, this.queryResults[i], "", queryInfo);
         }
       });
       const isSchemaChanged = data && data.isSchemaChanged;
@@ -326,6 +331,99 @@ export default {
           // Result container may not exist, ignore
         }
       }
+    },
+
+    /**
+     * Restore a saved investigation by loading graph data directly into a ResultContainer.
+     *
+     * This method orchestrates the complex process of recreating the cell's UI state from
+     * a shared investigation link without re-executing the original query:
+     *
+     * 1. Creates a dummy queryResult to trigger ResultContainer mounting
+     * 2. Manually configures the ResultContainer (schema, queryInfo, view mode)
+     * 3. Waits for ResultGraph component to mount asynchronously
+     * 4. Delegates actual graph restoration to ResultGraph.restoreInvestigationState()
+     *
+     * The retry logic (up to 5 attempts) ensures ResultGraph mounts successfully even on
+     * slower systems or when Vue's component lifecycle timing is unpredictable.
+     *
+     * Called by ShellMainView.restoreInvestigation() when loading investigation from URL.
+     *
+     * @param {Object} state - Investigation state from InvestigationState.deserializeState()
+     * @param {Array} state.queries - Array of query objects (used to extract queryInfo)
+     * @param {Object} state.graphData - Complete graph data passed to ResultGraph
+     * @param {Object} state.hiddenElements - Hidden element state passed to ResultGraph
+     * @param {Object} [state.viewport] - Viewport state passed to ResultGraph
+     * @returns {Promise<void>}
+     */
+    async loadSavedGraphData(state) {
+      // Build queryInfo from state
+      const queryInfo = state.queries && state.queries.length > 0 ? {
+        query: state.queries[0].query,
+        params: state.queries[0].params || {},
+        timestamp: state.queries[0].timestamp || Date.now(),
+      } : null;
+
+      // Create a result container with at least one dummy row
+      // We need proper graph structure in rows to avoid extraction errors
+      this.queryResults = [{
+        rows: [{
+          // Empty row that won't trigger graph extraction errors
+        }],
+        columns: [],
+      }];
+
+      this.isEvaluated = true;
+
+      // Wait for ResultContainer to be created
+      await this.$nextTick();
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // Get the result container
+      const resultContainer = this.$refs[this.getRefName(0)];
+      if (!resultContainer || !resultContainer[0]) {
+        console.error('[ShellCell] Failed to get result container reference');
+        return;
+      }
+
+      // Get the result graph component before calling handleDataChange
+      // We'll manually initialize it to skip normal query processing
+      await this.$nextTick();
+
+      // Manually set up the container to trigger ResultGraph mounting
+      resultContainer[0].schema = this.schema;
+      resultContainer[0].queryResult = this.queryResults[0];
+      resultContainer[0].queryInfo = queryInfo;
+      resultContainer[0].errorMessage = "";
+
+      // Ensure graph view is active (not table or code view)
+      resultContainer[0].showGraph = true;
+      resultContainer[0].showTable = false;
+      resultContainer[0].showCode = false;
+
+      resultContainer[0].updateContainerHeight();
+
+      // Wait for ResultGraph component to be mounted (v-if="queryResult" check)
+      await this.$nextTick();
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      // Now try to get the result graph reference
+      let resultGraph = resultContainer[0].$refs.resultGraph;
+      let retries = 0;
+      while (!resultGraph && retries < 5) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+        resultGraph = resultContainer[0].$refs.resultGraph;
+        retries++;
+      }
+
+      if (!resultGraph) {
+        console.error('[ShellCell] Failed to get result graph reference after', retries, 'attempts');
+        console.error('[ShellCell] ResultContainer refs:', Object.keys(resultContainer[0].$refs));
+        return;
+      }
+
+      // Restore the investigation state (will create and populate the graph)
+      await resultGraph.restoreInvestigationState(state);
     },
   },
 }
