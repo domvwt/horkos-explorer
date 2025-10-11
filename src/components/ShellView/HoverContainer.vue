@@ -6,32 +6,27 @@
       :style="{ left: tooltipX + 'px', top: tooltipY + 'px' }"
     >
       <div class="result-graph__tooltip-header">
-        <span
-          class="badge bg-primary"
-          :style="{
-            backgroundColor: `${getColor(hoveredLabel)} !important`,
-            color: `#ffffff !important`,
-            textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
-            fill: '#FFFFFF'
-          }"
-        >
-          {{ hoveredLabel }}</span>
+        <h5>{{ hoveredIsNode ? 'Node' : 'Rel' }} Properties</h5>
       </div>
-      <p>{{ hoveredIsNode ? 'Node' : 'Rel' }}</p>
-      <hr>
-      <table class="table table-sm table-borderless">
-        <tbody>
-          <tr
-            v-for="property in hoveredProperties"
-            :key="property.name"
-          >
-            <th scope="row">
-              {{ property.name }}
-            </th>
-            <td>{{ property.value }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="result-graph__properties-list">
+        <div
+          v-for="property in hoveredProperties"
+          :key="property.name"
+          class="property-item"
+          :class="{ 'property-item--label': property.isLabel }"
+        >
+          <div class="property-name">
+            <span class="property-label">{{ property.name }}</span>
+            <span
+              v-if="property.isPrimaryKey"
+              class="badge bg-primary pk-badge"
+            >PK</span>
+          </div>
+          <div class="property-value">
+            <span class="value-text">{{ property.value }}</span>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -103,67 +98,95 @@ export default {
 
 </script>
 
-<style>
+<style lang="scss" scoped>
 .result-graph__graph-tooltip {
   position: absolute;
   z-index: 1000;
   background-color: var(--bs-body-bg-secondary);
   border: 1px solid var(--bs-body-inactive);
   border-radius: 0.5rem;
-  padding: 10px;
+  padding: 1rem;
   pointer-events: none;
-  max-width: 300px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  max-width: 350px;
   color: var(--bs-body-color);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 
   .result-graph__tooltip-header {
-    margin-bottom: 5px;
+    margin-bottom: 0.75rem;
 
-    .badge {
-      font-size: 1em;
-      padding: 0.4em 0.6em;
-      color: #ffffff;
+    h5 {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--bs-body-text);
     }
   }
 
-  p {
-    font-size: 0.9em;
-    margin-top: 0;
-    margin-bottom: 5px;
-    color: var(--bs-secondary-color);
-  }
+  .result-graph__properties-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
 
-  hr {
-    margin-top: 5px;
-    margin-bottom: 5px;
-    border-color: var(--bs-body-inactive);
-  }
+    .property-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+      background-color: var(--bs-body-bg);
+      border-radius: 0.375rem;
+      padding: 0.375rem 0.5rem;
+      min-height: 28px;
 
-  table {
-    max-width: 280px;
-    margin-bottom: 0;
-    table-layout: fixed;
+      &.property-item--label {
+        .property-name {
+          font-weight: 600;
+        }
 
-    th,
-    td {
-      padding: 5px;
-      border: none;
-      color: var(--bs-body-color);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+        .property-value {
+          font-weight: 500;
+        }
+      }
     }
 
-    th {
-      font-weight: normal;
-      padding-left: 10px;
-      padding-right: 10px;
+    .property-name {
+      display: flex;
+      align-items: center;
+      gap: 0.375rem;
+      font-size: 0.65rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+      color: var(--bs-body-text-secondary);
+      flex-shrink: 0;
+
+      .property-label {
+        white-space: nowrap;
+      }
+
+      .pk-badge {
+        font-size: 0.6rem;
+        padding: 0.1rem 0.3rem;
+        text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+        color: white !important;
+        flex-shrink: 0;
+      }
     }
 
-    td {
-      padding-right: 10px;
+    .property-value {
+      font-size: 0.8rem;
+      font-family: "Lexend", sans-serif;
+      color: var(--bs-body-text);
+      line-height: 1.3;
+      text-align: right;
+      flex: 1;
+      min-width: 0;
+
+      .value-text {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
     }
   }
 }

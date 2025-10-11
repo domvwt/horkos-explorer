@@ -90,7 +90,10 @@
               v-for="(property, index) in displayProperties"
               :key="property.name"
               class="property-item"
-              :class="{ 'property-item--expanded': expandedProperties[index] }"
+              :class="{
+                'property-item--expanded': expandedProperties[index],
+                'property-item--label': property.isLabel
+              }"
             >
               <div class="property-name">
                 <span class="property-label">{{ property.name }}</span>
@@ -2023,6 +2026,27 @@ export default {
       overflow-y: auto;
       padding: 1rem;
       padding-left: 1.5rem;
+
+      /* Thin scrollbar always visible */
+      scrollbar-width: thin;
+      scrollbar-color: var(--bs-body-bg-accent) transparent;
+
+      &::-webkit-scrollbar {
+        width: 6px;
+      }
+
+      &::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      &::-webkit-scrollbar-thumb {
+        background: var(--bs-body-bg-accent);
+        border-radius: 3px;
+      }
+
+      &::-webkit-scrollbar-thumb:hover {
+        background: var(--bs-body-text-secondary);
+      }
     }
 
     .result-graph__sidebar-button--close {
@@ -2123,6 +2147,16 @@ export default {
           .property-value .value-text {
             white-space: normal;
             word-break: break-word;
+          }
+        }
+
+        &.property-item--label {
+          .property-name {
+            font-weight: 600;
+          }
+
+          .property-value {
+            font-weight: 500;
           }
         }
       }

@@ -241,10 +241,8 @@ MATCH (a)-[r]->(b) RETURN * LIMIT 5;`,
 .shell-main-view__wrapper {
   width: 100%;
   height: 100%;
-  overflow-y: auto;
 
   &.is-maximized {
-    overflow-y: hidden;
     margin-bottom: 2px;
   }
 

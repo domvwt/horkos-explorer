@@ -9,13 +9,15 @@ class ValueFormatter {
 
   filterAndBeautifyProperties(rawValue, schema, isRecursiveRel = false) {
     const properties = [];
-    if (isRecursiveRel) {
-      properties.push({
-        name: "_label",
-        isPrimaryKey: false,
-        value: rawValue._label,
-      });
-    }
+
+    // Always add the label (entity/relationship type) as the first property
+    const isRelationship = rawValue._src && rawValue._dst;
+    properties.push({
+      name: isRelationship ? "Relationship Type" : "Entity Type",
+      isPrimaryKey: false,
+      value: rawValue._label,
+      isLabel: true, // Mark this as a label property for potential special styling
+    });
 
     const label = rawValue._label;
     const expectedProperties = (
