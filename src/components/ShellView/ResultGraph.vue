@@ -157,44 +157,17 @@
           </div>
 
           <!-- External Resource Links -->
-          <div
-            v-if="clickedIsNode && externalLinks.length > 0"
-            class="result-graph__external-links"
-          >
-            <h6>External Resources</h6>
-            <div class="result-graph__links-grid">
-              <a
-                v-for="link in externalLinks"
-                :key="link.label"
-                :href="link.url"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="btn btn-sm btn-outline-secondary result-graph__external-link"
-              >
-                <i :class="link.icon" /> {{ link.label }}
-              </a>
-            </div>
-          </div>
+          <ExternalLinksPanel
+            v-if="clickedIsNode"
+            :entity-type="clickedLabel"
+            :properties="clickedProperties"
+          />
 
           <!-- Source Provenance -->
-          <div
-            v-if="clickedIsNode && sourceRecords.length > 0"
-            class="result-graph__source-provenance"
-          >
-            <h6>Data Sources</h6>
-            <div class="result-graph__source-badges">
-              <span
-                v-for="source in sourceRecords"
-                :key="source.id"
-                class="badge result-graph__source-badge"
-                :style="{
-                  '--badge-bg-color': source.color,
-                }"
-              >
-                {{ source.label }}
-              </span>
-            </div>
-          </div>
+          <SourceProvenancePanel
+            v-if="clickedIsNode"
+            :properties="clickedProperties"
+          />
         </div>
         <div v-else>
           <h5>Overview</h5>
@@ -313,100 +286,21 @@
     </button>
 
     <!-- Toast Notification -->
-    <div
-      v-if="toastMessage"
-      class="result-graph__toast"
-      :style="{ right: (isSidePanelOpen ? sidebarWidth + 16 : 16) + 'px' }"
-    >
-      <div class="toast-content">
-        <i class="fa-solid fa-info-circle" />
-        <span>{{ toastMessage }}</span>
-      </div>
-      <button
-        class="toast-close"
-        @click="dismissToast"
-      >
-        <i class="fa-solid fa-times" />
-      </button>
-    </div>
+    <GraphToast
+      :message="toastMessage"
+      :right-position="isSidePanelOpen ? sidebarWidth + 16 : 16"
+      @dismiss="dismissToast"
+    />
 
     <!-- Share Investigation Modal -->
-    <div
-      v-if="shareModalVisible"
-      class="result-graph__share-modal"
-      @click.self="closeShareModal"
-    >
-      <div class="share-modal-content">
-        <div class="share-modal-header">
-          <h5>Share Investigation</h5>
-          <button
-            class="btn-close"
-            @click="closeShareModal"
-          >
-            <i class="fa-solid fa-times" />
-          </button>
-        </div>
-
-        <div class="share-modal-body">
-          <p class="share-modal-description">
-            Copy this URL to share your investigation. It includes all queries, expanded nodes, and hidden elements.
-          </p>
-
-          <!-- URL Size Warning -->
-          <div
-            v-if="shareUrlTooLarge"
-            class="alert alert-warning"
-          >
-            <i class="fa-solid fa-triangle-exclamation" />
-            <strong>Warning:</strong> This URL is very long ({{ shareUrlLength }} chars).
-            Some browsers may not support URLs longer than 2000 characters.
-          </div>
-
-          <!-- Shareable URL -->
-          <div class="share-url-container">
-            <input
-              ref="shareUrlInput"
-              v-model="shareUrl"
-              type="text"
-              class="form-control"
-              readonly
-              @focus="$event.target.select()"
-            >
-            <button
-              class="btn btn-primary"
-              :class="{ 'btn-success': shareUrlCopied }"
-              @click="copyShareUrl"
-            >
-              <i
-                class="fa-solid"
-                :class="shareUrlCopied ? 'fa-check' : 'fa-copy'"
-              />
-              {{ shareUrlCopied ? 'Copied!' : 'Copy' }}
-            </button>
-          </div>
-
-          <!-- State Info -->
-          <div class="share-state-info">
-            <small class="text-muted">
-              <i class="fa-solid fa-info-circle" />
-              This URL contains your current query
-              <span v-if="Object.keys(hiddenElements.nodes).length + Object.keys(hiddenElements.edges).length > 0">
-                and {{ Object.keys(hiddenElements.nodes).length + Object.keys(hiddenElements.edges).length }} hidden elements
-              </span>.
-            </small>
-          </div>
-        </div>
-
-        <div class="share-modal-footer">
-          <button
-            class="btn btn-secondary"
-            @click="closeShareModal"
-          >
-            Close
-          </button>
-        </div>
-      </div>
-    </div>
+    <ShareModal
+      :visible="shareModalVisible"
+      :url="shareUrl"
+      :url-length="shareUrlLength"
+      :url-too-large="shareUrlTooLarge"
+      :hidden-count="Object.keys(hiddenElements.nodes).length + Object.keys(hiddenElements.edges).length"
+      @close="closeShareModal"
+    />
   </div>
 </template>
 
@@ -422,13 +316,22 @@ import { useModeStore } from "../../store/ModeStore";
 import { mapStores } from 'pinia'
 import ValueFormatter from "../../utils/ValueFormatter";
 import HoverContainer from "./HoverContainer.vue";
+import ShareModal from "./ShareModal.vue";
+import GraphToast from "./GraphToast.vue";
+import ExternalLinksPanel from "./ExternalLinksPanel.vue";
+import SourceProvenancePanel from "./SourceProvenancePanel.vue";
 import g6Utils from '../../utils/G6Utils';
 import { generateShareableUrl } from "../../utils/InvestigationState";
+import { createGraphConfig } from "./graphConfig";
 
 export default {
   name: "ResultGraph",
   components: {
-    HoverContainer
+    HoverContainer,
+    ShareModal,
+    GraphToast,
+    ExternalLinksPanel,
+    SourceProvenancePanel
   },
   props: {
     queryResult: {
@@ -509,7 +412,6 @@ export default {
     // Investigation state sharing
     shareModalVisible: false,
     shareUrl: '',
-    shareUrlCopied: false,
     shareUrlLength: 0,
     shareUrlTooLarge: false,
   }),
@@ -582,160 +484,6 @@ export default {
 
       // Default for relationships or unknown types
       return 'bg-secondary';
-    },
-    externalLinks() {
-      if (!this.clickedIsNode || !this.displayLabel) {
-        return [];
-      }
-
-      const links = [];
-      const entityType = this.displayLabel;
-      const properties = this.clickedProperties;
-
-      // Get property value by name
-      const getProperty = (name) => {
-        const prop = properties.find(p => p.name === name);
-        return prop ? prop.value : null;
-      };
-
-      const entityName = getProperty('name');
-
-      // Common links for all entities
-      if (entityName) {
-        links.push({
-          label: 'Google Search',
-          url: `https://www.google.com/search?q=${encodeURIComponent(entityName)}`,
-          icon: 'fa-brands fa-google'
-        });
-        links.push({
-          label: 'Wikipedia',
-          url: `https://en.wikipedia.org/wiki/Special:Search?search=${encodeURIComponent(entityName)}`,
-          icon: 'fa-brands fa-wikipedia-w'
-        });
-      }
-
-      // Entity-specific links
-      if (entityType === 'Company') {
-        const companyNumber = getProperty('company_number');
-        const jurisdiction = getProperty('jurisdiction');
-
-        if (companyNumber && jurisdiction === 'GB') {
-          links.push({
-            label: 'Companies House',
-            url: `https://find-and-update.company-information.service.gov.uk/company/${encodeURIComponent(companyNumber)}`,
-            icon: 'fa-solid fa-building'
-          });
-        }
-
-        if (entityName) {
-          links.push({
-            label: 'OpenCorporates',
-            url: `https://opencorporates.com/companies?q=${encodeURIComponent(entityName)}`,
-            icon: 'fa-solid fa-briefcase'
-          });
-        }
-      } else if (entityType === 'Person') {
-        if (entityName) {
-          links.push({
-            label: 'Google News',
-            url: `https://news.google.com/search?q=${encodeURIComponent(entityName)}`,
-            icon: 'fa-solid fa-newspaper'
-          });
-        }
-      } else if (entityType === 'Address') {
-        const fullAddress = getProperty('full');
-        const postCode = getProperty('post_code');
-
-        const addressQuery = fullAddress || postCode;
-        if (addressQuery) {
-          links.push({
-            label: 'Google Maps',
-            url: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addressQuery)}`,
-            icon: 'fa-solid fa-map-marked-alt'
-          });
-          links.push({
-            label: 'Street View',
-            url: `https://www.google.com/maps/@?api=1&map_action=pano&parameters&query=${encodeURIComponent(addressQuery)}`,
-            icon: 'fa-solid fa-street-view'
-          });
-        }
-      }
-
-      return links;
-    },
-    sourceRecords() {
-      if (!this.clickedIsNode || !this.displayProperties) {
-        return [];
-      }
-
-      // Find source_systems property
-      const sourceProp = this.displayProperties.find(p => p.name === 'source_systems');
-      if (!sourceProp || !sourceProp.value) {
-        return [];
-      }
-
-      // Parse sources (could be array or string representation)
-      let sources = [];
-      if (Array.isArray(sourceProp.value)) {
-        sources = sourceProp.value;
-      } else if (typeof sourceProp.value === 'string') {
-        // Handle string representation like "['psc', 'companies_house']"
-        const cleaned = sourceProp.value.replace(/[\[\]'"]/g, '');
-        sources = cleaned.split(',').map(s => s.trim()).filter(s => s);
-      }
-
-      // Map source system names to display names
-      const sourceMap = {};
-      sources.forEach(source => {
-        let sourceType = 'Unknown';
-
-        switch (source) {
-          case 'companies_house':
-            sourceType = 'Companies House';
-            break;
-          case 'psc':
-            sourceType = 'PSC Register';
-            break;
-          case 'icij':
-            sourceType = 'ICIJ Offshore Leaks';
-            break;
-          default:
-            sourceType = source; // Show the raw value if unknown
-        }
-
-        if (!sourceMap[sourceType]) {
-          sourceMap[sourceType] = 0;
-        }
-        sourceMap[sourceType] += 1;
-      });
-
-      // Convert to array with badge colors
-      const sourceBadges = Object.entries(sourceMap).map(([type, count]) => {
-        let color = '#6c757d'; // Gray for unknown
-        let order = 999; // Default order for unknown sources
-
-        if (type === 'Companies House') {
-          color = '#28a745'; // Green
-          order = 1;
-        } else if (type === 'PSC Register') {
-          color = '#17a2b8'; // Blue
-          order = 2;
-        } else if (type === 'ICIJ Offshore Leaks') {
-          color = '#ffc107'; // Yellow
-          order = 3;
-        }
-
-        return {
-          id: type,
-          label: type,
-          color,
-          count: count,
-          order: order
-        };
-      });
-
-      // Sort by predefined order
-      return sourceBadges.sort((a, b) => a.order - b.order);
     },
     hasUnexpandedNodes() {
       if (!this.g6Graph) return false;
@@ -929,60 +677,6 @@ export default {
     getColor(label) {
       return this.settingsStore.colorForLabel(label);
     },
-    getLayoutConfig(edges) {
-      let nodeSpacing = edges.length * 8;
-      nodeSpacing = nodeSpacing < 80 ? 80 : nodeSpacing;
-      nodeSpacing = nodeSpacing > 500 ? 500 : nodeSpacing;
-
-      const config = {
-        type: 'd3-force',
-        link: {
-          // Dynamic distance:
-          // Fixed distance for nodes with large number of neighbors will cause mass collision (a large circle)
-          // Variable distance with multiple layers of variation will display the nodes in a spaced out manner (multiple circles around node)
-          distance: (d) => {
-            // Get the source and target node degrees
-            const sourceDegree = d.source.data?.degree || 1;
-            const targetDegree = d.target.data?.degree || 1;
-
-            // Base distance increased to account for labels below nodes
-            const baseDistance = 200;
-
-            // For high-degree nodes (hubs), vary the distance based on connection index
-            if (sourceDegree > 5 || targetDegree > 5) {
-              // Use a hash of the edge ID to create pseudo-random but consistent distances
-              const edgeHash = d.id ? d.id.split('').reduce((a, b) => a + b.charCodeAt(0), 0) : 0;
-              const variation = (edgeHash % 6) * 100 + 100;
-              return baseDistance + variation;
-            }
-
-            // For regular nodes, use standard distance
-            return baseDistance;
-          },
-          strength: 2,
-        },
-        collide: {
-          // Increase collision radius significantly to account for labels below nodes
-          // Node radius + label offset (8px) + label height (~50px for 3 lines) + padding
-          radius: (d) => d.size / 2 + 80,
-          strength: 1.2, // Stronger collision avoidance
-        },
-        manyBody: {
-          strength: -1800,  // Increased repulsion to spread nodes apart
-        },
-        radial: {
-          radius: 200,
-
-        },
-        alpha: 1,
-        alphaMin: 0.2,
-        alphaDecay: 0.03,
-        velocityDecay: 0.45,
-
-      };
-
-      return config;
-    },
     /**
      * Initialize an empty G6 graph instance without processing query results.
      *
@@ -1002,89 +696,18 @@ export default {
       const container = this.$refs.graph;
       const width = container.offsetWidth;
       const height = this.containerHeight === "auto" ? container.offsetHeight : parseInt(this.containerHeight);
-      // Apply force layout to loaded graphs for better visualization
-      const layoutConfig = this.getLayoutConfig(edges);
 
-      this.g6Graph = new Graph({
+      // Create graph with factory config
+      const graphConfig = createGraphConfig({
         container,
         width,
         height,
-        layout: layoutConfig,
-        node: {
-          type: 'circle',
-          style: {
-            labelFontSize: 13,
-            labelFontFamily: "Lexend, Helvetica Neue, Helvetica, Arial, sans-serif",
-            labelFontWeight: 400,
-            labelFill: this.labelColor,
-            labelPlacement: 'bottom',
-            labelOffsetY: 8,
-            labelMaxWidth: 200,
-            labelWordWrap: true,
-            labelWordWrapWidth: 200,
-            labelLineHeight: 16,
-            labelMaxLines: 3,
-            iconFontFamily: "Font Awesome 6 Free",
-            iconFontSize: 24,
-            iconFontWeight: 900,
-            iconFill: "#ffffff",
-            zIndex: 10,
-          },
-          state: {
-            active: {
-              lineWidth: 10,
-              stroke: '#1890FF',
-            },
-          },
-        },
-        edge: {
-          style: {
-            lineWidth: 5,
-            stroke: this.edgeColor,
-            endArrow: true,
-            labelFontSize: 12,
-            labelFontFamily: "Lexend,Helvetica Neue, Helvetica, Arial, sans-serif",
-            labelFontWeight: 350,
-            labelFill: this.labelColor,
-            labelAutoRotate: true,
-            labelTextBaseline: 'bottom',
-            labelOffsetY: -8,
-            zIndex: 1,
-          },
-          state: {
-            active: {
-              lineWidth: 10,
-              stroke: '#1890FF',
-            },
-          },
-        },
-        behaviors: ['zoom-canvas', 'drag-canvas',
-          {
-            type: 'optimize-viewport-transform',
-            debounce: 300,
-          },
-          {
-            type: 'drag-element-force',
-            fixed: true,
-          },
-          {
-            type: 'click-select',
-            key: 'click-select-element',
-            degree: 0,
-            state: 'active',
-            enable: true,
-          },
-          {
-            type: 'click-select',
-            key: 'click-highlight',
-            degree: 1,
-            state: 'active',
-            unselectedState: 'inactive',
-            enable: false,
-            neighborState: 'active',
-          },
-        ],
+        edges,
+        labelColor: this.labelColor,
+        edgeColor: this.edgeColor,
       });
+
+      this.g6Graph = new Graph(graphConfig);
 
       // Set up event handlers
       this.setupGraphEventHandlers();
@@ -1204,90 +827,18 @@ export default {
       const container = this.$refs.graph;
       const width = container.offsetWidth;
       const height = this.containerHeight === "auto" ? container.offsetHeight : parseInt(this.containerHeight);
-      const layoutConfig = this.getLayoutConfig(edges);
 
-      this.g6Graph = new Graph({
+      // Create graph with factory config
+      const graphConfig = createGraphConfig({
         container,
         width,
         height,
-        layout: layoutConfig,
-        node: {
-          type: 'circle',
-          style: {
-            labelFontSize: 13,
-            labelFontFamily: "Lexend, Helvetica Neue, Helvetica, Arial, sans-serif",
-            labelFontWeight: 400,
-            labelFill: this.labelColor,
-            labelPlacement: 'bottom',
-            labelOffsetY: 8,
-            labelMaxWidth: 200,
-            labelWordWrap: true,
-            labelWordWrapWidth: 200,
-            labelLineHeight: 16,
-            labelMaxLines: 3,
-            iconFontFamily: "Font Awesome 6 Free",
-            iconFontSize: 24,
-            iconFontWeight: 900,
-            iconFill: "#ffffff",
-            zIndex: 10,
-          },
-          state: {
-            active: {
-              lineWidth: 10,
-              stroke: '#1890FF',
-            },
-
-          },
-        },
-        edge: {
-          style: {
-            lineWidth: 5,
-            stroke: this.edgeColor,
-            endArrow: true,
-            labelFontSize: 12,
-            labelFontFamily: "Lexend,Helvetica Neue, Helvetica, Arial, sans-serif",
-            labelFontWeight: 350,
-            labelFill: this.labelColor,
-            labelAutoRotate: true,
-            labelTextBaseline: 'bottom',
-            labelOffsetY: -8,
-            zIndex: 1,
-          },
-          state: {
-            active: {
-              lineWidth: 10,
-              stroke: '#1890FF',
-            },
-
-          },
-        },
-        behaviors: ['zoom-canvas', 'drag-canvas',
-          {
-            type: 'optimize-viewport-transform',
-            debounce: 300,
-          },
-          {
-            type: 'drag-element-force',
-            fixed: true,
-          },
-          {
-            type: 'click-select',
-            key: 'click-select-element',
-            degree: 0,
-            state: 'active',
-            enable: true,
-          },
-          {
-            type: 'click-select',
-            key: 'click-highlight',
-            degree: 1,
-            state: 'active',
-            unselectedState: 'inactive',
-            enable: false,
-            neighborState: 'active',
-          },
-        ],
+        edges,
+        labelColor: this.labelColor,
+        edgeColor: this.edgeColor,
       });
+
+      this.g6Graph = new Graph(graphConfig);
 
       this.g6Graph.setData({ nodes, edges, });
       await this.render();
@@ -2219,166 +1770,21 @@ export default {
       const container = this.$refs.graph;
       const width = container.offsetWidth;
       const height = this.containerHeight === "auto" ? container.offsetHeight : parseInt(this.containerHeight);
-      const layoutConfig = this.getLayoutConfig(currentData.edges);
 
-      this.g6Graph = new Graph({
+      // Create graph with factory config
+      const graphConfig = createGraphConfig({
         container,
         width,
         height,
-        layout: layoutConfig,
-        node: {
-          type: 'circle',
-          style: {
-            labelFontSize: 13,
-            labelFontFamily: "Lexend, Helvetica Neue, Helvetica, Arial, sans-serif",
-            labelFontWeight: 400,
-            labelFill: this.labelColor,
-            labelPlacement: 'bottom',
-            labelOffsetY: 8,
-            labelMaxWidth: 200,
-            labelWordWrap: true,
-            labelWordWrapWidth: 200,
-            labelLineHeight: 16,
-            labelMaxLines: 3,
-            iconFontFamily: "Font Awesome 6 Free",
-            iconFontSize: 24,
-            iconFontWeight: 900,
-            iconFill: "#ffffff",
-            zIndex: 10,
-          },
-          state: {
-            active: {
-              lineWidth: 10,
-              stroke: '#1890FF',
-            },
-          },
-        },
-        edge: {
-          style: {
-            lineWidth: 5,
-            stroke: this.edgeColor,
-            endArrow: true,
-            labelFontSize: 12,
-            labelFontFamily: "Lexend,Helvetica Neue, Helvetica, Arial, sans-serif",
-            labelFontWeight: 350,
-            labelFill: this.labelColor,
-            labelAutoRotate: true,
-            labelTextBaseline: 'bottom',
-            labelOffsetY: -8,
-            zIndex: 1,
-          },
-          state: {
-            active: {
-              lineWidth: 10,
-              stroke: '#1890FF',
-            },
-          },
-        },
-        behaviors: ['zoom-canvas', 'drag-canvas',
-          {
-            type: 'optimize-viewport-transform',
-            debounce: 300,
-          },
-          {
-            type: 'drag-element-force',
-            fixed: true,
-          },
-          {
-            type: 'click-select',
-            key: 'click-select-element',
-            degree: 0,
-            state: 'active',
-            enable: true,
-          },
-          {
-            type: 'click-select',
-            key: 'click-highlight',
-            degree: 1,
-            state: 'active',
-            unselectedState: 'inactive',
-            enable: false,
-            neighborState: 'active',
-          },
-        ],
+        edges: currentData.edges,
+        labelColor: this.labelColor,
+        edgeColor: this.edgeColor,
       });
 
-      // Register graph event handlers
-      this.g6Graph.on('node:pointerenter', (e) => {
-        const id = e.target.id;
-        const nodeData = this.g6Graph.getNodeData(id);
-        this.$refs.hoverContainer.handleHover(nodeData, e);
-      });
+      this.g6Graph = new Graph(graphConfig);
 
-      this.g6Graph.on('node:pointerleave', (e) => {
-        this.$refs.hoverContainer.resetHover();
-      });
-
-      this.g6Graph.on('node:pointermove', (e) => {
-        this.$refs.hoverContainer.showTooltip(e);
-      });
-
-      this.g6Graph.on('edge:pointerenter', (e) => {
-        const id = e.target.id;
-        const edgeData = this.g6Graph.getEdgeData(id);
-        this.$refs.hoverContainer.handleHover(edgeData, e);
-      });
-
-      this.g6Graph.on('edge:pointerleave', (e) => {
-        this.$refs.hoverContainer.resetHover();
-      });
-
-      this.g6Graph.on('edge:pointermove', (e) => {
-        this.$refs.hoverContainer.showTooltip(e);
-      });
-
-      this.g6Graph.on('node:click', (e) => {
-        this.$refs.hoverContainer.resetHover();
-        const clickedId = e.target.config.id;
-        const nodeData = this.g6Graph.getNodeData(clickedId);
-        this.handleClick(nodeData);
-        if (!this.isSidePanelOpen) {
-          window.setTimeout(() => {
-            this.$emit('requestSidebarToggle');
-            this.$nextTick(() => {
-              this.handleResize();
-            });
-          }, 200);
-        }
-      });
-
-      this.g6Graph.on('edge:click', (e) => {
-        this.$refs.hoverContainer.resetHover();
-        const clickedId = e.target.config.id;
-        const edgeData = this.g6Graph.getEdgeData(clickedId);
-        this.handleClick(edgeData);
-        if (!this.isSidePanelOpen) {
-          this.$emit('requestSidebarToggle');
-        }
-      });
-
-      this.g6Graph.on('node:dblclick', (e) => {
-        const itemId = e.target.id;
-        const isCurrentNodeExpanded = this.isNeighborExpanded(e.target);
-        if (isCurrentNodeExpanded) {
-          this.collapseNode(itemId);
-          this.deselectAll();
-          return this.redrawGraph();
-        }
-        const nodeData = this.g6Graph.getNodeData(itemId);
-        this.expandOnNode(nodeData);
-        this.deselectAll();
-      });
-
-      this.g6Graph.on('node:dragend', () => {
-        const layout = this.g6Graph.getLayout();
-        if (layout && layout.simulation) {
-          layout.simulation.alpha(0.3).restart();
-        }
-      });
-
-      this.g6Graph.on('canvas:click', () => {
-        this.deselectAll();
-      });
+      // Register graph event handlers using the extracted helper
+      this.setupGraphEventHandlers();
 
       this.graphCreated = true;
 
@@ -2703,36 +2109,7 @@ export default {
       this.shareUrl = result.url;
       this.shareUrlLength = result.estimatedLength;
       this.shareUrlTooLarge = result.isOversized;
-      this.shareUrlCopied = false;
       this.shareModalVisible = true;
-
-      // Auto-select the URL input after modal renders
-      this.$nextTick(() => {
-        if (this.$refs.shareUrlInput) {
-          this.$refs.shareUrlInput.select();
-        }
-      });
-    },
-
-    /**
-     * Copy share URL to clipboard
-     */
-    async copyShareUrl() {
-      try {
-        await navigator.clipboard.writeText(this.shareUrl);
-        this.shareUrlCopied = true;
-
-        // Reset copied state after 2 seconds
-        setTimeout(() => {
-          this.shareUrlCopied = false;
-        }, 2000);
-      } catch (error) {
-        console.error('Failed to copy URL:', error);
-        // Fallback: select the text so user can manually copy
-        if (this.$refs.shareUrlInput) {
-          this.$refs.shareUrlInput.select();
-        }
-      }
     },
 
     /**
@@ -2740,7 +2117,6 @@ export default {
      */
     closeShareModal() {
       this.shareModalVisible = false;
-      this.shareUrlCopied = false;
     },
   },
 };
@@ -3170,80 +2546,6 @@ export default {
     .badge.bg-primary {
       color: white !important;
     }
-
-    .result-graph__external-links {
-      margin-top: 1rem;
-
-      h6 {
-        font-size: 0.9rem;
-        font-weight: 600;
-        margin-bottom: 0.75rem;
-        color: var(--bs-body-text);
-      }
-
-      .result-graph__links-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 0.5rem;
-      }
-
-      .result-graph__external-link {
-        padding: 0.4rem 0.6rem;
-        font-size: 0.85rem;
-        text-align: center;
-        background-color: var(--bs-body-bg);
-        color: var(--bs-body-text);
-        border-color: var(--bs-body-inactive);
-        border-radius: 0.375rem;
-        text-decoration: none;
-        transition: all 0.2s;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-
-        &:hover {
-          background-color: var(--bs-body-bg-hover);
-          border-color: var(--bs-body-text);
-          transform: translateY(-1px);
-          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        }
-
-        i {
-          margin-right: 0.25rem;
-        }
-      }
-    }
-
-    .result-graph__source-provenance {
-      margin-top: 1rem;
-      padding-top: 1rem;
-      border-top: 1px solid var(--bs-body-inactive);
-
-      h6 {
-        font-size: 0.9rem;
-        font-weight: 600;
-        margin-bottom: 0.75rem;
-        color: var(--bs-body-text);
-      }
-
-      .result-graph__source-badges {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.5rem;
-
-        .badge {
-          padding: 0.375rem 0.75rem;
-          font-size: 0.8rem;
-          font-weight: 500;
-          border-radius: 0.375rem;
-        }
-
-        .result-graph__source-badge {
-          background-color: var(--badge-bg-color) !important;
-          color: white !important;
-        }
-      }
-    }
   }
 
   .result-graph__sidebar-button--open {
@@ -3272,74 +2574,6 @@ export default {
     }
   }
 
-  .result-graph__toast {
-    position: absolute;
-    top: 1rem;
-    background-color: var(--bs-body-bg-secondary);
-    border: 1px solid var(--bs-body-bg-accent);
-    border-radius: 0.375rem;
-    padding: 0.75rem 1rem;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-    z-index: 1000;
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    max-width: 400px;
-    animation: slideInRight 0.3s ease-out;
-
-    @keyframes slideInRight {
-      from {
-        opacity: 0;
-        transform: translateX(20px);
-      }
-      to {
-        opacity: 1;
-        transform: translateX(0);
-      }
-    }
-
-    .toast-content {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      flex: 1;
-      color: var(--bs-body-text);
-
-      i {
-        color: var(--bs-body-bg-accent);
-        font-size: 1rem;
-        flex-shrink: 0;
-      }
-
-      span {
-        font-size: 0.85rem;
-        line-height: 1.3;
-      }
-    }
-
-    .toast-close {
-      background: none;
-      border: none;
-      color: var(--bs-body-text-secondary);
-      cursor: pointer;
-      padding: 0.125rem;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border-radius: 0.25rem;
-      transition: background-color 0.2s, color 0.2s;
-
-      &:hover {
-        background-color: var(--bs-body-bg-hover);
-        color: var(--bs-body-text);
-      }
-
-      i {
-        font-size: 0.875rem;
-      }
-    }
-  }
-
   // Share Investigation Section
   .result-graph__share-section {
     margin-bottom: 1rem;
@@ -3357,169 +2591,6 @@ export default {
       i {
         margin-right: 0.5rem;
       }
-    }
-  }
-
-  // Share Modal
-  .result-graph__share-modal {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background-color: rgba(0, 0, 0, 0.5);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 9999;
-    padding: 1rem;
-
-    .share-modal-content {
-      background-color: var(--bs-body-bg);
-      border-radius: 0.5rem;
-      box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.3);
-      max-width: 600px;
-      width: 100%;
-      max-height: 90vh;
-      overflow: auto;
-      animation: modalSlideIn 0.2s ease-out;
-    }
-
-    @keyframes modalSlideIn {
-      from {
-        opacity: 0;
-        transform: translateY(-20px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-
-    .share-modal-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 1.25rem;
-      border-bottom: 1px solid var(--bs-border-color);
-
-      h5 {
-        margin: 0;
-        font-size: 1.25rem;
-        color: var(--bs-body-text);
-      }
-
-      .btn-close {
-        background: none;
-        border: none;
-        color: var(--bs-body-text-secondary);
-        cursor: pointer;
-        padding: 0.25rem;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 0.25rem;
-        transition: background-color 0.2s, color 0.2s;
-
-        &:hover {
-          background-color: var(--bs-body-bg-hover);
-          color: var(--bs-body-text);
-        }
-
-        i {
-          font-size: 1.25rem;
-        }
-      }
-    }
-
-    .share-modal-body {
-      padding: 1.25rem;
-
-      .share-modal-description {
-        color: var(--bs-body-text-secondary);
-        margin-bottom: 1rem;
-        font-size: 0.95rem;
-      }
-
-      .alert {
-        display: flex;
-        align-items: flex-start;
-        gap: 0.5rem;
-        padding: 0.75rem;
-        border-radius: 0.375rem;
-        margin-bottom: 1rem;
-        background-color: rgba(255, 193, 7, 0.1);
-        border: 1px solid rgba(255, 193, 7, 0.3);
-        color: var(--bs-body-text);
-
-        i {
-          color: #ffc107;
-          font-size: 1rem;
-          margin-top: 0.125rem;
-        }
-      }
-
-      .share-url-container {
-        display: flex;
-        gap: 0.5rem;
-        margin-bottom: 1rem;
-
-        input {
-          flex: 1;
-          font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
-          font-size: 0.85rem;
-          padding: 0.5rem 0.75rem;
-          border: 1px solid var(--bs-border-color);
-          border-radius: 0.375rem;
-          background-color: var(--bs-body-bg-secondary);
-          color: var(--bs-body-text);
-
-          &:focus {
-            outline: none;
-            border-color: var(--bs-primary);
-            box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
-          }
-        }
-
-        button {
-          white-space: nowrap;
-          transition: all 0.2s;
-
-          &.btn-success {
-            background-color: #28a745;
-            border-color: #28a745;
-          }
-
-          i {
-            margin-right: 0.375rem;
-          }
-        }
-      }
-
-      .share-state-info {
-        padding: 0.75rem;
-        background-color: var(--bs-body-bg-secondary);
-        border-radius: 0.375rem;
-        border: 1px solid var(--bs-border-color);
-
-        small {
-          display: flex;
-          align-items: flex-start;
-          gap: 0.5rem;
-
-          i {
-            color: var(--bs-body-bg-accent);
-            margin-top: 0.125rem;
-          }
-        }
-      }
-    }
-
-    .share-modal-footer {
-      display: flex;
-      justify-content: flex-end;
-      padding: 1rem 1.25rem;
-      border-top: 1px solid var(--bs-border-color);
     }
   }
 }
