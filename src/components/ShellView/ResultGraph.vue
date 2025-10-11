@@ -2595,6 +2595,9 @@ export default {
 
           // Render the graph
           await this.render();
+
+          // Calculate counters from loaded graph data
+          this.calculateCountersFromGraphData(state.graphData);
         } else {
           console.error('[ResultGraph] Failed to initialize graph');
           return;
@@ -2648,6 +2651,45 @@ export default {
         // Element may not exist yet, that's okay
         console.debug(`Failed to hide ${type} ${id}:`, e);
       }
+    },
+
+    /**
+     * Calculate counters from graph data for overview panel.
+     * Used when restoring investigation state to populate the overview statistics.
+     */
+    calculateCountersFromGraphData(graphData) {
+      const nodeCounters = {};
+      const relCounters = {};
+
+      // Count nodes by label
+      graphData.nodes.forEach(node => {
+        const label = node.data?.properties?._label;
+        if (label) {
+          nodeCounters[label] = (nodeCounters[label] || 0) + 1;
+        }
+      });
+
+      // Count edges by label
+      graphData.edges.forEach(edge => {
+        const label = edge.data?.properties?._label;
+        if (label) {
+          relCounters[label] = (relCounters[label] || 0) + 1;
+        }
+      });
+
+      // Calculate totals
+      const totalNodeCount = Object.values(nodeCounters).reduce((a, b) => a + b, 0);
+      const totalRelCount = Object.values(relCounters).reduce((a, b) => a + b, 0);
+
+      // Update counters
+      this.counters = {
+        node: nodeCounters,
+        rel: relCounters,
+        total: {
+          node: totalNodeCount,
+          rel: totalRelCount,
+        },
+      };
     },
 
 
