@@ -196,18 +196,59 @@ const centerX = sumX / currentNodes.length;
 const centerY = sumY / currentNodes.length;
 
 // Map new nodes to their existing predecessors
-const newNodePredecessors = new Map();
+// IMPORTANT: Use Sets to automatically deduplicate (e.g., same person as both director + owner)
+const existingNodeIds = new Set(currentNodes.map(n => n.id));
+const newNodePredecessors = new Map(); // newNodeId -> Set<existingNodeId>
+
 edgesToAdd.forEach(edge => {
+  const sourceIsExisting = existingNodeIds.has(edge.source);
+  const targetIsExisting = existingNodeIds.has(edge.target);
+
   if (sourceIsExisting && !targetIsExisting) {
-    newNodePredecessors.get(edge.target).push(edge.source);
+    // Edge from existing to new
+    if (!newNodePredecessors.has(edge.target)) {
+      newNodePredecessors.set(edge.target, new Set());
+    }
+    newNodePredecessors.get(edge.target).add(edge.source); // Set automatically deduplicates
   } else if (targetIsExisting && !sourceIsExisting) {
-    newNodePredecessors.get(edge.source).push(edge.target);
+    // Edge from new to existing
+    if (!newNodePredecessors.has(edge.source)) {
+      newNodePredecessors.set(edge.source, new Set());
+    }
+    newNodePredecessors.get(edge.source).add(edge.target); // Set automatically deduplicates
   }
 });
 
-// Position each new node near its predecessor(s), away from center
+// Group new nodes by their predecessors for smart positioning
+const predecessorGroups = new Map();
+const nodesWithoutPredecessors = [];
+
+nodesToAdd.forEach(node => {
+  const predecessorSet = newNodePredecessors.get(node.id);
+  if (!predecessorSet || predecessorSet.size === 0) {
+    nodesWithoutPredecessors.push(node);
+  } else {
+    // Convert Set to sorted array for grouping key
+    const predecessors = Array.from(predecessorSet).sort();
+    const key = predecessors.join(',');
+    if (!predecessorGroups.has(key)) {
+      predecessorGroups.set(key, { predecessors, nodes: [] });
+    }
+    predecessorGroups.get(key).nodes.push(node);
+  }
+});
+
+// Position each group near their shared predecessor(s), away from center
 predecessorGroups.forEach(({ predecessors, nodes }) => {
   // Get centroid of predecessor positions
+  let predSumX = 0, predSumY = 0;
+  predecessors.forEach(predId => {
+    const predNode = currentNodes.find(n => n.id === predId);
+    if (predNode) {
+      predSumX += predNode.style.x;
+      predSumY += predNode.style.y;
+    }
+  });
   const predCenterX = predSumX / predecessors.length;
   const predCenterY = predSumY / predecessors.length;
 
@@ -215,8 +256,10 @@ predecessorGroups.forEach(({ predecessors, nodes }) => {
   const awayAngle = Math.atan2(predCenterY - centerY, predCenterX - centerX);
 
   // Place nodes in 60° arc facing away from center
+  const arcSpread = Math.PI / 3;
   nodes.forEach((node, index) => {
-    const offsetAngle = (index / (nodes.length - 1) - 0.5) * (Math.PI / 3);
+    const offsetAngle = nodes.length === 1 ? 0 :
+      (index / (nodes.length - 1) - 0.5) * arcSpread;
     const angle = awayAngle + offsetAngle;
 
     node.data.x = predCenterX + 200 * Math.cos(angle);
@@ -229,7 +272,8 @@ predecessorGroups.forEach(({ predecessors, nodes }) => {
 1. New nodes appear **near the node being expanded** (not randomly around graph)
 2. Positioned in the direction **away from center of mass** (toward periphery)
 3. Multiple new nodes spread in a **60° arc** facing outward
-4. Fallback to periphery placement for nodes without existing connections
+4. **Automatic deduplication** - Uses Sets to handle multiple edge types (e.g., director + owner) between same nodes
+5. Fallback to periphery placement for nodes without existing connections
 
 **Benefits:**
 - More intuitive expansion UX (nodes appear where you expand)
@@ -586,3 +630,4 @@ All test files are in `public/` directory and `research/graph-layout/`:
 10. **Edge data is key** - The `edgesToAdd` array tells us exactly which new nodes connect to which existing nodes, enabling predecessor-aware placement
 11. **Prototype first, implement later** - When extending existing implementations, always prototype in `public/` or `research/` directory first. This allows safe experimentation without risk of breaking production code. Use Playwright MCP for automated testing of prototypes.
 12. **User validation is critical** - Even when a prototype works technically, defer main codebase integration until the user validates the behavior meets their needs
+13. **Deduplicate edges by node pairs** - When multiple edges exist between the same nodes (e.g., director + owner relationships), use Sets to deduplicate predecessors based on node IDs, not edge types. Position calculations should only consider unique node-to-node connections.
