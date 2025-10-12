@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Incremental Force Layout Test - Pinned Nodes</title>
+  <script src="https://unpkg.com/@antv/g6@5.0.20/dist/g6.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    #container {
+      width: 100%;
+      height: 600px;
+      border: 1px solid #ddd;
+      margin-bottom: 20px;
+    }
+    .controls {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 14px;
+      cursor: pointer;
+      background: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 4px;
+    }
+    button:hover {
+      background: #45a049;
+    }
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    .info {
+      background: #f5f5f5;
+      padding: 15px;
+      border-radius: 4px;
+      margin-bottom: 10px;
+    }
+    .info h3 {
+      margin-top: 0;
+    }
+    .status {
+      font-family: monospace;
+      font-size: 12px;
+      color: #666;
+    }
+    .legend {
+      margin-top: 10px;
+    }
+    .legend-item {
+      display: inline-block;
+      margin-right: 20px;
+    }
+    .legend-color {
+      display: inline-block;
+      width: 15px;
+      height: 15px;
+      margin-right: 5px;
+      vertical-align: middle;
+      border-radius: 50%;
+    }
+  </style>
+</head>
+<body>
+  <h1>Incremental Force Layout Test - Pinned Nodes</h1>
+
+  <div class="info">
+    <h3>Testing Strategy</h3>
+    <p>This test validates that existing nodes stay fixed when new nodes are added to a d3-force layout.</p>
+    <ul>
+      <li><strong>Initial State</strong>: 5 nodes connected in a star pattern</li>
+      <li><strong>Add Nodes (Pinned)</strong>: Existing nodes are fixed with fx/fy, new nodes are positioned by force</li>
+      <li><strong>Add Nodes (Unpinned)</strong>: All nodes repositioned (shows the problem)</li>
+    </ul>
+    <div class="legend">
+      <div class="legend-item">
+        <span class="legend-color" style="background: #5B8FF9;"></span>
+        <span>Original Nodes</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-color" style="background: #FF7C7C;"></span>
+        <span>Newly Added Nodes</span>
+      </div>
+      <div class="legend-item">
+        <span class="legend-color" style="background: #FFA940;"></span>
+        <span>Pinned Nodes (with fx/fy)</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button id="addPinned">Add 3 Nodes (WITH pinning)</button>
+    <button id="addUnpinned">Add 3 Nodes (WITHOUT pinning)</button>
+    <button id="reset">Reset Graph</button>
+    <button id="unpinAll">Unpin All Nodes</button>
+  </div>
+
+  <div class="status" id="status">Ready</div>
+
+  <div id="container"></div>
+
+  <script>
+    // Configuration
+    const LAYOUT_ITERATIONS = 300;
+    const PIN_INDICATOR_SIZE = 5; // Size difference for pinned nodes
+
+    let graph;
+    let nodeIdCounter = 6; // Start after initial 5 nodes
+    let isPinned = false;
+
+    // Initialize graph with 5 nodes in a star pattern
+    function createInitialData() {
+      return {
+        nodes: [
+          { id: 'center', data: { label: 'Center', isOriginal: true } },
+          { id: '1', data: { label: 'Node 1', isOriginal: true } },
+          { id: '2', data: { label: 'Node 2', isOriginal: true } },
+          { id: '3', data: { label: 'Node 3', isOriginal: true } },
+          { id: '4', data: { label: 'Node 4', isOriginal: true } },
+        ],
+        edges: [
+          { source: 'center', target: '1' },
+          { source: 'center', target: '2' },
+          { source: 'center', target: '3' },
+          { source: 'center', target: '4' },
+        ],
+      };
+    }
+
+    // Create graph instance
+    function initGraph() {
+      if (graph) {
+        graph.destroy();
+      }
+
+      const container = document.getElementById('container');
+      const width = container.offsetWidth;
+      const height = container.offsetHeight;
+
+      graph = new G6.Graph({
+        container: 'container',
+        width,
+        height,
+        layout: {
+          type: 'd3-force',
+          preventOverlap: true,
+          nodeSize: 30,
+          linkDistance: 150,
+          iterations: LAYOUT_ITERATIONS,
+        },
+        node: {
+          style: {
+            size: (d) => {
+              // Pinned nodes are slightly larger
+              const isPinned = d.data.fx !== undefined && d.data.fy !== undefined;
+              return isPinned ? 25 + PIN_INDICATOR_SIZE : 25;
+            },
+            fill: (d) => {
+              // Color coding
+              if (d.data.fx !== undefined && d.data.fy !== undefined) {
+                return '#FFA940'; // Orange for pinned
+              }
+              return d.data.isOriginal ? '#5B8FF9' : '#FF7C7C';
+            },
+            stroke: '#fff',
+            lineWidth: 2,
+            labelText: (d) => d.data.label,
+            labelFontSize: 12,
+            labelFill: '#000',
+          },
+        },
+        edge: {
+          style: {
+            stroke: '#e2e2e2',
+            lineWidth: 2,
+          },
+        },
+        behaviors: ['drag-canvas', 'zoom-canvas', 'drag-element'],
+      });
+
+      const data = createInitialData();
+      graph.setData(data);
+      graph.render();
+
+      updateStatus(`Initialized with ${data.nodes.length} nodes`);
+    }
+
+    // Add new nodes with pinning strategy
+    async function addNodes(withPinning = true) {
+      const currentData = graph.getData();
+      const currentNodes = currentData.nodes || [];
+      const currentEdges = currentData.edges || [];
+
+      // CRITICAL: Pin existing nodes if withPinning is true
+      const processedNodes = currentNodes.map(node => {
+        const model = graph.getNodeData(node.id);
+
+        if (withPinning) {
+          // Get current rendered position
+          const position = {
+            x: model.style?.x,
+            y: model.style?.y,
+          };
+
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              fx: position.x, // Pin x position
+              fy: position.y, // Pin y position
+            },
+          };
+        }
+
+        return node;
+      });
+
+      // Create new nodes WITHOUT fx/fy (they'll be positioned by force)
+      const newNodes = [];
+      const newEdges = [];
+
+      for (let i = 0; i < 3; i++) {
+        const newId = `node-${nodeIdCounter++}`;
+        newNodes.push({
+          id: newId,
+          data: {
+            label: `New ${newId}`,
+            isOriginal: false,
+            // NO fx/fy here - let force position them
+          },
+        });
+
+        // Connect to a random existing node
+        const randomNode = currentNodes[Math.floor(Math.random() * currentNodes.length)];
+        newEdges.push({
+          source: randomNode.id,
+          target: newId,
+        });
+      }
+
+      // Combine data
+      const newData = {
+        nodes: processedNodes.concat(newNodes),
+        edges: currentEdges.concat(newEdges),
+      };
+
+      // Update graph
+      graph.setData(newData);
+      await graph.render();
+
+      isPinned = withPinning;
+
+      const pinStatus = withPinning ? 'WITH pinning (existing nodes fixed)' : 'WITHOUT pinning (all nodes free)';
+      updateStatus(`Added 3 nodes ${pinStatus}. Total: ${newData.nodes.length} nodes`);
+
+      // Optionally unpin after layout stabilizes
+      if (withPinning) {
+        updateStatus(`Layout stabilizing... will unpin after ${LAYOUT_ITERATIONS * 10}ms`);
+
+        setTimeout(() => {
+          // Note: Not auto-unpinning to show the effect clearly
+          // unpinAllNodes();
+          updateStatus(`Layout complete. ${newData.nodes.length} nodes (existing nodes remained pinned)`);
+        }, LAYOUT_ITERATIONS * 10);
+      }
+    }
+
+    // Remove fx/fy from all nodes
+    function unpinAllNodes() {
+      const currentData = graph.getData();
+      const unpinnedNodes = currentData.nodes.map(node => ({
+        ...node,
+        data: {
+          ...node.data,
+          fx: undefined,
+          fy: undefined,
+        },
+      }));
+
+      graph.setData({
+        nodes: unpinnedNodes,
+        edges: currentData.edges,
+      });
+
+      graph.render();
+      isPinned = false;
+      updateStatus('All nodes unpinned - nodes can now move freely');
+    }
+
+    // Reset to initial state
+    function reset() {
+      nodeIdCounter = 6;
+      isPinned = false;
+      initGraph();
+    }
+
+    // Update status message
+    function updateStatus(message) {
+      const timestamp = new Date().toLocaleTimeString();
+      document.getElementById('status').textContent = `[${timestamp}] ${message}`;
+    }
+
+    // Event listeners
+    document.getElementById('addPinned').addEventListener('click', () => {
+      addNodes(true);
+    });
+
+    document.getElementById('addUnpinned').addEventListener('click', () => {
+      addNodes(false);
+    });
+
+    document.getElementById('reset').addEventListener('click', reset);
+
+    document.getElementById('unpinAll').addEventListener('click', unpinAllNodes);
+
+    // Initialize on load
+    window.addEventListener('load', () => {
+      initGraph();
+    });
+
+    // Handle window resize
+    window.addEventListener('resize', () => {
+      if (graph) {
+        const container = document.getElementById('container');
+        graph.setSize(container.offsetWidth, container.offsetHeight);
+      }
+    });
+  </script>
+</body>
+</html>
