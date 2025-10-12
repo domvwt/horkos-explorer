@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Positioning Test - New Nodes Near Predecessor</title>
+  <script src="https://unpkg.com/@antv/g6@5.0.20/dist/g6.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: Arial, sans-serif;
+      background: #1a1a1a;
+      color: #fff;
+    }
+    #container {
+      width: 100%;
+      height: 600px;
+      background: #2a2a2a;
+      border: 1px solid #444;
+      border-radius: 8px;
+    }
+    .controls {
+      margin-bottom: 20px;
+      padding: 15px;
+      background: #2a2a2a;
+      border-radius: 8px;
+      border: 1px solid #444;
+    }
+    button {
+      padding: 10px 20px;
+      margin-right: 10px;
+      background: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    button:hover {
+      background: #45a049;
+    }
+    button.secondary {
+      background: #2196F3;
+    }
+    button.secondary:hover {
+      background: #0b7dda;
+    }
+    .info {
+      margin-top: 15px;
+      padding: 10px;
+      background: #333;
+      border-radius: 4px;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .info strong {
+      color: #4CAF50;
+    }
+  </style>
+</head>
+<body>
+  <h1>🎯 Smart Node Positioning Test</h1>
+
+  <div class="controls">
+    <button onclick="expandNode()">Expand Center Node (Add 5 neighbors)</button>
+    <button class="secondary" onclick="reset()">Reset Graph</button>
+
+    <div class="info">
+      <strong>Test Scenario:</strong><br>
+      1. Start with a center node (blue) and 4 peripheral nodes (green)<br>
+      2. Click "Expand" to add 5 new neighbors to the center node<br>
+      3. New nodes should appear: <strong>NEAR the center node</strong> + <strong>AWAY from graph center of mass</strong><br>
+      4. Force layout then refines positions while existing nodes stay pinned
+    </div>
+  </div>
+
+  <div id="container"></div>
+
+  <script>
+    let graph;
+    let nodeIdCounter = 10;
+    let expanded = false;
+
+    function createInitialGraph() {
+      const nodes = [
+        { id: 'center', data: { x: 400, y: 300 }, style: { fill: '#4CAF50', size: 40 } },
+        { id: 'n1', data: { x: 200, y: 150 }, style: { fill: '#2196F3', size: 30 } },
+        { id: 'n2', data: { x: 600, y: 150 }, style: { fill: '#2196F3', size: 30 } },
+        { id: 'n3', data: { x: 200, y: 450 }, style: { fill: '#2196F3', size: 30 } },
+        { id: 'n4', data: { x: 600, y: 450 }, style: { fill: '#2196F3', size: 30 } },
+      ];
+
+      const edges = [
+        { id: 'e1', source: 'center', target: 'n1' },
+        { id: 'e2', source: 'center', target: 'n2' },
+        { id: 'e3', source: 'center', target: 'n3' },
+        { id: 'e4', source: 'center', target: 'n4' },
+      ];
+
+      return { nodes, edges };
+    }
+
+    function initGraph() {
+      if (graph) {
+        graph.destroy();
+      }
+
+      const data = createInitialGraph();
+
+      graph = new G6.Graph({
+        container: 'container',
+        width: document.getElementById('container').clientWidth,
+        height: 600,
+        layout: {
+          type: 'd3-force',
+          preventOverlap: true,
+          nodeSize: 50,
+          linkDistance: 150,
+          iterations: 300,
+        },
+        node: {
+          style: {
+            size: (d) => d.style?.size || 30,
+            fill: (d) => d.style?.fill || '#5B8FF9',
+            stroke: '#fff',
+            lineWidth: 2,
+            labelText: (d) => d.style?.labelText || d.id,
+            labelFill: '#fff',
+            labelFontSize: 12,
+          },
+        },
+        edge: {
+          style: {
+            stroke: '#666',
+            lineWidth: 2,
+          },
+        },
+        behaviors: ['drag-element', 'zoom-canvas', 'drag-canvas'],
+      });
+
+      graph.setData(data);
+      graph.render();
+
+      expanded = false;
+    }
+
+    function expandNode() {
+      if (expanded) {
+        alert('Already expanded! Click Reset to try again.');
+        return;
+      }
+
+      const currentNodes = graph.getNodeData() || [];
+      const currentEdges = graph.getEdgeData() || [];
+
+      // Calculate center of mass of existing nodes
+      let sumX = 0, sumY = 0;
+      currentNodes.forEach(node => {
+        sumX += node.style.x;
+        sumY += node.style.y;
+      });
+      const centerX = sumX / currentNodes.length;
+      const centerY = sumY / currentNodes.length;
+
+      console.log('Center of mass:', centerX, centerY);
+
+      // Get the center node position (the one we're expanding)
+      const centerNode = currentNodes.find(n => n.id === 'center');
+      const predCenterX = centerNode.style.x;
+      const predCenterY = centerNode.style.y;
+
+      console.log('Expanding node at:', predCenterX, predCenterY);
+
+      // Calculate "away from center" direction
+      const awayDx = predCenterX - centerX;
+      const awayDy = predCenterY - centerY;
+      const awayAngle = Math.atan2(awayDy, awayDx);
+
+      console.log('Away angle (radians):', awayAngle);
+      console.log('Away angle (degrees):', awayAngle * 180 / Math.PI);
+
+      // Create 5 new nodes
+      const newNodes = [];
+      const newEdges = [];
+      const placementRadius = 150;
+      const arcSpread = Math.PI / 3; // 60 degrees
+
+      for (let i = 0; i < 5; i++) {
+        const nodeId = `new${i}`;
+
+        // Position in arc facing away from center
+        const offsetAngle = (i / (5 - 1) - 0.5) * arcSpread;
+        const angle = awayAngle + offsetAngle;
+
+        const x = predCenterX + placementRadius * Math.cos(angle);
+        const y = predCenterY + placementRadius * Math.sin(angle);
+
+        console.log(`New node ${i}: angle=${angle * 180 / Math.PI}°, position=(${x.toFixed(1)}, ${y.toFixed(1)})`);
+
+        newNodes.push({
+          id: nodeId,
+          data: { x, y }, // Initial position
+          style: {
+            fill: '#FF9800',
+            size: 35,
+            labelText: nodeId
+          }
+        });
+
+        newEdges.push({
+          id: `e_new${i}`,
+          source: 'center',
+          target: nodeId
+        });
+      }
+
+      // PIN existing nodes at their current positions
+      const pinnedExistingNodes = currentNodes.map(node => ({
+        ...node,
+        data: {
+          ...node.data,
+          fx: node.style.x,
+          fy: node.style.y
+        }
+      }));
+
+      console.log('Pinned existing nodes:', pinnedExistingNodes.length);
+
+      // Combine and update graph
+      const newData = {
+        nodes: pinnedExistingNodes.concat(newNodes),
+        edges: currentEdges.concat(newEdges)
+      };
+
+      graph.setData(newData);
+      graph.render();
+
+      expanded = true;
+
+      // Add visual indicator for center of mass
+      setTimeout(() => {
+        console.log('Graph updated. New nodes should appear near center node, away from center of mass.');
+      }, 100);
+    }
+
+    function reset() {
+      nodeIdCounter = 10;
+      initGraph();
+    }
+
+    // Initialize on load
+    window.addEventListener('load', initGraph);
+  </script>
+</body>
+</html>

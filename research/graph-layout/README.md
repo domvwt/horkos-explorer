@@ -182,14 +182,82 @@ this.g6Graph.on('node:dragend', () => {
 });
 ```
 
-**Status**: ⏳ NOT YET IMPLEMENTED (ready to implement based on test results)
+**Status**: ✅ IMPLEMENTED (basic pinning only)
 
-**Test file**:
-- `public/test-incremental-force-layout.html` - Validates pinning strategy works
+**Enhancement: Smart Initial Positioning (2025-10-12) - PROTOTYPED**
+
+**Status**: 🧪 PROTOTYPED - NOT YET IMPLEMENTED IN MAIN CODEBASE
+
+Observation: Initial implementation places new nodes without initial positioning hints, causing force layout to sometimes produce awkward positions. Prototyped solution using **predecessor-aware placement**:
+
+```javascript
+// Calculate center of mass
+const centerX = sumX / currentNodes.length;
+const centerY = sumY / currentNodes.length;
+
+// Map new nodes to their existing predecessors
+const newNodePredecessors = new Map();
+edgesToAdd.forEach(edge => {
+  if (sourceIsExisting && !targetIsExisting) {
+    newNodePredecessors.get(edge.target).push(edge.source);
+  } else if (targetIsExisting && !sourceIsExisting) {
+    newNodePredecessors.get(edge.source).push(edge.target);
+  }
+});
+
+// Position each new node near its predecessor(s), away from center
+predecessorGroups.forEach(({ predecessors, nodes }) => {
+  // Get centroid of predecessor positions
+  const predCenterX = predSumX / predecessors.length;
+  const predCenterY = predSumY / predecessors.length;
+
+  // Calculate direction away from center of mass
+  const awayAngle = Math.atan2(predCenterY - centerY, predCenterX - centerX);
+
+  // Place nodes in 60° arc facing away from center
+  nodes.forEach((node, index) => {
+    const offsetAngle = (index / (nodes.length - 1) - 0.5) * (Math.PI / 3);
+    const angle = awayAngle + offsetAngle;
+
+    node.data.x = predCenterX + 200 * Math.cos(angle);
+    node.data.y = predCenterY + 200 * Math.sin(angle);
+  });
+});
+```
+
+**Key improvements:**
+1. New nodes appear **near the node being expanded** (not randomly around graph)
+2. Positioned in the direction **away from center of mass** (toward periphery)
+3. Multiple new nodes spread in a **60° arc** facing outward
+4. Fallback to periphery placement for nodes without existing connections
+
+**Benefits:**
+- More intuitive expansion UX (nodes appear where you expand)
+- Reduces clutter in graph center
+- Force layout refines from sensible starting positions
+- Natural "growing outward" pattern
+
+**Test files**:
+- `public/test-incremental-force-layout.html` - Validates pinning strategy works (basic pinning)
+- `public/test-smart-positioning.html` - Prototype for smart initial positioning (predecessor-aware placement)
 
 **Test Results**:
-- ✅ WITH pinning: Existing nodes stay completely fixed, new nodes position around them naturally
-- ❌ WITHOUT pinning: All nodes drift and reposition (current broken behavior)
+
+Basic Pinning (IMPLEMENTED in `ResultGraph.vue:1655-1670`):
+- ✅ Existing nodes stay completely fixed (no drift)
+- ✅ New nodes positioned by d3-force around fixed nodes
+- ⚠️ New nodes may appear in awkward initial positions before force layout stabilizes
+
+Smart Positioning Prototype (`test-smart-positioning.html`):
+- ✅ Successfully tested with Playwright MCP (2025-10-12)
+- ✅ New nodes appear near predecessor node
+- ✅ New nodes positioned away from graph center of mass
+- ✅ Multiple new nodes spread in 60° arc facing outward
+- 📸 Screenshots captured showing correct behavior:
+  - `test-smart-positioning-stabilized.png` - Initial layout with center node + 4 peripherals
+  - `test-smart-positioning-after-expand.png` - After expanding (5 orange nodes near center, away from center of mass)
+  - `test-smart-positioning-full.png` - Full page view of test harness
+- ⏳ **NOT YET IMPLEMENTED** in main codebase - prototype successful but requires user validation before integration
 
 ---
 
@@ -394,14 +462,24 @@ Give users a way to "reset" the layout if it gets messy. All nodes reposition fr
 - [x] Test with real Horkos data
 - [x] Verify URL sizes remain manageable
 
-### Phase 2: Incremental Expansion (READY TO IMPLEMENT ⏳)
-- [ ] Modify `addData()` method to pin existing nodes
-- [ ] Set `fx`/`fy` from `node.style.x/y` for existing nodes
-- [ ] Leave new nodes without `fx`/`fy`
-- [ ] Test with double-click expansion
-- [ ] Test with "Expand Graph" button
-- [ ] Consider removing alpha=0.3 workaround
-- [ ] Monitor performance with large graphs (100+ nodes)
+### Phase 2: Incremental Expansion (BASIC PINNING COMPLETE ✅)
+- [x] Modify `addData()` method to pin existing nodes
+- [x] Set `fx`/`fy` from `node.style.x/y` for existing nodes
+- [x] Leave new nodes without `fx`/`fy`
+- [x] Update alpha=0.3 to alpha=1.0 (pinning makes drift impossible)
+- [x] Test with double-click expansion
+- [x] Test with "Expand Graph" button
+
+### Phase 2b: Smart Initial Positioning (PROTOTYPED 🧪)
+- [x] Prototype smart positioning algorithm in `public/test-smart-positioning.html`
+- [x] Calculate center of mass of existing nodes
+- [x] Map new nodes to their predecessors via edge analysis
+- [x] Position new nodes near predecessors, away from center of mass
+- [x] Spread multiple new nodes in 60° arcs
+- [x] Test with Playwright MCP and capture screenshots
+- [ ] **Integrate into main codebase** (awaiting user feedback on prototype)
+- [ ] Test with real Horkos data
+- [ ] Verify performance with large graphs
 
 ### Phase 3: Advanced Features (OPTIONAL)
 - [ ] Auto-unpin nodes after stabilization (if needed)
@@ -504,3 +582,7 @@ All test files are in `public/` directory and `research/graph-layout/`:
 6. **Don't assume APIs work** - G6 doesn't expose `layout.simulation` despite documentation suggesting it might
 7. **Positions live in multiple places** - `node.style.x/y` (G6), `node.data.x/y` (config), and simulation internal state
 8. **One solution, two use cases** - The same fx/fy pinning mechanism solves both problems
+9. **Initial positions matter** - Giving new nodes smart starting positions (near predecessor, away from center) produces much better force layout results than random initialization
+10. **Edge data is key** - The `edgesToAdd` array tells us exactly which new nodes connect to which existing nodes, enabling predecessor-aware placement
+11. **Prototype first, implement later** - When extending existing implementations, always prototype in `public/` or `research/` directory first. This allows safe experimentation without risk of breaking production code. Use Playwright MCP for automated testing of prototypes.
+12. **User validation is critical** - Even when a prototype works technically, defer main codebase integration until the user validates the behavior meets their needs

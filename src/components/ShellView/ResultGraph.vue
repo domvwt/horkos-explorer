@@ -1663,7 +1663,7 @@ export default {
         }
       }));
 
-      // New nodes don't have fx/fy, so force layout will position them around pinned nodes
+      // New nodes DON'T have fx/fy, so force layout will position them
       const newData = {
         nodes: pinnedExistingNodes.concat(nodesToAdd),
         edges: currentEdges.concat(edgesToAdd),
