@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Positioning Test - Multi-Edge Deduplication</title>
+  <script src="https://unpkg.com/@antv/g6@5.0.20/dist/g6.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: Arial, sans-serif;
+      background: #1a1a1a;
+      color: #fff;
+    }
+    #container {
+      width: 100%;
+      height: 600px;
+      background: #2a2a2a;
+      border: 1px solid #444;
+      border-radius: 8px;
+    }
+    .controls {
+      margin-bottom: 20px;
+      padding: 15px;
+      background: #2a2a2a;
+      border-radius: 8px;
+      border: 1px solid #444;
+    }
+    button {
+      padding: 10px 20px;
+      margin-right: 10px;
+      background: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    button:hover {
+      background: #45a049;
+    }
+    button.secondary {
+      background: #2196F3;
+    }
+    button.secondary:hover {
+      background: #0b7dda;
+    }
+    .info {
+      margin-top: 15px;
+      padding: 10px;
+      background: #333;
+      border-radius: 4px;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .info strong {
+      color: #4CAF50;
+    }
+    .warning {
+      color: #ff9800;
+    }
+  </style>
+</head>
+<body>
+  <h1>🎯 Smart Positioning Test - Multi-Edge Deduplication</h1>
+
+  <div class="controls">
+    <button onclick="expandNode()">Expand Center Node (Add 3 neighbors with duplicate edges)</button>
+    <button class="secondary" onclick="reset()">Reset Graph</button>
+
+    <div class="info">
+      <strong>Test Scenario:</strong><br>
+      1. Start with a center node (green) and 4 peripheral nodes (blue)<br>
+      2. Click "Expand" to add 3 new neighbors to the center node<br>
+      3. <span class="warning">Each new node has 2 edges to center (e.g., "director" + "owner")</span><br>
+      4. <strong>Without deduplication:</strong> Center would be counted twice per node (wrong!)<br>
+      5. <strong>With deduplication:</strong> Each predecessor counted once (correct!)
+    </div>
+  </div>
+
+  <div id="container"></div>
+
+  <script>
+    let graph;
+    let nodeIdCounter = 10;
+    let expanded = false;
+
+    function createInitialGraph() {
+      const nodes = [
+        { id: 'center', data: { x: 400, y: 300 }, style: { fill: '#4CAF50', size: 40 } },
+        { id: 'n1', data: { x: 200, y: 150 }, style: { fill: '#2196F3', size: 30 } },
+        { id: 'n2', data: { x: 600, y: 150 }, style: { fill: '#2196F3', size: 30 } },
+        { id: 'n3', data: { x: 200, y: 450 }, style: { fill: '#2196F3', size: 30 } },
+        { id: 'n4', data: { x: 600, y: 450 }, style: { fill: '#2196F3', size: 30 } },
+      ];
+
+      const edges = [
+        { id: 'e1', source: 'center', target: 'n1' },
+        { id: 'e2', source: 'center', target: 'n2' },
+        { id: 'e3', source: 'center', target: 'n3' },
+        { id: 'e4', source: 'center', target: 'n4' },
+      ];
+
+      return { nodes, edges };
+    }
+
+    function initGraph() {
+      if (graph) {
+        graph.destroy();
+      }
+
+      const data = createInitialGraph();
+
+      graph = new G6.Graph({
+        container: 'container',
+        width: document.getElementById('container').clientWidth,
+        height: 600,
+        layout: {
+          type: 'd3-force',
+          preventOverlap: true,
+          nodeSize: 50,
+          linkDistance: 150,
+          iterations: 300,
+        },
+        node: {
+          style: {
+            size: (d) => d.style?.size || 30,
+            fill: (d) => d.style?.fill || '#5B8FF9',
+            stroke: '#fff',
+            lineWidth: 2,
+            labelText: (d) => d.style?.labelText || d.id,
+            labelFill: '#fff',
+            labelFontSize: 12,
+          },
+        },
+        edge: {
+          style: {
+            stroke: '#666',
+            lineWidth: 2,
+          },
+        },
+        behaviors: ['drag-element', 'zoom-canvas', 'drag-canvas'],
+      });
+
+      graph.setData(data);
+      graph.render();
+
+      expanded = false;
+    }
+
+    function expandNode() {
+      if (expanded) {
+        alert('Already expanded! Click Reset to try again.');
+        return;
+      }
+
+      const currentNodes = graph.getNodeData() || [];
+      const currentEdges = graph.getEdgeData() || [];
+
+      // Calculate center of mass
+      let sumX = 0, sumY = 0;
+      currentNodes.forEach(node => {
+        sumX += node.style.x;
+        sumY += node.style.y;
+      });
+      const centerX = sumX / currentNodes.length;
+      const centerY = sumY / currentNodes.length;
+
+      console.log('Center of mass:', centerX, centerY);
+
+      // Create 3 new nodes with DUPLICATE EDGES (simulating director + owner)
+      const newNodes = [];
+      const newEdges = [];
+
+      for (let i = 0; i < 3; i++) {
+        const nodeId = `new${i}`;
+
+        newNodes.push({
+          id: nodeId,
+          data: {}, // Position will be set later
+          style: {
+            fill: '#FF9800',
+            size: 35,
+            labelText: nodeId
+          }
+        });
+
+        // Add TWO edges for each node (simulating multiple relationship types)
+        newEdges.push({
+          id: `e_director_${i}`,
+          source: 'center',
+          target: nodeId
+        });
+        newEdges.push({
+          id: `e_owner_${i}`,
+          source: 'center',
+          target: nodeId
+        });
+      }
+
+      console.log('Created edges:', newEdges.length, 'edges for', newNodes.length, 'nodes');
+
+      // Build predecessor map (THIS IS WHERE WE NEED DEDUPLICATION)
+      const existingNodeIds = new Set(currentNodes.map(n => n.id));
+      const newNodePredecessors = new Map(); // nodeId -> Set of predecessor IDs
+
+      newEdges.forEach(edge => {
+        const sourceIsExisting = existingNodeIds.has(edge.source);
+        const targetIsExisting = existingNodeIds.has(edge.target);
+
+        if (sourceIsExisting && !targetIsExisting) {
+          // Edge from existing to new
+          if (!newNodePredecessors.has(edge.target)) {
+            newNodePredecessors.set(edge.target, new Set()); // Use Set for deduplication
+          }
+          newNodePredecessors.get(edge.target).add(edge.source); // add() automatically deduplicates
+        } else if (targetIsExisting && !sourceIsExisting) {
+          // Edge from new to existing
+          if (!newNodePredecessors.has(edge.source)) {
+            newNodePredecessors.set(edge.source, new Set());
+          }
+          newNodePredecessors.get(edge.source).add(edge.target);
+        }
+      });
+
+      console.log('Predecessor map (deduplicated):');
+      newNodePredecessors.forEach((preds, nodeId) => {
+        console.log(`  ${nodeId}: [${Array.from(preds).join(', ')}] (${preds.size} unique)`);
+      });
+
+      // Group new nodes by their predecessors
+      const predecessorGroups = new Map();
+
+      newNodes.forEach(node => {
+        const predecessorSet = newNodePredecessors.get(node.id);
+        if (!predecessorSet || predecessorSet.size === 0) {
+          console.warn('Node', node.id, 'has no predecessors!');
+          return;
+        }
+
+        // Convert Set to sorted array for grouping key
+        const predecessors = Array.from(predecessorSet).sort();
+        const key = predecessors.join(',');
+
+        if (!predecessorGroups.has(key)) {
+          predecessorGroups.set(key, { predecessors, nodes: [] });
+        }
+        predecessorGroups.get(key).nodes.push(node);
+      });
+
+      // Position nodes near their predecessors, away from center
+      const placementRadius = 200;
+
+      predecessorGroups.forEach(({ predecessors, nodes }) => {
+        // Calculate centroid of predecessor positions
+        let predSumX = 0, predSumY = 0;
+        predecessors.forEach(predId => {
+          const predNode = currentNodes.find(n => n.id === predId);
+          if (predNode) {
+            predSumX += predNode.style.x;
+            predSumY += predNode.style.y;
+          }
+        });
+        const predCenterX = predSumX / predecessors.length;
+        const predCenterY = predSumY / predecessors.length;
+
+        // Calculate "away from center" direction
+        const awayDx = predCenterX - centerX;
+        const awayDy = predCenterY - centerY;
+        const awayAngle = Math.atan2(awayDy, awayDx);
+
+        console.log(`Positioning ${nodes.length} nodes near predecessors [${predecessors.join(', ')}]:`);
+        console.log(`  Predecessor center: (${predCenterX.toFixed(1)}, ${predCenterY.toFixed(1)})`);
+        console.log(`  Away angle: ${(awayAngle * 180 / Math.PI).toFixed(1)}°`);
+
+        // Position new nodes in an arc
+        const arcSpread = Math.PI / 3; // 60 degrees
+        nodes.forEach((node, index) => {
+          let angle;
+          if (nodes.length === 1) {
+            angle = awayAngle;
+          } else {
+            const offsetAngle = (index / (nodes.length - 1) - 0.5) * arcSpread;
+            angle = awayAngle + offsetAngle;
+          }
+
+          const x = predCenterX + placementRadius * Math.cos(angle);
+          const y = predCenterY + placementRadius * Math.sin(angle);
+
+          node.data.x = x;
+          node.data.y = y;
+
+          console.log(`    ${node.id}: angle=${(angle * 180 / Math.PI).toFixed(1)}°, pos=(${x.toFixed(1)}, ${y.toFixed(1)})`);
+        });
+      });
+
+      // PIN existing nodes
+      const pinnedExistingNodes = currentNodes.map(node => ({
+        ...node,
+        data: {
+          ...node.data,
+          fx: node.style.x,
+          fy: node.style.y
+        }
+      }));
+
+      const newData = {
+        nodes: pinnedExistingNodes.concat(newNodes),
+        edges: currentEdges.concat(newEdges)
+      };
+
+      graph.setData(newData);
+      graph.render();
+
+      expanded = true;
+    }
+
+    function reset() {
+      nodeIdCounter = 10;
+      initGraph();
+    }
+
+    // Initialize on load
+    window.addEventListener('load', initGraph);
+  </script>
+</body>
+</html>
