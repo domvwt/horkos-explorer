@@ -802,7 +802,8 @@ export default {
       this.g6Graph.on('node:dragend', () => {
         const layout = this.g6Graph.getLayout();
         if (layout && layout.simulation) {
-          layout.simulation.alpha(0.3).restart();
+          // With pinned nodes, we can use full energy without worrying about drift
+          layout.simulation.alpha(1.0).restart();
         }
       });
 
@@ -1523,18 +1524,8 @@ export default {
       }
 
       if (nodesToExpand.length === 0 && profligateNodes.length > 0) {
-        // Only profligate nodes remain - check if we need to warn
-        let needsWarning = false;
-        profligateNodes.forEach(p => {
-          if (!this.shownProfligateWarnings.has(p.nodeId)) {
-            needsWarning = true;
-            this.shownProfligateWarnings.add(p.nodeId);
-          }
-        });
-
-        if (needsWarning) {
-          this.showToast(`All ${profligateNodes.length} nodes have >10 connections. Double-click to expand individually.`, 4000);
-        }
+        // Only profligate nodes remain - ALWAYS show a warning so user knows why nothing happened
+        this.showToast(`All ${profligateNodes.length} remaining nodes have >10 connections. Double-click nodes individually to expand.`, 4000);
         return;
       }
 
@@ -1660,8 +1651,21 @@ export default {
       }
       const currentNodes = this.g6Graph.getNodeData() || [];
       const currentEdges = this.g6Graph.getEdgeData() || [];
+
+      // PIN existing nodes at their current positions to prevent drift during expansion
+      // This preserves the user's mental map while allowing new nodes to be positioned naturally
+      const pinnedExistingNodes = currentNodes.map(node => ({
+        ...node,
+        data: {
+          ...node.data,
+          fx: node.style.x,  // Fix x position
+          fy: node.style.y   // Fix y position
+        }
+      }));
+
+      // New nodes don't have fx/fy, so force layout will position them around pinned nodes
       const newData = {
-        nodes: currentNodes.concat(nodesToAdd),
+        nodes: pinnedExistingNodes.concat(nodesToAdd),
         edges: currentEdges.concat(edgesToAdd),
       };
       this.g6Graph.setData(newData);
@@ -1993,9 +1997,20 @@ export default {
         if (this.g6Graph) {
           this.g6Graph.clear();
 
+          // PIN nodes at their saved positions to enable dragging and expansion
+          // while preserving exact positions from the shared investigation
+          const nodesWithPins = state.graphData.nodes.map(node => ({
+            ...node,
+            data: {
+              ...node.data,
+              fx: node.style.x,  // Pin at saved x position (from node.style, not node.data)
+              fy: node.style.y   // Pin at saved y position (from node.style, not node.data)
+            }
+          }));
+
           // Add all nodes and edges to the graph
           this.g6Graph.addData({
-            nodes: state.graphData.nodes,
+            nodes: nodesWithPins,  // Use pinned nodes instead of unpinned
             edges: state.graphData.edges,
           });
 
