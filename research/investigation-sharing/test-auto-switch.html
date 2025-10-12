@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Auto-Switch Layout Test</title>
+  <script src="https://unpkg.com/@antv/g6@5.0.49/dist/g6.min.js"></script>
+  <style>
+    body { font-family: monospace; margin: 20px; background: #1e1e1e; color: #d4d4d4; }
+    #container { width: 800px; height: 600px; border: 2px solid #555; background: #252526; margin: 20px 0; }
+    #log { background: #1e1e1e; border: 2px solid #555; padding: 15px; max-height: 400px; overflow-y: auto; white-space: pre-wrap; font-size: 12px; }
+    .success { color: #4ec9b0; }
+    .error { color: #f48771; }
+    .info { color: #dcdcaa; }
+    .warning { color: #ce9178; }
+    button { background: #0e639c; color: white; border: none; padding: 10px 20px; margin: 5px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>Auto-Switch from Fixed to Force Layout</h1>
+
+  <div>
+    <button onclick="runTest()">Run Test</button>
+    <button onclick="document.getElementById('log').innerHTML = ''">Clear</button>
+  </div>
+
+  <div id="container"></div>
+  <div id="log"></div>
+
+  <script>
+    const { Graph } = window.G6;
+    let graph = null;
+
+    function log(msg, type = 'info') {
+      const div = document.getElementById('log');
+      div.innerHTML += `<span class="${type}">${msg}</span>\n`;
+      div.scrollTop = div.scrollHeight;
+    }
+
+    const data = {
+      nodes: [
+        { id: 'p1', data: { label: 'John', size: 50, x: 200, y: 300 }},
+        { id: 'c1', data: { label: 'Acme', size: 60, x: 400, y: 300 }},
+        { id: 'p2', data: { label: 'Jane', size: 50, x: 300, y: 150 }},
+        { id: 'c2', data: { label: 'Beta', size: 55, x: 500, y: 150 }},
+        { id: 'a1', data: { label: 'London', size: 45, x: 400, y: 450 }}
+      ],
+      edges: [
+        { id: 'e1', source: 'p1', target: 'c1', data: { label: 'Director' }},
+        { id: 'e2', source: 'p2', target: 'c1', data: { label: 'Owner' }},
+        { id: 'e3', source: 'c1', target: 'c2', data: { label: 'Owns' }},
+        { id: 'e4', source: 'c1', target: 'a1', data: { label: 'Address' }}
+      ]
+    };
+
+    async function runTest() {
+      log('='.repeat(60), 'info');
+      log('TEST: Auto-switch from fixed → d3-force', 'info');
+      log('='.repeat(60), 'info');
+
+      if (graph) graph.destroy();
+
+      // Create graph with FIXED layout and pre-set positions
+      log('\n1. Creating graph with FIXED layout...', 'info');
+
+      graph = new Graph({
+        container: 'container',
+        width: 800,
+        height: 600,
+        layout: { type: 'fixed' },
+        node: (model) => ({
+          id: model.id,
+          data: {
+            ...model.data,
+            type: 'circle-node',
+            labelText: model.data.label,
+            labelPosition: 'bottom',
+            size: model.data.size,
+            x: model.data.x,
+            y: model.data.y
+          }
+        }),
+        edge: (model) => ({
+          id: model.id,
+          source: model.source,
+          target: model.target,
+          data: { ...model.data, type: 'line-edge', labelText: model.data.label }
+        })
+      });
+
+      graph.setData(data);
+      graph.render();
+
+      log('✓ Graph rendered with fixed layout', 'success');
+
+      // Save original positions
+      const originalPos = {};
+      graph.getNodeData().forEach(n => {
+        originalPos[n.id] = { x: n.style.x, y: n.style.y };
+        log(`  ${n.id}: (${n.style.x.toFixed(1)}, ${n.style.y.toFixed(1)})`, 'info');
+      });
+
+      await sleep(1000);
+
+      // Now switch to d3-force
+      log('\n2. Switching to d3-force layout automatically...', 'info');
+
+      try {
+        graph.layout({
+          type: 'd3-force',
+          link: { distance: 150, strength: 2 },
+          collide: { radius: (d) => d.data.size / 2 + 80, strength: 1.2 },
+          manyBody: { strength: -1800 },
+          alpha: 0.3,       // Low alpha = less movement
+          alphaMin: 0.001,
+          alphaDecay: 0.05   // Fast decay = stops quickly
+        });
+
+        log('✓ graph.layout() called successfully', 'success');
+        log('Waiting 2s for layout to stabilize...', 'info');
+
+        await sleep(2000);
+
+        // Measure drift
+        log('\n3. Measuring position drift:', 'info');
+        let totalDrift = 0;
+        let maxDrift = 0;
+
+        graph.getNodeData().forEach(n => {
+          const orig = originalPos[n.id];
+          const drift = Math.sqrt(
+            Math.pow(orig.x - n.style.x, 2) +
+            Math.pow(orig.y - n.style.y, 2)
+          );
+          totalDrift += drift;
+          maxDrift = Math.max(maxDrift, drift);
+
+          const color = drift < 10 ? 'success' : drift < 50 ? 'warning' : 'error';
+          log(`  ${n.id}: ${drift.toFixed(2)}px drift`, color);
+        });
+
+        const avgDrift = totalDrift / Object.keys(originalPos).length;
+
+        log(`\nAverage drift: ${avgDrift.toFixed(2)}px`, avgDrift < 50 ? 'success' : 'warning');
+        log(`Maximum drift: ${maxDrift.toFixed(2)}px`, maxDrift < 50 ? 'success' : 'warning');
+
+        log('\n' + '='.repeat(60), 'info');
+        if (avgDrift < 10) {
+          log('✓✓ SUCCESS: Auto-switch works perfectly!', 'success');
+          log('Solution: Load with fixed, call graph.layout() after', 'success');
+        } else if (avgDrift < 50) {
+          log('✓ SUCCESS: Auto-switch works with minor drift', 'success');
+        } else {
+          log('⚠ PARTIAL: Significant drift, may need tuning', 'warning');
+        }
+        log('='.repeat(60), 'info');
+
+      } catch (error) {
+        log(`✗ ERROR: ${error.message}`, 'error');
+      }
+    }
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    window.onload = () => {
+      log('Page loaded. Click "Run Test" to begin.\n', 'info');
+    };
+  </script>
+</body>
+</html>

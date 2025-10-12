@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>G6 Position Persistence - Layout Comparison</title>
+  <script src="https://unpkg.com/@antv/g6@5.0.49/dist/g6.min.js"></script>
+  <style>
+    body {
+      font-family: monospace;
+      margin: 20px;
+      background: #1e1e1e;
+      color: #d4d4d4;
+    }
+    #container {
+      width: 800px;
+      height: 600px;
+      border: 2px solid #555;
+      background: #252526;
+      margin: 20px 0;
+    }
+    #log {
+      background: #1e1e1e;
+      border: 2px solid #555;
+      padding: 15px;
+      max-height: 500px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      font-size: 12px;
+    }
+    .success { color: #4ec9b0; }
+    .error { color: #f48771; }
+    .info { color: #dcdcaa; }
+    .warning { color: #ce9178; }
+    button {
+      background: #0e639c;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      margin: 5px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    button:hover { background: #1177bb; }
+  </style>
+</head>
+<body>
+  <h1>G6 Position Persistence - Solution Test</h1>
+  <p>Testing different approaches to preserve positions</p>
+
+  <div>
+    <button onclick="testFixedLayout()">Test 1: Fixed Layout</button>
+    <button onclick="testForceWithPreset()">Test 2: Force Layout with Preset</button>
+    <button onclick="clearLog()">Clear Log</button>
+  </div>
+
+  <div id="container"></div>
+  <div id="log"></div>
+
+  <script>
+    const { Graph } = window.G6;
+    let graph = null;
+    let originalPositions = null;
+
+    function log(message, type = 'info') {
+      const logDiv = document.getElementById('log');
+      const timestamp = new Date().toLocaleTimeString();
+      logDiv.innerHTML += `<span class="${type}">[${timestamp}] ${message}</span>\n`;
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    function clearLog() {
+      document.getElementById('log').innerHTML = '';
+    }
+
+    function logSection(title) {
+      log(`\n${'='.repeat(80)}`, 'info');
+      log(`  ${title}`, 'info');
+      log('='.repeat(80), 'info');
+    }
+
+    const sampleData = {
+      nodes: [
+        { id: 'person_1', data: { label: 'John Smith', type: 'Person', size: 50 }},
+        { id: 'company_1', data: { label: 'Acme Corp', type: 'Company', size: 60 }},
+        { id: 'person_2', data: { label: 'Jane Doe', type: 'Person', size: 50 }},
+        { id: 'company_2', data: { label: 'Beta Ltd', type: 'Company', size: 55 }},
+        { id: 'address_1', data: { label: 'London', type: 'Address', size: 45 }}
+      ],
+      edges: [
+        { id: 'edge_1', source: 'person_1', target: 'company_1', data: { label: 'Director' }},
+        { id: 'edge_2', source: 'person_2', target: 'company_1', data: { label: 'Owner' }},
+        { id: 'edge_3', source: 'company_1', target: 'company_2', data: { label: 'Owner' }},
+        { id: 'edge_4', source: 'company_1', target: 'address_1', data: { label: 'Address' }}
+      ]
+    };
+
+    async function captureOriginalPositions() {
+      logSection('SETUP: Capture Original Positions');
+      log('Creating initial graph with d3-force...', 'info');
+
+      if (graph) graph.destroy();
+      graph = new Graph({
+        container: 'container',
+        width: 800,
+        height: 600,
+        layout: {
+          type: 'd3-force',
+          link: { distance: 150, strength: 2 },
+          collide: { radius: (d) => (d.data.size || 50) / 2 + 80, strength: 1.2 },
+          manyBody: { strength: -1800 }
+        },
+        node: (model) => ({
+          id: model.id,
+          data: { ...model.data, type: 'circle-node', labelText: model.data.label, labelPosition: 'bottom', size: model.data.size || 50 }
+        }),
+        edge: (model) => ({
+          id: model.id,
+          source: model.source,
+          target: model.target,
+          data: { ...model.data, type: 'line-edge', labelText: model.data.label }
+        })
+      });
+
+      graph.setData(JSON.parse(JSON.stringify(sampleData)));
+      graph.render();
+
+      log('Waiting 3s for layout to stabilize...', 'info');
+      await sleep(3000);
+
+      const nodes = graph.getNodeData();
+      originalPositions = {};
+      nodes.forEach(n => {
+        originalPositions[n.id] = { x: n.style.x, y: n.style.y };
+        log(`  ${n.id}: (${n.style.x.toFixed(2)}, ${n.style.y.toFixed(2)})`, 'info');
+      });
+
+      log('✓ Original positions captured', 'success');
+    }
+
+    async function testFixedLayout() {
+      clearLog();
+      await captureOriginalPositions();
+
+      logSection('TEST 1: Fixed Layout');
+      log('Strategy: Use "fixed" layout type with pre-set positions', 'info');
+
+      await sleep(1000);
+
+      // Serialize with positions
+      const serializedData = {
+        nodes: graph.getNodeData().map(n => ({
+          id: n.id,
+          data: { ...n.data, x: n.style.x, y: n.style.y },  // Put x/y in data
+          style: n.style
+        })),
+        edges: graph.getEdgeData()
+      };
+
+      log('Destroying and recreating with fixed layout...', 'info');
+      graph.destroy();
+      await sleep(500);
+
+      graph = new Graph({
+        container: 'container',
+        width: 800,
+        height: 600,
+        layout: {
+          type: 'fixed'  // Use fixed layout - nodes don't move
+        },
+        node: (model) => ({
+          id: model.id,
+          data: {
+            ...model.data,
+            type: 'circle-node',
+            labelText: model.data.label,
+            labelPosition: 'bottom',
+            size: model.data.size || 50,
+            x: model.data.x,  // Pass x/y from data
+            y: model.data.y
+          }
+        }),
+        edge: (model) => ({
+          id: model.id,
+          source: model.source,
+          target: model.target,
+          data: { ...model.data, type: 'line-edge', labelText: model.data.label }
+        })
+      });
+
+      graph.setData(serializedData);
+      graph.render();
+
+      log('Waiting 1s...', 'info');
+      await sleep(1000);
+
+      await measureDrift('FIXED LAYOUT');
+    }
+
+    async function testForceWithPreset() {
+      clearLog();
+      await captureOriginalPositions();
+
+      logSection('TEST 2: Force Layout with node transformer setting x/y');
+      log('Strategy: Set x/y in node data property during transformation', 'info');
+
+      await sleep(1000);
+
+      const serializedData = {
+        nodes: graph.getNodeData().map(n => ({
+          id: n.id,
+          data: { ...n.data, savedX: n.style.x, savedY: n.style.y },  // Save positions in data
+          style: n.style
+        })),
+        edges: graph.getEdgeData()
+      };
+
+      log('Destroying and recreating with d3-force but preset positions...', 'info');
+      graph.destroy();
+      await sleep(500);
+
+      graph = new Graph({
+        container: 'container',
+        width: 800,
+        height: 600,
+        layout: {
+          type: 'd3-force',
+          link: { distance: 150, strength: 2 },
+          collide: { radius: (d) => (d.data.size || 50) / 2 + 80, strength: 1.2 },
+          manyBody: { strength: -1800 },
+          alpha: 0.01,  // Very low alpha to minimize movement
+          alphaMin: 0.001,
+          alphaDecay: 0.1  // Fast decay
+        },
+        node: (model) => {
+          const config = {
+            id: model.id,
+            data: {
+              ...model.data,
+              type: 'circle-node',
+              labelText: model.data.label,
+              labelPosition: 'bottom',
+              size: model.data.size || 50
+            }
+          };
+
+          // If we have saved positions, set them
+          if (model.data.savedX !== undefined && model.data.savedY !== undefined) {
+            config.data.x = model.data.savedX;
+            config.data.y = model.data.savedY;
+          }
+
+          return config;
+        },
+        edge: (model) => ({
+          id: model.id,
+          source: model.source,
+          target: model.target,
+          data: { ...model.data, type: 'line-edge', labelText: model.data.label }
+        })
+      });
+
+      graph.setData(serializedData);
+      graph.render();
+
+      log('Waiting 2s for minimal layout adjustment...', 'info');
+      await sleep(2000);
+
+      await measureDrift('FORCE WITH PRESET');
+    }
+
+    async function measureDrift(testName) {
+      logSection(`RESULTS: ${testName}`);
+
+      const restoredNodes = graph.getNodeData();
+      let totalDrift = 0;
+      let maxDrift = 0;
+      let maxDriftNode = '';
+
+      log('Position comparison:', 'info');
+      Object.keys(originalPositions).forEach(id => {
+        const orig = originalPositions[id];
+        const node = restoredNodes.find(n => n.id === id);
+        const rest = { x: node.style.x, y: node.style.y };
+
+        const drift = Math.sqrt(
+          Math.pow(orig.x - rest.x, 2) +
+          Math.pow(orig.y - rest.y, 2)
+        );
+
+        totalDrift += drift;
+        if (drift > maxDrift) {
+          maxDrift = drift;
+          maxDriftNode = id;
+        }
+
+        const color = drift < 1 ? 'success' : drift < 10 ? 'info' : drift < 50 ? 'warning' : 'error';
+        log(`  ${id}: ${drift.toFixed(2)}px drift`, color);
+      });
+
+      const avgDrift = totalDrift / Object.keys(originalPositions).length;
+
+      log(`\nAverage drift: ${avgDrift.toFixed(2)}px`, avgDrift < 10 ? 'success' : 'warning');
+      log(`Maximum drift: ${maxDrift.toFixed(2)}px (${maxDriftNode})`, maxDrift < 10 ? 'success' : 'warning');
+
+      if (avgDrift < 1) {
+        log('\n✓✓✓ PERFECT: Positions exactly preserved!', 'success');
+        log('   This is the solution!', 'success');
+      } else if (avgDrift < 10) {
+        log('\n✓✓ EXCELLENT: Positions nearly perfectly preserved!', 'success');
+        log('   This solution works!', 'success');
+      } else if (avgDrift < 50) {
+        log('\n✓ ACCEPTABLE: Minor drift, usable', 'success');
+      } else {
+        log('\n✗ NOT ACCEPTABLE: Too much drift', 'error');
+      }
+    }
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    window.onload = () => {
+      log('Test page loaded. Click a test button to begin.', 'info');
+    };
+  </script>
+</body>
+</html>

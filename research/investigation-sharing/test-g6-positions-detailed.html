@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>G6 Position Persistence - Complete Test</title>
+  <script src="https://unpkg.com/@antv/g6@5.0.49/dist/g6.min.js"></script>
+  <style>
+    body {
+      font-family: monospace;
+      margin: 20px;
+      background: #1e1e1e;
+      color: #d4d4d4;
+    }
+    #container {
+      width: 800px;
+      height: 600px;
+      border: 2px solid #555;
+      background: #252526;
+      margin: 20px 0;
+    }
+    #log {
+      background: #1e1e1e;
+      border: 2px solid #555;
+      padding: 15px;
+      max-height: 500px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      font-size: 12px;
+    }
+    .success { color: #4ec9b0; }
+    .error { color: #f48771; }
+    .info { color: #dcdcaa; }
+    .warning { color: #ce9178; }
+    button {
+      background: #0e639c;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      margin: 5px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    button:hover { background: #1177bb; }
+  </style>
+</head>
+<body>
+  <h1>G6 Position Persistence - Complete Test</h1>
+  <p>Testing if positions can be saved and restored accurately</p>
+
+  <div>
+    <button onclick="runCompleteTest()">Run Complete Test</button>
+    <button onclick="clearLog()">Clear Log</button>
+  </div>
+
+  <div id="container"></div>
+  <div id="log"></div>
+
+  <script>
+    const { Graph } = window.G6;
+    let graph = null;
+
+    function log(message, type = 'info') {
+      const logDiv = document.getElementById('log');
+      const className = type;
+      const timestamp = new Date().toLocaleTimeString();
+      logDiv.innerHTML += `<span class="${className}">[${timestamp}] ${message}</span>\n`;
+      logDiv.scrollTop = logDiv.scrollHeight;
+      console.log(`[${type.toUpperCase()}]`, message);
+    }
+
+    function clearLog() {
+      document.getElementById('log').innerHTML = '';
+    }
+
+    function logSection(title) {
+      log(`\n${'='.repeat(80)}`, 'info');
+      log(`  ${title}`, 'info');
+      log('='.repeat(80), 'info');
+    }
+
+    const sampleData = {
+      nodes: [
+        { id: 'person_1', data: { label: 'John Smith', type: 'Person', size: 50 }},
+        { id: 'company_1', data: { label: 'Acme Corp', type: 'Company', size: 60 }},
+        { id: 'person_2', data: { label: 'Jane Doe', type: 'Person', size: 50 }},
+        { id: 'company_2', data: { label: 'Beta Ltd', type: 'Company', size: 55 }},
+        { id: 'address_1', data: { label: 'London Office', type: 'Address', size: 45 }}
+      ],
+      edges: [
+        { id: 'edge_1', source: 'person_1', target: 'company_1', data: { label: 'Directorship' }},
+        { id: 'edge_2', source: 'person_2', target: 'company_1', data: { label: 'Ownership' }},
+        { id: 'edge_3', source: 'company_1', target: 'company_2', data: { label: 'Ownership' }},
+        { id: 'edge_4', source: 'company_1', target: 'address_1', data: { label: 'Address' }}
+      ]
+    };
+
+    function createGraphConfig() {
+      return {
+        container: 'container',
+        width: 800,
+        height: 600,
+        layout: {
+          type: 'd3-force',
+          link: { distance: 150, strength: 2 },
+          collide: { radius: (d) => (d.data.size || 50) / 2 + 80, strength: 1.2 },
+          manyBody: { strength: -1800 },
+          alpha: 1,
+          alphaMin: 0.2,
+          alphaDecay: 0.03,
+          velocityDecay: 0.45
+        },
+        node: (model) => ({
+          id: model.id,
+          data: {
+            ...model.data,
+            type: 'circle-node',
+            labelText: model.data.label,
+            labelPosition: 'bottom',
+            size: model.data.size || 50
+          }
+        }),
+        edge: (model) => ({
+          id: model.id,
+          source: model.source,
+          target: model.target,
+          data: {
+            ...model.data,
+            type: 'line-edge',
+            labelText: model.data.label
+          }
+        })
+      };
+    }
+
+    async function runCompleteTest() {
+      clearLog();
+      logSection('COMPLETE POSITION PERSISTENCE TEST');
+
+      // Step 1: Create initial graph
+      logSection('STEP 1: Create Initial Graph');
+      log('Creating graph with d3-force layout...', 'info');
+
+      if (graph) graph.destroy();
+      graph = new Graph(createGraphConfig());
+      graph.setData(JSON.parse(JSON.stringify(sampleData)));
+      graph.render();
+
+      log('✓ Graph created, waiting 3s for layout to stabilize...', 'success');
+      await sleep(3000);
+
+      // Step 2: Capture positions
+      logSection('STEP 2: Capture Node Positions');
+      const originalNodes = graph.getNodeData();
+
+      log(`Captured ${originalNodes.length} nodes`, 'info');
+      log('\nOriginal positions:', 'info');
+
+      const originalPositions = {};
+      originalNodes.forEach(node => {
+        originalPositions[node.id] = {
+          x: node.style.x,
+          y: node.style.y
+        };
+        log(`  ${node.id}: (${node.style.x.toFixed(2)}, ${node.style.y.toFixed(2)})`, 'info');
+      });
+
+      // Step 3: Verify style.x/y exists
+      logSection('STEP 3: Verify Style Properties');
+
+      const allHaveStyleXY = originalNodes.every(n =>
+        n.style &&
+        typeof n.style.x === 'number' &&
+        typeof n.style.y === 'number' &&
+        !isNaN(n.style.x) &&
+        !isNaN(n.style.y)
+      );
+
+      if (allHaveStyleXY) {
+        log('✓ PASS: All nodes have valid style.x and style.y', 'success');
+      } else {
+        log('✗ FAIL: Some nodes missing style.x/y', 'error');
+        return;
+      }
+
+      // Step 4: Serialize data (as if creating share URL)
+      logSection('STEP 4: Serialize Data (Simulate Share URL)');
+
+      const serializedData = {
+        nodes: originalNodes.map(n => ({
+          id: n.id,
+          data: n.data,
+          style: n.style  // Include style with x/y
+        })),
+        edges: graph.getEdgeData()
+      };
+
+      const jsonString = JSON.stringify(serializedData);
+      log(`Serialized data length: ${jsonString.length} bytes`, 'info');
+      log('First node in serialized data:', 'info');
+      log(JSON.stringify(serializedData.nodes[0], null, 2), 'info');
+
+      // Verify positions survived serialization
+      const hasPositionsAfterJSON = serializedData.nodes.every(n =>
+        n.style && n.style.x !== undefined && n.style.y !== undefined
+      );
+
+      if (hasPositionsAfterJSON) {
+        log('✓ PASS: Positions survived JSON serialization', 'success');
+      } else {
+        log('✗ FAIL: Positions lost during JSON serialization', 'error');
+        return;
+      }
+
+      await sleep(1000);
+
+      // Step 5: Destroy and recreate graph
+      logSection('STEP 5: Recreate Graph from Serialized Data');
+
+      log('Destroying original graph...', 'info');
+      graph.destroy();
+      await sleep(500);
+
+      log('Creating new graph with saved positions...', 'info');
+      graph = new Graph(createGraphConfig());
+      graph.setData(serializedData);
+      graph.render();
+
+      log('✓ New graph created, waiting 3s for layout...', 'success');
+      await sleep(3000);
+
+      // Step 6: Compare positions
+      logSection('STEP 6: Compare Original vs Restored Positions');
+
+      const restoredNodes = graph.getNodeData();
+      const restoredPositions = {};
+
+      log('\nRestored positions:', 'info');
+      restoredNodes.forEach(node => {
+        restoredPositions[node.id] = {
+          x: node.style.x,
+          y: node.style.y
+        };
+        log(`  ${node.id}: (${node.style.x.toFixed(2)}, ${node.style.y.toFixed(2)})`, 'info');
+      });
+
+      log('\nPosition comparison:', 'info');
+      let totalDrift = 0;
+      let maxDrift = 0;
+      let maxDriftNode = '';
+
+      Object.keys(originalPositions).forEach(id => {
+        const orig = originalPositions[id];
+        const rest = restoredPositions[id];
+
+        const drift = Math.sqrt(
+          Math.pow(orig.x - rest.x, 2) +
+          Math.pow(orig.y - rest.y, 2)
+        );
+
+        totalDrift += drift;
+        if (drift > maxDrift) {
+          maxDrift = drift;
+          maxDriftNode = id;
+        }
+
+        const color = drift < 10 ? 'success' : drift < 50 ? 'warning' : 'error';
+        log(`  ${id}: ${drift.toFixed(2)}px drift`, color);
+      });
+
+      const avgDrift = totalDrift / Object.keys(originalPositions).length;
+
+      logSection('FINAL RESULTS');
+      log(`Average position drift: ${avgDrift.toFixed(2)}px`, avgDrift < 50 ? 'success' : 'warning');
+      log(`Maximum position drift: ${maxDrift.toFixed(2)}px (${maxDriftNode})`, maxDrift < 50 ? 'success' : 'warning');
+
+      // Determine if solution works
+      if (avgDrift < 10) {
+        log('\n✓✓✓ EXCELLENT: Positions nearly perfectly preserved!', 'success');
+        log('   Solution: Just include style.x/y in serialization', 'success');
+      } else if (avgDrift < 50) {
+        log('\n✓ ACCEPTABLE: Positions mostly preserved with minor drift', 'success');
+        log('   Solution: Include style.x/y, accept small drift', 'success');
+      } else if (avgDrift < 200) {
+        log('\n⚠ PARTIAL: Significant drift, positions approximate', 'warning');
+        log('   May need additional fixes (layout config, pinning)', 'warning');
+      } else {
+        log('\n✗ FAILED: Positions not preserved, too much drift', 'error');
+        log('   Need alternative approach (fixed layout, pinning API)', 'error');
+      }
+
+      logSection('CONCLUSION');
+      log('Test complete. See results above.', 'info');
+    }
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    window.onload = () => {
+      log('Test page loaded. Click "Run Complete Test" to begin.', 'info');
+    };
+  </script>
+</body>
+</html>
