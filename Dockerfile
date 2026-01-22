@@ -29,9 +29,12 @@ USER node
 # Set working directory
 WORKDIR /home/node/app
 
+# Install pnpm
+RUN npm install -g pnpm
+
 # Install dependencies, generate grammar, and reduce size of kuzu node module
 # Done in one step to reduce image size
-RUN npm install &&\
+RUN pnpm install --frozen-lockfile &&\
     if [ "$SKIP_GRAMMAR" != "true" ] ; then npm run generate-grammar-prod ; else echo "Skipping grammar generation" ; fi &&\
     rm -rf node_modules/kuzu/prebuilt node_modules/kuzu/kuzu-source
 

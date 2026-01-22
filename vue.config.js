@@ -12,7 +12,11 @@ module.exports = defineConfig({
     onAfterSetupMiddleware: configureAPI,
     historyApiFallback: false,
   },
-  transpileDependencies: true,
+  // In development: only transpile dependencies that need it (fast startup)
+  // In production: transpile all dependencies for maximum compatibility
+  transpileDependencies: process.env.NODE_ENV === 'production'
+    ? true
+    : ['@antv', 'antlr4ng'],
   publicPath: BASE_URL,
   chainWebpack: (config) => {
     // Exclude Kuzu WASM worker from Terser minification (has malformed JS)
@@ -43,6 +47,12 @@ module.exports = defineConfig({
     },
   },
   configureWebpack: {
+    cache: {
+      type: 'filesystem',
+      buildDependencies: {
+        config: [__filename],
+      },
+    },
     module: {
       rules: [
         {
@@ -54,7 +64,24 @@ module.exports = defineConfig({
     plugins: [
       new MonacoWebpackPlugin({
         publicPath: BASE_URL,
-        filename: '[name].worker.js'
+        filename: '[name].worker.js',
+        // Only include languages needed for Cypher editor
+        // This dramatically reduces build time and bundle size
+        languages: ['cypher'],
+        // Disable features not needed for a simple query editor
+        features: [
+          'bracketMatching',
+          'clipboard',
+          'contextmenu',
+          'find',
+          'folding',
+          'hover',
+          'indentation',
+          'multicursor',
+          'suggest',
+          'wordHighlighter',
+          'wordOperations',
+        ],
       }),
       new CopyWebpackPlugin({
         patterns: [

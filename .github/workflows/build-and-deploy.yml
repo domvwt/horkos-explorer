@@ -44,12 +44,16 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: "20"
+      - name: Prebuild - install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
       - name: Prebuild - update dev version
         if: ${{ github.event_name == 'schedule' || github.event.inputs.isNightly == 'true' || github.ref_name == 'next' }}
         working-directory: scripts
         run: node UpdateDevVersion
       - name: Prebuild - install dependencies
-        run: npm install
+        run: pnpm install --frozen-lockfile
       - name: Prebuild - generate grammar
         run: npm run generate-grammar-prod
       - name: Prebuild - build app
@@ -142,8 +146,12 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: "20"
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
       - name: Install dependencies
-        run: npm install
+        run: pnpm install --frozen-lockfile
       - name: Upload current directory
         uses: actions/upload-artifact@v4
         with:
@@ -163,8 +171,12 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: "20"
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
       - name: Install dependencies
-        run: npm install
+        run: pnpm install --frozen-lockfile
       - name: Upload current directory
         uses: actions/upload-artifact@v4
         with:
@@ -184,8 +196,12 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: "20"
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
       - name: Install dependencies
-        run: npm install
+        run: pnpm install --frozen-lockfile
       - name: Upload current directory
         uses: actions/upload-artifact@v4
         with:
@@ -205,8 +221,12 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: "20"
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
       - name: Install dependencies
-        run: npm install
+        run: pnpm install --frozen-lockfile
       - name: Upload current directory
         uses: actions/upload-artifact@v4
         with:
