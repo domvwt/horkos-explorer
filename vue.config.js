@@ -14,6 +14,17 @@ module.exports = defineConfig({
   },
   transpileDependencies: true,
   publicPath: BASE_URL,
+  chainWebpack: (config) => {
+    // Exclude Kuzu WASM worker from Terser minification (has malformed JS)
+    config.optimization.minimizer('terser').tap((args) => {
+      if (args[0]) {
+        args[0].exclude = args[0].exclude
+          ? [].concat(args[0].exclude, /kuzu_wasm_worker\.js$/)
+          : /kuzu_wasm_worker\.js$/;
+      }
+      return args;
+    });
+  },
   pages: {
     index: {
       entry: "src/main.js",

@@ -11,18 +11,20 @@ const MODES = CONSTANTS.MODES;
 const READ_WRITE_MODE = MODES.READ_WRITE;
 
 let kuzu;
-if (process.env.NODE_ENV !== "production") {
-  const kuzuPath = path.join(
-    __dirname,
-    "..",
-    "..",
-    "..",
-    "kuzu",
-    "tools",
-    "nodejs_api",
-    "build/"
-  );
-  kuzu = require(kuzuPath);
+// Try submodule build first (local dev), fall back to node_modules (Docker)
+const submodulePath = path.join(
+  __dirname,
+  "..",
+  "..",
+  "..",
+  "kuzu",
+  "tools",
+  "nodejs_api",
+  "build/"
+);
+const submoduleIndexPath = path.join(submodulePath, "index.js");
+if (fs.existsSync(submoduleIndexPath)) {
+  kuzu = require(submodulePath);
 } else {
   kuzu = require("kuzu");
 }
