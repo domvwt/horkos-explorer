@@ -17,50 +17,38 @@
 
       <div class="share-modal-body">
         <p class="share-modal-description">
-          Copy this URL to share your investigation. It includes all queries, expanded nodes, and hidden elements.
+          Copy this code to share your investigation. Paste it into the Import Investigation dialog to restore.
         </p>
 
-        <!-- URL Size Warning -->
-        <div
-          v-if="urlTooLarge"
-          class="alert alert-warning"
-        >
-          <i class="fa-solid fa-triangle-exclamation" />
-          <strong>Warning:</strong> This URL is very long ({{ urlLength }} chars).
-          Some browsers may not support URLs longer than 2000 characters.
-        </div>
-
-        <!-- Shareable URL -->
-        <div class="share-url-container">
-          <input
-            ref="urlInput"
-            :value="url"
-            type="text"
+        <div class="share-code-container">
+          <textarea
+            ref="codeInput"
+            :value="exportCode"
             class="form-control"
             readonly
+            rows="4"
             @focus="$event.target.select()"
-          >
+          />
           <button
             class="btn btn-primary"
-            :class="{ 'btn-success': urlCopied }"
-            @click="copyUrl"
+            :class="{ 'btn-success': codeCopied }"
+            @click="copyCode"
           >
             <i
               class="fa-solid"
-              :class="urlCopied ? 'fa-check' : 'fa-copy'"
+              :class="codeCopied ? 'fa-check' : 'fa-copy'"
             />
-            {{ urlCopied ? 'Copied!' : 'Copy' }}
+            {{ codeCopied ? 'Copied!' : 'Copy Code' }}
           </button>
         </div>
 
-        <!-- State Info -->
         <div class="share-state-info">
           <small class="text-muted">
             <i class="fa-solid fa-info-circle" />
-            This URL contains your current query
+            {{ exportCodeLength }} characters
             <span v-if="hiddenCount > 0">
-              and {{ hiddenCount }} hidden elements
-            </span>.
+              | {{ hiddenCount }} hidden elements
+            </span>
           </small>
         </div>
       </div>
@@ -85,16 +73,12 @@ export default {
       type: Boolean,
       required: true,
     },
-    url: {
+    exportCode: {
       type: String,
       required: true,
     },
-    urlLength: {
+    exportCodeLength: {
       type: Number,
-      required: true,
-    },
-    urlTooLarge: {
-      type: Boolean,
       required: true,
     },
     hiddenCount: {
@@ -104,37 +88,32 @@ export default {
   },
   emits: ['close'],
   data: () => ({
-    urlCopied: false,
+    codeCopied: false,
   }),
   watch: {
     visible(newVal) {
       if (newVal) {
-        // Reset copied state when modal opens
-        this.urlCopied = false;
-        // Auto-select URL after modal renders
+        this.codeCopied = false;
         this.$nextTick(() => {
-          if (this.$refs.urlInput) {
-            this.$refs.urlInput.select();
+          if (this.$refs.codeInput) {
+            this.$refs.codeInput.select();
           }
         });
       }
     }
   },
   methods: {
-    async copyUrl() {
+    async copyCode() {
       try {
-        await navigator.clipboard.writeText(this.url);
-        this.urlCopied = true;
-
-        // Reset copied state after 2 seconds
+        await navigator.clipboard.writeText(this.exportCode);
+        this.codeCopied = true;
         setTimeout(() => {
-          this.urlCopied = false;
+          this.codeCopied = false;
         }, 2000);
       } catch (error) {
-        console.error('Failed to copy URL:', error);
-        // Fallback: select the text so user can manually copy
-        if (this.$refs.urlInput) {
-          this.$refs.urlInput.select();
+        console.error('Failed to copy code:', error);
+        if (this.$refs.codeInput) {
+          this.$refs.codeInput.select();
         }
       }
     },
@@ -160,7 +139,7 @@ export default {
     background-color: var(--bs-body-bg);
     border-radius: 0.5rem;
     box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.3);
-    max-width: 600px;
+    max-width: 550px;
     width: 100%;
     max-height: 90vh;
     overflow: auto;
@@ -223,38 +202,22 @@ export default {
       font-size: 0.95rem;
     }
 
-    .alert {
+    .share-code-container {
       display: flex;
-      align-items: flex-start;
-      gap: 0.5rem;
-      padding: 0.75rem;
-      border-radius: 0.375rem;
-      margin-bottom: 1rem;
-      background-color: rgba(255, 193, 7, 0.1);
-      border: 1px solid rgba(255, 193, 7, 0.3);
-      color: var(--bs-body-text);
-
-      i {
-        color: #ffc107;
-        font-size: 1rem;
-        margin-top: 0.125rem;
-      }
-    }
-
-    .share-url-container {
-      display: flex;
-      gap: 0.5rem;
+      flex-direction: column;
+      gap: 0.75rem;
       margin-bottom: 1rem;
 
-      input {
-        flex: 1;
+      textarea {
         font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
-        font-size: 0.85rem;
-        padding: 0.5rem 0.75rem;
+        font-size: 0.8rem;
+        padding: 0.75rem;
         border: 1px solid var(--bs-border-color);
         border-radius: 0.375rem;
         background-color: var(--bs-body-bg-secondary);
         color: var(--bs-body-text);
+        resize: none;
+        word-break: break-all;
 
         &:focus {
           outline: none;
@@ -264,6 +227,7 @@ export default {
       }
 
       button {
+        align-self: flex-start;
         white-space: nowrap;
         transition: all 0.2s;
 
@@ -279,19 +243,18 @@ export default {
     }
 
     .share-state-info {
-      padding: 0.75rem;
+      padding: 0.5rem 0.75rem;
       background-color: var(--bs-body-bg-secondary);
       border-radius: 0.375rem;
       border: 1px solid var(--bs-border-color);
 
       small {
         display: flex;
-        align-items: flex-start;
+        align-items: center;
         gap: 0.5rem;
 
         i {
           color: var(--bs-body-bg-accent);
-          margin-top: 0.125rem;
         }
       }
     }

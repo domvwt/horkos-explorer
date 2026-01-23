@@ -50,6 +50,12 @@ import { mapStores } from "pinia";
 import Kuzu from "@/utils/KuzuWasm";
 import { LOADING_STATUS, LLM_PROVIDERS } from "@/utils/Constants";
 
+// Constants for investigation restoration timing
+const RESTORATION_INITIAL_DELAY_MS = 100;
+const RESTORATION_GRAPH_MOUNT_DELAY_MS = 300;
+const RESTORATION_RETRY_DELAY_MS = 200;
+const RESTORATION_MAX_RETRIES = 5;
+
 export default {
   name: "ShellCell",
   components: {
@@ -377,12 +383,11 @@ export default {
 
       // Wait for ResultContainer to be created
       await this.$nextTick();
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, RESTORATION_INITIAL_DELAY_MS));
 
       // Get the result container
       const resultContainer = this.$refs[this.getRefName(0)];
       if (!resultContainer || !resultContainer[0]) {
-        console.error('[ShellCell] Failed to get result container reference');
         return;
       }
 
@@ -405,20 +410,18 @@ export default {
 
       // Wait for ResultGraph component to be mounted (v-if="queryResult" check)
       await this.$nextTick();
-      await new Promise(resolve => setTimeout(resolve, 300));
+      await new Promise(resolve => setTimeout(resolve, RESTORATION_GRAPH_MOUNT_DELAY_MS));
 
-      // Now try to get the result graph reference
+      // Now try to get the result graph reference with retry logic
       let resultGraph = resultContainer[0].$refs.resultGraph;
       let retries = 0;
-      while (!resultGraph && retries < 5) {
-        await new Promise(resolve => setTimeout(resolve, 200));
+      while (!resultGraph && retries < RESTORATION_MAX_RETRIES) {
+        await new Promise(resolve => setTimeout(resolve, RESTORATION_RETRY_DELAY_MS));
         resultGraph = resultContainer[0].$refs.resultGraph;
         retries++;
       }
 
       if (!resultGraph) {
-        console.error('[ShellCell] Failed to get result graph reference after', retries, 'attempts');
-        console.error('[ShellCell] ResultContainer refs:', Object.keys(resultContainer[0].$refs));
         return;
       }
 

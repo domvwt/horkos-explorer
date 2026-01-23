@@ -3,14 +3,23 @@
     class="shell-main-view__wrapper"
     :class="{ 'is-maximized': maximizedCellIndex !== -1 }"
   >
-    <div v-if="maximizedCellIndex < 0 && !isReadOnly">
+    <div v-if="maximizedCellIndex < 0">
       <div class="d-flex align-items-center gap-3 m-4">
         <button
+          v-if="!isReadOnly"
           type="button"
           class="btn btn-link text-body p-0 text-decoration-none"
           @click="addCell"
         >
           + Click here to add a new cell
+        </button>
+        <button
+          type="button"
+          class="btn btn-outline-secondary btn-sm"
+          @click="showImportModal = true"
+        >
+          <i class="fa-solid fa-file-import" />
+          Import Investigation
         </button>
         <div class="flex-grow-1 border-top border-secondary" />
       </div>
@@ -29,20 +38,28 @@
       @minimize="minimize()"
       @reload-schema="reloadSchema()"
     />
+
+    <!-- Import Investigation Modal -->
+    <ImportModal
+      :visible="showImportModal"
+      @close="showImportModal = false"
+      @import="handleImportInvestigation"
+    />
   </div>
 </template>
 
 <script lang="js">
 import ShellCell from "./ShellCell.vue";
+import ImportModal from "./ImportModal.vue";
 import { v4 as uuidv4 } from 'uuid';
 import Axios from "@/utils/AxiosWrapper";
 import { MODES } from "@/utils/Constants";
 import { useModeStore } from "@/store/ModeStore";
-import { getStateFromUrl } from "@/utils/InvestigationState";
 export default {
   name: "ShellMainView",
   components: {
     ShellCell,
+    ImportModal,
   },
   props: {
     schema: {
@@ -74,6 +91,7 @@ export default {
     isDemo: false,
     maximizedCellIndex: -1,
     isRestoringInvestigation: false,
+    showImportModal: false,
   }),
   computed: {
     isReadOnly() {
@@ -90,19 +108,11 @@ export default {
       // Ignore
     }
 
-    // Check for investigation state in URL
-    const investigationState = getStateFromUrl();
-
-    if (investigationState) {
-      // Restore investigation from URL
-      await this.restoreInvestigation(investigationState);
-    } else {
-      // Normal loading - load demo or history
-      this.$nextTick(() => {
-        this.loadDemoCell();
-      });
-      this.loadCellsFromHistory();
-    }
+    // Normal loading - load demo or history
+    this.$nextTick(() => {
+      this.loadDemoCell();
+    });
+    this.loadCellsFromHistory();
 
     document.addEventListener("keydown", this.handleKeyDown);
   },
@@ -247,17 +257,15 @@ MATCH (a)-[r]->(b) RETURN * LIMIT 5;`,
     },
 
     /**
-     * Restore investigation state from URL parameter
-     * Loads saved graph data directly without re-executing queries
+     * Restore investigation state from import
+     * Refetches full node/edge data from database using minimal state
      */
     async restoreInvestigation(state) {
       if (!state) {
-        console.warn('[ShellMainView] Invalid investigation state');
         return;
       }
 
-      if (!state.graphData || !state.graphData.nodes || state.graphData.nodes.length === 0) {
-        console.error('[ShellMainView] Invalid investigation state: missing graph data');
+      if (!state.minimalNodes || state.minimalNodes.length === 0) {
         return;
       }
 
@@ -267,9 +275,9 @@ MATCH (a)-[r]->(b) RETURN * LIMIT 5;`,
         // Use the first (default) cell for restoration
         await this.$nextTick();
 
-        const cell = this.$refs[this.getCellRef(0)][0];
+        const cellRef = this.getCellRef(0);
+        const cell = this.$refs[cellRef]?.[0];
         if (!cell) {
-          console.error('[ShellMainView] Failed to get cell reference for restoration');
           return;
         }
 
@@ -290,10 +298,23 @@ MATCH (a)-[r]->(b) RETURN * LIMIT 5;`,
         await cell.loadSavedGraphData(state);
 
       } catch (error) {
-        console.error('[ShellMainView] Failed to restore investigation:', error);
+        // Silently ignore restoration errors
       } finally {
         this.isRestoringInvestigation = false;
       }
+    },
+
+    /**
+     * Handle import investigation from modal
+     * Receives parsed state from ImportModal component
+     */
+    async handleImportInvestigation(state) {
+      if (!state) {
+        return;
+      }
+
+      // Use the same restoration flow
+      await this.restoreInvestigation(state);
     },
   },
 
