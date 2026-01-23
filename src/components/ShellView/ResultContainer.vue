@@ -97,7 +97,7 @@
                 v-for="layout in graphLayouts"
                 :key="layout.key"
                 class="layout-dropdown__item"
-                :class="{ 'layout-dropdown__item--active': (settingsStore.graphLayout || 'd3-force') === layout.key }"
+                :class="{ 'layout-dropdown__item--active': currentLayout === layout.key }"
                 @click.stop="changeLayout(layout.key)"
               >
                 <i
@@ -259,15 +259,12 @@ export default {
   }),
   computed: {
     ...mapStores(useModeStore, useSettingsStore),
-    currentLayoutIcon() {
-      const currentLayout = this.$refs.resultGraph?.getCurrentLayout() || this.settingsStore.graphLayout || 'd3-force';
-      const layout = Object.values(GRAPH_LAYOUTS).find(l => l.key === currentLayout);
-      return layout ? layout.icon : 'fa-circle-nodes';
+    currentLayout() {
+      return this.settingsStore.graphLayout || 'd3-force';
     },
-    currentLayoutLabel() {
-      const currentLayout = this.$refs.resultGraph?.getCurrentLayout() || this.settingsStore.graphLayout || 'd3-force';
-      const layout = Object.values(GRAPH_LAYOUTS).find(l => l.key === currentLayout);
-      return layout ? layout.label : 'Force-Directed';
+    currentLayoutIcon() {
+      const layout = Object.values(GRAPH_LAYOUTS).find(l => l.key === this.currentLayout);
+      return layout ? layout.icon : 'fa-circle-nodes';
     },
   },
   watch: {
@@ -292,11 +289,13 @@ export default {
     window.addEventListener('mousemove', this.handleResize);
     window.addEventListener('mouseup', this.stopResize);
     window.addEventListener('resize', this.handleWindowResize);
+    document.addEventListener('click', this.handleClickOutside);
   },
   beforeUnmount() {
     window.removeEventListener('mousemove', this.handleResize);
     window.removeEventListener('mouseup', this.stopResize);
     window.removeEventListener('resize', this.handleWindowResize);
+    document.removeEventListener('click', this.handleClickOutside);
   },
   methods: {
     handleDataChange(schema, queryResult, errorMessage, queryInfo = null) {
@@ -452,6 +451,14 @@ export default {
         this.$refs.resultGraph.changeLayout(layoutKey);
       }
       this.layoutDropdownOpen = false;
+    },
+    handleClickOutside(event) {
+      if (this.layoutDropdownOpen) {
+        const dropdown = this.$el.querySelector('.layout-dropdown-trigger');
+        if (dropdown && !dropdown.contains(event.target)) {
+          this.layoutDropdownOpen = false;
+        }
+      }
     },
   },
 };
@@ -667,12 +674,7 @@ button {
     }
 
     &--active {
-      background-color: var(--bs-body-bg-accent);
-      font-weight: 500;
-
-      i {
-        color: var(--bs-primary);
-      }
+      font-weight: bold;
     }
 
     i {

@@ -1953,12 +1953,14 @@ export default {
         return;
       }
 
+      const previousLayout = this.currentLayout;
+
       // Get new layout configuration
       const edges = this.g6Graph.getEdgeData() || [];
-      const nodes = this.g6Graph.getNodeData() || [];
+      const nodeData = this.g6Graph.getNodeData() || [];
       const layoutConfig = getLayoutConfig(layoutType, {
         edges,
-        nodeCount: nodes.length,
+        nodeCount: nodeData.length,
         isLayoutChange: true,
       });
 
@@ -1967,6 +1969,20 @@ export default {
         const currentLayoutInstance = this.g6Graph.getLayout();
         if (currentLayoutInstance && currentLayoutInstance.simulation) {
           currentLayoutInstance.simulation.stop();
+        }
+
+        // Update drag behavior if switching to/from force layout
+        const wasForce = previousLayout === 'd3-force';
+        const isForce = layoutType === 'd3-force';
+        if (wasForce !== isForce) {
+          // Remove old drag behavior and add new one
+          if (wasForce) {
+            this.g6Graph.removeBehaviors(['drag-element-force']);
+            this.g6Graph.addBehaviors([{ type: 'drag-element' }]);
+          } else {
+            this.g6Graph.removeBehaviors(['drag-element']);
+            this.g6Graph.addBehaviors([{ type: 'drag-element-force', fixed: true }]);
+          }
         }
 
         // Update layout
@@ -1981,10 +1997,38 @@ export default {
         // Save preference to settings store
         this.settingsStore.setGraphLayout(layoutType);
 
-        // Fit to view after layout animation completes
+        // After layout animation, center on graph and only zoom out if needed
         setTimeout(() => {
-          if (this.g6Graph) {
-            this.g6Graph.fitView({ padding: 50 });
+          if (!this.g6Graph) return;
+
+          const canvas = this.g6Graph.getCanvas();
+          const [canvasWidth, canvasHeight] = canvas.getSize();
+
+          // Calculate graph bounds from node positions
+          const nodes = this.g6Graph.getNodeData();
+          if (nodes.length > 0) {
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            nodes.forEach(node => {
+              const x = node.style?.x ?? node.x ?? 0;
+              const y = node.style?.y ?? node.y ?? 0;
+              const size = node.style?.size ?? node.size ?? 50;
+              minX = Math.min(minX, x - size / 2);
+              minY = Math.min(minY, y - size / 2);
+              maxX = Math.max(maxX, x + size / 2);
+              maxY = Math.max(maxY, y + size / 2);
+            });
+
+            const padding = 50;
+            const graphWidth = maxX - minX;
+            const graphHeight = maxY - minY;
+
+            // Only zoom out if graph exceeds canvas bounds, otherwise just center
+            if (graphWidth > canvasWidth - padding * 2 || graphHeight > canvasHeight - padding * 2) {
+              this.g6Graph.fitView({ padding });
+            } else {
+              // Center on graph without changing zoom - use fitCenter
+              this.g6Graph.fitCenter();
+            }
           }
         }, 500);
       } catch (e) {
