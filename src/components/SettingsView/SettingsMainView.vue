@@ -12,27 +12,29 @@
         >
           <!-- Viewing Options -->
           <h2> Viewing Options </h2>
-          <div class="settings-row">
-            <h4>Theme</h4>
-            <div>
-              <button
-                :class="{
-                  'active-btn': modeStore.theme === 'vs-light',
-                  'inactive-btn': modeStore.theme !== 'vs-light'
-                }"
-                @click="setTheme('vs-light')"
-              >
-                Light
-              </button>
-              <button
-                :class="{
-                  'active-btn': modeStore.theme === 'vs-dark',
-                  'inactive-btn': modeStore.theme !== 'vs-dark'
-                }"
-                @click="setTheme('vs-dark')"
-              >
-                Dark
-              </button>
+          <div class="settings-group settings-group-rows">
+            <div class="settings-row">
+              <h4>Theme</h4>
+              <div>
+                <button
+                  :class="{
+                    'active-btn': modeStore.theme === 'vs-light',
+                    'inactive-btn': modeStore.theme !== 'vs-light'
+                  }"
+                  @click="setTheme('vs-light')"
+                >
+                  Light
+                </button>
+                <button
+                  :class="{
+                    'active-btn': modeStore.theme === 'vs-dark',
+                    'inactive-btn': modeStore.theme !== 'vs-dark'
+                  }"
+                  @click="setTheme('vs-dark')"
+                >
+                  Dark
+                </button>
+              </div>
             </div>
           </div>
           <hr>
@@ -173,90 +175,96 @@
 
           <!-- Performance Options -->
           <h3> Performance Options </h3>
-          <div class="settings-row">
-            <h4>
-              Max number of nodes to draw for graph visualization
-            </h4>
-            <input
-              v-model="currentSettings.performance.maxNumberOfNodes"
-              type="number"
-              min="1"
-              max="2000"
-              class="settings-input"
-              placeholder="500"
-              required
-            >
-          </div>
-          <div class="settings-row">
-            <h4>
-              Max number of nodes to display labels
-            </h4>
-            <input
-              v-model="currentSettings.performance.maxNumberOfNodesWithLabels"
-              type="number"
-              min="1"
-              max="2000"
-              class="settings-input"
-              placeholder="200"
-              required
-            >
-          </div>
-          <div class="settings-row">
-            <h4>
-              Max number of nodes to expand on double click
-            </h4>
-            <input
-              v-model="currentSettings.performance.maxNumberOfNodesToExpand"
-              type="number"
-              min="5"
-              max="1000"
-              class="settings-input"
-              placeholder="50"
-              required
-            >
+          <div class="settings-group settings-group-rows">
+            <div class="settings-row">
+              <h4>
+                Max number of nodes to draw for graph visualization
+              </h4>
+              <input
+                v-model="currentSettings.performance.maxNumberOfNodes"
+                type="number"
+                min="1"
+                max="2000"
+                class="settings-input"
+                placeholder="500"
+                required
+              >
+            </div>
+            <div class="settings-row">
+              <h4>
+                Max number of nodes to display labels
+              </h4>
+              <input
+                v-model="currentSettings.performance.maxNumberOfNodesWithLabels"
+                type="number"
+                min="1"
+                max="2000"
+                class="settings-input"
+                placeholder="200"
+                required
+              >
+            </div>
+            <div class="settings-row">
+              <h4>
+                Max number of nodes to expand on double click
+              </h4>
+              <input
+                v-model="currentSettings.performance.maxNumberOfNodesToExpand"
+                type="number"
+                min="5"
+                max="1000"
+                class="settings-input"
+                placeholder="50"
+                required
+              >
+            </div>
           </div>
           <hr>
 
           <!-- Schema View Options -->
           <h2> Schema View Options </h2>
-          <div class="settings-row">
-            <h4> Show relationship labels </h4>
-            <div>
-              <button
-                :class="{
-                  'active-btn': currentSettings.schemaView.showRelLabels === showRelLabelsOptions.HOVER,
-                  'inactive-btn': currentSettings.schemaView.showRelLabels !== showRelLabelsOptions.HOVER
-                }"
-                @click="currentSettings.schemaView.showRelLabels = showRelLabelsOptions.HOVER"
-              >
-                On hover or click
-              </button>
-              <button
-                :class="{
-                  'active-btn': currentSettings.schemaView.showRelLabels === showRelLabelsOptions.ALWAYS,
-                  'inactive-btn': currentSettings.schemaView.showRelLabels !== showRelLabelsOptions.ALWAYS
-                }"
-                @click="currentSettings.schemaView.showRelLabels = showRelLabelsOptions.ALWAYS"
-              >
-                Always
-              </button>
+          <div class="settings-group settings-group-rows">
+            <div class="settings-row">
+              <h4> Show relationship labels </h4>
+              <div>
+                <button
+                  :class="{
+                    'active-btn': currentSettings.schemaView.showRelLabels === showRelLabelsOptions.HOVER,
+                    'inactive-btn': currentSettings.schemaView.showRelLabels !== showRelLabelsOptions.HOVER
+                  }"
+                  @click="currentSettings.schemaView.showRelLabels = showRelLabelsOptions.HOVER"
+                >
+                  On hover or click
+                </button>
+                <button
+                  :class="{
+                    'active-btn': currentSettings.schemaView.showRelLabels === showRelLabelsOptions.ALWAYS,
+                    'inactive-btn': currentSettings.schemaView.showRelLabels !== showRelLabelsOptions.ALWAYS
+                  }"
+                  @click="currentSettings.schemaView.showRelLabels = showRelLabelsOptions.ALWAYS"
+                >
+                  Always
+                </button>
+              </div>
             </div>
           </div>
           <hr>
 
           <!-- Table View Options -->
           <h2> Table View Options </h2>
-          <div class="settings-row">
-            <h4> Number of rows per page </h4>
-            <input
-              v-model="currentSettings.tableView.rowsPerPage"
-              type="number"
-              min="1"
-              max="500"
-              class="settings-input"
-              placeholder="10"
-              required
-            >
+          <div class="settings-group settings-group-rows">
+            <div class="settings-row">
+              <h4> Number of rows per page </h4>
+              <input
+                v-model="currentSettings.tableView.rowsPerPage"
+                type="number"
+                min="1"
+                max="500"
+                class="settings-input"
+                placeholder="10"
+                required
+              >
+            </div>
           </div>
           <hr>
 
@@ -413,15 +421,13 @@
 
         <div class="modal-footer settings-footer d-flex justify-content-end">
           <button
-            type="button"
-            class="btn btn-outline-secondary rounded-pill px-4 py-2"
+            class="btn btn-secondary"
             @click="hideModal()"
           >
             Close
           </button>
           <button
-            type="button"
-            class="btn-save rounded-pill"
+            class="btn btn-primary"
             @click="saveAndHideModal()"
           >
             Save
@@ -629,29 +635,32 @@ span.pull-left {
   width: 100%;
   background-color: var(--bs-body-bg-secondary);
   border: 1px solid var(--bs-body-inactive);
-  padding: 2rem;
+  padding: 1.25rem;
   max-height: calc(100vh - 200px);
   overflow-y: auto;
 
   h2 {
     font-weight: 500;
-    font-size: 1.5rem;
+    font-size: 1.25rem;
+    margin-bottom: 0.75rem;
   }
 
   h3 {
-    font-weight: 500;
-    font-size: 0.875rem;
-    padding: 0.5rem;
+    font-weight: 600;
+    font-size: 1rem;
+    margin-top: 1.25rem;
+    margin-bottom: 0.75rem;
   }
 
   h4 {
-    font-weight: 300;
-    font-size: 0.875rem;
+    font-weight: 400;
+    font-size: 1rem;
+    margin: 0;
   }
 
   span {
-    font-weight: 300;
-    font-size: 0.875rem;
+    font-weight: 400;
+    font-size: 1rem;
   }
 
   table {
@@ -662,15 +671,18 @@ span.pull-left {
 
   th {
     padding: 0.5rem 1rem;
+    font-size: 1rem;
+    font-weight: 500;
   }
 
   td {
     padding: 0.5rem 1rem;
+    font-size: 1rem;
   }
 
   hr {
     height: 1px;
-    margin: 1rem 0;
+    margin: 1.25rem 0;
     background-color: var(--bs-body-inactive);
     border: none;
   }
@@ -684,7 +696,7 @@ span.pull-left {
 
   label {
     color: var(--bs-body-text);
-    font-size: 0.875rem;
+    font-size: 1rem;
     cursor: pointer;
   }
 
@@ -724,6 +736,14 @@ span.pull-left {
   background-color: var(--bs-body-bg);
 }
 
+.settings-group-rows {
+  flex-direction: column;
+
+  .settings-row {
+    padding: 0.5rem 1rem;
+  }
+}
+
 .switch-slider {
   position: absolute;
   top: 0;
@@ -746,19 +766,26 @@ span.pull-left {
   display: flex;
   flex-direction: row;
   justify-content: space-between;
+  align-items: center;
   border-radius: 1rem;
-  padding: 0.75rem 1rem;
+  padding: 0.5rem 0;
   width: 100%;
+
+  > div:last-child {
+    min-width: 200px;
+    text-align: right;
+  }
 }
 
 .settings-input {
   background-color: var(--bs-body-bg);
   border: 1px solid var(--bs-body-inactive);
   color: var(--bs-body-text);
-  font-size: 0.875rem;
+  font-size: 1rem;
   border-radius: 0.5rem;
-  padding: 0.5rem 2rem;
-
+  padding: 0.375rem 0.75rem;
+  width: 200px;
+  min-width: 200px;
 }
 
 .active-btn {
@@ -784,11 +811,6 @@ span.pull-left {
   border-radius: 0 0 1rem 1rem;
   display: flex;
   gap: 0.75rem;
-}
-
-.btn-save {
-  background-color: var(--bs-body-bg-accent);
-  padding: 0.5rem 1rem;
-  border: 0px;
+  padding: 1.25rem;
 }
 </style>
