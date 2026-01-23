@@ -325,7 +325,7 @@ export default {
 
 <style lang="scss" scoped>
 .node-search__wrapper {
-  padding: 0.375rem 0.5rem 0.25rem;
+  padding: 0.5rem 0.75rem;
   height: 100%;
   overflow-y: auto;
 }
@@ -342,9 +342,9 @@ export default {
 }
 
 .generated-query-section {
-  margin-top: 0.75rem;
+  margin-top: 1rem;
   padding-top: 0.75rem;
-  border-top: 1px solid var(--bs-border-color);
+  border-top: 1px solid var(--bs-body-inactive);
 }
 
 .query-toggle {
@@ -363,7 +363,7 @@ export default {
 .generated-query {
   padding: 0.5rem;
   background-color: var(--bs-body-bg-secondary);
-  border: 1px solid var(--bs-border-color);
+  border: 1px solid var(--bs-body-inactive);
   border-radius: 0.25rem;
   font-family: "Monaco", "Menlo", "Ubuntu Mono", "Consolas", "source-code-pro", monospace;
   font-size: 0.75rem;

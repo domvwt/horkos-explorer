@@ -64,12 +64,24 @@
           <div
             v-show="activeMode === 'cypher'"
             class="mode-content mode-content--with-actions"
+            :class="{ 'mode-content--expanded': isEditorExpanded }"
           >
-            <div ref="editor" class="editor-container" />
+            <div
+              ref="editor"
+              class="editor-container"
+              :class="{ 'editor-container--expanded': isEditorExpanded }"
+            />
             <div class="editor-actions">
               <button class="run-button" @click="evaluateCell">
                 <i class="fa-solid fa-play" />
                 Run
+              </button>
+              <button
+                class="expand-button"
+                :title="isEditorExpanded ? 'Collapse editor' : 'Expand editor'"
+                @click="toggleEditorExpanded"
+              >
+                <i :class="isEditorExpanded ? 'fa-solid fa-compress' : 'fa-solid fa-expand'" />
               </button>
             </div>
           </div>
@@ -94,6 +106,7 @@
         </main>
       </div>
     </div>
+
   </div>
 </template>
 
@@ -149,6 +162,7 @@ export default {
       gptQuestion: "",
       observer: null,
       editorResizeDebounce: null,
+      isEditorExpanded: false,
     }
   },
 
@@ -302,8 +316,12 @@ export default {
         minimap: {
           enabled: false,
         },
-        fontSize: 16,
+        fontSize: 14,
         scrollBeyondLastLine: false,
+        padding: {
+          top: 8,
+          bottom: 8,
+        },
       });
     },
     toggleMaximize() {
@@ -331,7 +349,15 @@ export default {
       } else if (this.activeMode === 'cypher') {
         this.evaluateCypher();
       }
-      // For search mode, the NodeSearch component handles execution via handleSearchQuery
+      // Collapse editor on run so results are visible
+      if (this.isEditorExpanded) {
+        this.isEditorExpanded = false;
+        this.$nextTick(() => {
+          if (this.editor) {
+            this.editor.layout();
+          }
+        });
+      }
     },
     handleSearchQuery(queryData) {
       // When search generates a query, execute it with params
@@ -359,6 +385,15 @@ export default {
       if (history.cypherQuery) {
         this.setEditorContent(history.cypherQuery);
       }
+    },
+    toggleEditorExpanded() {
+      this.isEditorExpanded = !this.isEditorExpanded;
+      // Trigger Monaco layout update after the CSS transition
+      this.$nextTick(() => {
+        if (this.editor) {
+          this.editor.layout();
+        }
+      });
     },
   },
 }
@@ -479,7 +514,7 @@ $margin: 1rem;
 }
 
 main {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   background-color: var(--bs-body-shell);
   padding: 0.5rem 0.75rem;
   overflow: hidden;
@@ -496,18 +531,19 @@ main {
       gap: 0.75rem;
     }
 
+    &.mode-content--expanded {
+      height: calc(100vh - 120px);
+    }
+
     .editor-container {
-      flex: 1;
-      min-height: 100px;
+      flex: 0 0 auto;
+      height: 150px;
       overflow: auto;
-      resize: vertical;
 
-      &::-webkit-scrollbar {
-        display: none;
+      &.editor-container--expanded {
+        flex: 1;
+        height: auto;
       }
-
-      -ms-overflow-style: none;
-      scrollbar-width: none;
     }
 
     textarea.editor-container {
@@ -523,6 +559,7 @@ main {
       flex-shrink: 0;
       display: flex;
       justify-content: flex-start;
+      gap: 0.5rem;
 
       .run-button {
         display: flex;
@@ -550,7 +587,29 @@ main {
           font-size: 0.75rem;
         }
       }
+
+      .expand-button {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0.5rem;
+        background-color: transparent;
+        color: var(--bs-body-color);
+        border: 1px solid var(--bs-body-inactive);
+        border-radius: 0.375rem;
+        cursor: pointer;
+        transition: background-color 0.2s;
+
+        &:hover {
+          background-color: var(--bs-body-bg-secondary);
+        }
+
+        i {
+          font-size: 0.875rem;
+        }
+      }
     }
   }
 }
+
 </style>
