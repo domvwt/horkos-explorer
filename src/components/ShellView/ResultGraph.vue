@@ -275,7 +275,7 @@
 import { Graph, GraphEvent } from '@antv/g6';
 import G6Utils from "../../utils/G6Utils";
 import {
-  DATA_TYPES, UI_SIZE, LOOP_POSITIONS, ARC_CURVE_OFFSETS
+  DATA_TYPES, UI_SIZE, LOOP_POSITIONS, ARC_CURVE_OFFSETS, GRAPH_LAYOUTS
 } from "../../utils/Constants";
 import NeighborsFetcher from "../../utils/NeighborsFetcher";
 import { useSettingsStore } from "../../store/SettingsStore";
@@ -288,7 +288,7 @@ import ExternalLinksPanel from "./ExternalLinksPanel.vue";
 import SourceProvenancePanel from "./SourceProvenancePanel.vue";
 import g6Utils from '../../utils/G6Utils';
 import Axios from "@/utils/AxiosWrapper";
-import { createGraphConfig } from "./graphConfig";
+import { createGraphConfig, getLayoutConfig } from "./graphConfig";
 
 export default {
   name: "ResultGraph",
@@ -377,6 +377,7 @@ export default {
     toastMessage: null,
     toastTimeout: null,
     shownProfligateWarnings: new Set(),
+    currentLayout: 'd3-force',
   }),
   computed: {
     graphVizSettings() {
@@ -665,7 +666,11 @@ export default {
       const width = container.offsetWidth;
       const height = this.containerHeight === "auto" ? container.offsetHeight : parseInt(this.containerHeight);
 
-      // Create graph with factory config
+      // Get saved layout preference from settings store
+      const savedLayout = this.settingsStore.graphLayout || 'd3-force';
+      this.currentLayout = savedLayout;
+
+      // Create graph with factory config using saved layout
       const graphConfig = createGraphConfig({
         container,
         width,
@@ -673,6 +678,7 @@ export default {
         edges,
         labelColor: this.labelColor,
         edgeColor: this.edgeColor,
+        layoutType: savedLayout,
       });
 
       this.g6Graph = new Graph(graphConfig);
@@ -802,7 +808,11 @@ export default {
       const width = container.offsetWidth;
       const height = this.containerHeight === "auto" ? container.offsetHeight : parseInt(this.containerHeight);
 
-      // Create graph with factory config
+      // Get saved layout preference from settings store
+      const savedLayout = this.settingsStore.graphLayout || 'd3-force';
+      this.currentLayout = savedLayout;
+
+      // Create graph with factory config using saved layout
       const graphConfig = createGraphConfig({
         container,
         width,
@@ -810,6 +820,7 @@ export default {
         edges,
         labelColor: this.labelColor,
         edgeColor: this.edgeColor,
+        layoutType: savedLayout,
       });
 
       this.g6Graph = new Graph(graphConfig);
@@ -1932,6 +1943,69 @@ export default {
       }, this.toolbarDebounceTimeout);
     },
 
+    /**
+     * Change the graph layout type
+     *
+     * @param {string} layoutType - Layout type key (d3-force, circular, radial, dagre, concentric)
+     */
+    async changeLayout(layoutType) {
+      if (!this.g6Graph || this.currentLayout === layoutType) {
+        return;
+      }
+
+      // Get new layout configuration
+      const edges = this.g6Graph.getEdgeData() || [];
+      const nodes = this.g6Graph.getNodeData() || [];
+      const layoutConfig = getLayoutConfig(layoutType, {
+        edges,
+        nodeCount: nodes.length,
+        isLayoutChange: true,
+      });
+
+      try {
+        // Stop current layout simulation if running
+        const currentLayoutInstance = this.g6Graph.getLayout();
+        if (currentLayoutInstance && currentLayoutInstance.simulation) {
+          currentLayoutInstance.simulation.stop();
+        }
+
+        // Update layout
+        this.g6Graph.setLayout(layoutConfig);
+
+        // Execute layout with animation
+        await this.g6Graph.layout();
+
+        // Update current layout state
+        this.currentLayout = layoutType;
+
+        // Save preference to settings store
+        this.settingsStore.setGraphLayout(layoutType);
+
+        // Fit to view after layout animation completes
+        setTimeout(() => {
+          if (this.g6Graph) {
+            this.g6Graph.fitView({ padding: 50 });
+          }
+        }, 500);
+      } catch (e) {
+        console.error('Layout change failed:', e);
+        // Show error toast for dagre failures (cyclic graphs)
+        if (layoutType === 'dagre') {
+          this.showToast('Hierarchical layout failed - graph may contain cycles. Try another layout.');
+        } else {
+          this.showToast('Layout change failed. Please try again.');
+        }
+      }
+    },
+
+    /**
+     * Get current layout type
+     * @returns {string} Current layout type key
+     */
+    getCurrentLayout() {
+      return this.currentLayout;
+    },
+
     async redrawGraph() {
       if (!this.g6Graph) {
         return;
@@ -1961,7 +2035,7 @@ export default {
       const width = container.offsetWidth;
       const height = this.containerHeight === "auto" ? container.offsetHeight : parseInt(this.containerHeight);
 
-      // Create graph with factory config
+      // Create graph with factory config, preserving current layout
       const graphConfig = createGraphConfig({
         container,
         width,
@@ -1969,6 +2043,7 @@ export default {
         edges: currentData.edges,
         labelColor: this.labelColor,
         edgeColor: this.edgeColor,
+        layoutType: this.currentLayout,
       });
 
       this.g6Graph = new Graph(graphConfig);

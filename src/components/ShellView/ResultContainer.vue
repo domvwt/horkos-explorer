@@ -117,6 +117,42 @@
               title="Actual Size"
             />
           </button>
+
+          <!-- Layout Dropdown -->
+          <button
+            class="button layout-dropdown-trigger"
+            @click="toggleLayoutDropdown"
+          >
+            <i
+              class="fa-lg fa-solid"
+              :class="currentLayoutIcon"
+              data-bs-toggle="tooltip"
+              data-bs-placement="right"
+              title="Graph Layout"
+            />
+            <div
+              v-if="layoutDropdownOpen"
+              class="layout-dropdown"
+              @mouseleave="closeLayoutDropdown"
+            >
+              <div class="layout-dropdown__header">
+                Graph Layout
+              </div>
+              <button
+                v-for="layout in graphLayouts"
+                :key="layout.key"
+                class="layout-dropdown__item"
+                :class="{ 'layout-dropdown__item--active': (settingsStore.graphLayout || 'd3-force') === layout.key }"
+                @click.stop="changeLayout(layout.key)"
+              >
+                <i
+                  class="fa-solid"
+                  :class="layout.icon"
+                />
+                <span class="layout-dropdown__label">{{ layout.label }}</span>
+              </button>
+            </div>
+          </button>
         </ul>
       </aside>
 
@@ -173,9 +209,10 @@ import ResultGraph from "./ResultGraph.vue";
 import ResultTable from "./ResultTable.vue";
 import ResultCode from "./ResultCode.vue";
 import ResultError from "./ResultError.vue";
-import { UI_SIZE } from "../../utils/Constants";
+import { UI_SIZE, GRAPH_LAYOUTS } from "../../utils/Constants";
 import { mapStores } from "pinia";
 import { useModeStore } from "../../store/ModeStore";
+import { useSettingsStore } from "../../store/SettingsStore";
 
 export default {
   name: "ResultContainer",
@@ -217,9 +254,21 @@ export default {
     windowResizeDebounceTimer: null,
     windowResizeDebounceMs: 100,
     currentGraphData: null,
+    layoutDropdownOpen: false,
+    graphLayouts: Object.values(GRAPH_LAYOUTS),
   }),
   computed: {
-    ...mapStores(useModeStore),
+    ...mapStores(useModeStore, useSettingsStore),
+    currentLayoutIcon() {
+      const currentLayout = this.$refs.resultGraph?.getCurrentLayout() || this.settingsStore.graphLayout || 'd3-force';
+      const layout = Object.values(GRAPH_LAYOUTS).find(l => l.key === currentLayout);
+      return layout ? layout.icon : 'fa-circle-nodes';
+    },
+    currentLayoutLabel() {
+      const currentLayout = this.$refs.resultGraph?.getCurrentLayout() || this.settingsStore.graphLayout || 'd3-force';
+      const layout = Object.values(GRAPH_LAYOUTS).find(l => l.key === currentLayout);
+      return layout ? layout.label : 'Force-Directed';
+    },
   },
   watch: {
     isMaximized() {
@@ -392,6 +441,18 @@ export default {
       }
       return null;
     },
+    toggleLayoutDropdown() {
+      this.layoutDropdownOpen = !this.layoutDropdownOpen;
+    },
+    closeLayoutDropdown() {
+      this.layoutDropdownOpen = false;
+    },
+    changeLayout(layoutKey) {
+      if (this.$refs.resultGraph) {
+        this.$refs.resultGraph.changeLayout(layoutKey);
+      }
+      this.layoutDropdownOpen = false;
+    },
   },
 };
 </script>
@@ -558,6 +619,71 @@ button {
     i {
       color: var(--bs-body-bg-accent);
     }
+  }
+}
+
+.layout-dropdown-trigger {
+  position: relative;
+}
+
+.layout-dropdown {
+  position: absolute;
+  left: 100%;
+  bottom: 0;
+  margin-left: 8px;
+  min-width: 160px;
+  background-color: var(--bs-body-bg);
+  border: 1px solid var(--bs-body-shell);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+  padding: 4px 0;
+
+  &__header {
+    padding: 8px 12px 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--bs-body-inactive);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  &__item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 12px;
+    border: none;
+    background: none;
+    text-align: left;
+    font-size: 13px;
+    color: var(--bs-body-text);
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+
+    &:hover {
+      background-color: var(--bs-body-bg-accent);
+    }
+
+    &--active {
+      background-color: var(--bs-body-bg-accent);
+      font-weight: 500;
+
+      i {
+        color: var(--bs-primary);
+      }
+    }
+
+    i {
+      width: 16px;
+      text-align: center;
+      color: var(--bs-body-text);
+    }
+  }
+
+  &__label {
+    flex: 1;
   }
 }
 </style>

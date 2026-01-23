@@ -140,3 +140,30 @@ export const LOADING_STATUS = {
   EVAL: "Evaluating query...",
   PROCESS: "Processing results...",
 };
+
+export const GRAPH_LAYOUTS = {
+  D3_FORCE: {
+    key: 'd3-force',
+    label: 'Force-Directed',
+    icon: 'fa-circle-nodes',
+    description: 'Organic clustering, relationship density',
+  },
+  CIRCULAR: {
+    key: 'circular',
+    label: 'Circular',
+    icon: 'fa-circle',
+    description: 'Overview, equal visual weight',
+  },
+  DAGRE: {
+    key: 'dagre',
+    label: 'Hierarchical',
+    icon: 'fa-sitemap',
+    description: 'Ownership chains (Person→Company→Company)',
+  },
+  CONCENTRIC: {
+    key: 'concentric',
+    label: 'Concentric',
+    icon: 'fa-compact-disc',
+    description: 'Importance analysis, hubs in center',
+  },
+};

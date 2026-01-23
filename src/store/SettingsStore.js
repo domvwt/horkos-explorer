@@ -104,6 +104,7 @@ export const useSettingsStore = defineStore("settings", {
       llmProvider: LLM_PROVIDERS.OPENAI.key,
       url: "",
     },
+    graphLayout: 'd3-force',
   }),
 
   getters: {
@@ -155,6 +156,7 @@ export const useSettingsStore = defineStore("settings", {
         tableView: state.tableView,
         schemaView: state.schemaView,
         gpt: state.gpt,
+        graphLayout: state.graphLayout,
       };
     },
   },
@@ -262,6 +264,9 @@ export const useSettingsStore = defineStore("settings", {
       if (storedSettingsCopy.colors) {
         this.colors = storedSettingsCopy.colors;
       }
+      if (storedSettingsCopy.graphLayout) {
+        this.graphLayout = storedSettingsCopy.graphLayout;
+      }
       // The schema may be changed outside of Kuzu Explorer, so we reset the
       // graphViz settings and merge the stored settings with current schema.
       this.graphViz.nodes = {};
@@ -327,7 +332,15 @@ export const useSettingsStore = defineStore("settings", {
       this.tableView = settings.tableView;
       this.schemaView = settings.schemaView;
       this.gpt = settings.gpt;
+      if (settings.graphLayout) {
+        this.graphLayout = settings.graphLayout;
+      }
       this.saveGptApiTokenToLocalStorage();
+      this.uploadSettings();
+    },
+
+    setGraphLayout(layout) {
+      this.graphLayout = layout;
       this.uploadSettings();
     },
 
