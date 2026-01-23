@@ -2505,7 +2505,7 @@ export default {
 
       /* Thin scrollbar always visible */
       scrollbar-width: thin;
-      scrollbar-color: var(--bs-body-bg-accent) transparent;
+      scrollbar-color: var(--bs-body-text-secondary) transparent;
 
       &::-webkit-scrollbar {
         width: 6px;
@@ -2516,7 +2516,7 @@ export default {
       }
 
       &::-webkit-scrollbar-thumb {
-        background: var(--bs-body-bg-accent);
+        background: var(--bs-body-text-secondary);
         border-radius: 3px;
       }
 

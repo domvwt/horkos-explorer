@@ -2,7 +2,7 @@
 [data-bs-theme="light"] {
   --bs-body-bg: white;
   --bs-body-bg-secondary: #F4F5F8;
-  --bs-body-bg-accent: #E0592D;
+  --bs-body-bg-accent: #0d6efd;
   --bs-body-bg-border: #5E5E5E;
   --bs-body-bg-hover: #ECEEF2;
   --bs-body-text: #5E5E5E;
@@ -14,7 +14,7 @@
 [data-bs-theme="dark"] {
   --bs-body-bg: #16171A;
   --bs-body-bg-secondary: #1F2229;
-  --bs-body-bg-accent: #E4693E;
+  --bs-body-bg-accent: #3d8bfd;
   --bs-body-bg-border: #16171A;
   --bs-body-bg-hover: #2A2D35;
   --bs-body-text: #cccdd0;

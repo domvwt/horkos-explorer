@@ -790,6 +790,7 @@ span.pull-left {
 
 .active-btn {
   background-color: var(--bs-body-bg-accent);
+  color: white;
   border-radius: 0.5rem;
   padding: 0.5rem 1rem;
   margin-right: 1rem;

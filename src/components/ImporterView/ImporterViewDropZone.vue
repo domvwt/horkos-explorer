@@ -147,7 +147,7 @@ export default {
 .btn.btn-primary.mb-2 {
   width: 400px;
   background: var(--bs-body-bg-accent);
+  color: white;
   border: 0;
-
 }
 </style>

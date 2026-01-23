@@ -540,7 +540,7 @@ export default {
 body {
   scrollbar-gutter: stable both-edges;
   scrollbar-width: thin;
-  scrollbar-color: var(--bs-body-bg-accent) var(--bs-body-bg);
+  scrollbar-color: var(--bs-body-text-secondary) var(--bs-body-bg);
   overflow-x: hidden;
 }
 
