@@ -542,6 +542,11 @@ export default {
         this.handleResize();
       });
     },
+    'modeStore.theme'() {
+      if (this.g6Graph) {
+        this.redrawGraph();
+      }
+    },
   },
   mounted() {
     this.computeGraphWidth();
