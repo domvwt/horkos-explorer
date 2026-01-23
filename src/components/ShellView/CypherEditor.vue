@@ -43,6 +43,13 @@
                 >AI Query</a>
               </li>
             </ul>
+            <button
+              class="collapse-toggle"
+              :title="isPanelMinimized ? 'Expand panel' : 'Collapse panel'"
+              @click="isPanelMinimized = !isPanelMinimized"
+            >
+              <i :class="isPanelMinimized ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-up'" />
+            </button>
           </div>
         </header>
 
@@ -361,7 +368,7 @@ export default {
 $margin: 1rem;
 
 .shell-editor__wrapper {
-  margin-top: 1rem;
+  margin-top: 0.5rem;
   margin-left: 1rem;
   margin-right: 1rem;
   border-radius: 1rem 1rem 0 0;
@@ -371,7 +378,7 @@ $margin: 1rem;
 
 .shell-editor__topbar {
   width: 100%;
-  padding: 0.5rem 1rem;
+  padding: 0.25rem 1rem;
   border-bottom: 1px solid var(--bs-body-inactive);
   background-color: var(--bs-body-bg-secondary);
   color: var(--bs-body-text);
@@ -384,6 +391,7 @@ $margin: 1rem;
 
   ul {
     display: flex;
+    align-items: center;
     font-size: 0.875rem;
     font-weight: 500;
     text-align: center;
@@ -396,26 +404,40 @@ $margin: 1rem;
   }
 
   a {
-    padding: 0.75rem 1rem;
-    border-top-left-radius: 0.5rem;
-    border-top-right-radius: 0.5rem;
-    color: var(--bs-body-inactive);
-    margin-bottom: -1px;
+    padding: 0.25rem 1rem;
+    color: var(--bs-body-text);
 
     &.active-tab {
       font-weight: bold;
       color: var(--bs-body-text);
-      background-color: var(--bs-body-shell);
     }
 
     &.inactive-tab {
+      opacity: 0.6;
+
       &:hover {
-        color: var(--bs-body-text);
-        background-color: var(--bs-body-inactive);
+        opacity: 1;
       }
     }
   }
 
+  .collapse-toggle {
+    background: transparent;
+    border: none;
+    padding: 0.5rem;
+    cursor: pointer;
+    color: var(--bs-body-text);
+    display: flex;
+    align-items: center;
+
+    &:hover {
+      color: var(--bs-body-text);
+    }
+
+    i {
+      font-size: 0.875rem;
+    }
+  }
 }
 
 .shell-editor__layout {
@@ -459,7 +481,7 @@ $margin: 1rem;
 main {
   flex: 0 1 auto;
   background-color: var(--bs-body-shell);
-  padding: 1rem;
+  padding: 0.5rem 0.75rem;
   overflow: hidden;
   display: flex;
   flex-direction: column;

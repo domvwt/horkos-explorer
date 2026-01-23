@@ -2,7 +2,7 @@
   <div class="node-search__wrapper">
     <div class="node-search__form" @keydown.enter.prevent="executeSearch">
       <!-- Name Filter and Entity Type -->
-      <div class="row g-2 mb-2">
+      <div class="row g-2 mb-1">
         <div class="col-6">
           <label class="form-label-sm">{{ nameFieldLabel }}</label>
           <input
@@ -23,7 +23,7 @@
       </div>
 
       <!-- Company-Specific Filters -->
-      <div v-if="selectedType === 'Company'" class="row g-2 mb-2">
+      <div v-if="selectedType === 'Company'" class="row g-2 mb-1">
         <div class="col-6">
           <label class="form-label-sm">Company Number</label>
           <input
@@ -48,7 +48,7 @@
       </div>
 
       <!-- Address-Specific Filters -->
-      <div v-if="selectedType === 'Address'" class="row g-2 mb-2">
+      <div v-if="selectedType === 'Address'" class="row g-2 mb-1">
         <div class="col-6">
           <label class="form-label-sm">Post Code</label>
           <input
@@ -70,7 +70,7 @@
       </div>
 
       <!-- Search Row: Limit and Button -->
-      <div class="row g-2 mb-2">
+      <div class="row g-2 mb-0">
         <div class="col-6">
           <label class="form-label-sm">Limit</label>
           <select v-model="resultLimit" class="form-select form-select-sm">
@@ -325,7 +325,7 @@ export default {
 
 <style lang="scss" scoped>
 .node-search__wrapper {
-  padding: 0.5rem 0.75rem;
+  padding: 0.375rem 0.5rem 0.25rem;
   height: 100%;
   overflow-y: auto;
 }
