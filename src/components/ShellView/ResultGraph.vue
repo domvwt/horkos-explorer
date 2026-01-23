@@ -378,6 +378,7 @@ export default {
     toastTimeout: null,
     shownProfligateWarnings: new Set(),
     currentLayout: 'd3-force',
+    layoutFitTimeout: null,
   }),
   computed: {
     graphVizSettings() {
@@ -564,6 +565,9 @@ export default {
     }
   },
   beforeUnmount() {
+    if (this.layoutFitTimeout) {
+      clearTimeout(this.layoutFitTimeout);
+    }
     if (this.g6Graph) {
       this.g6Graph.destroy();
     }
@@ -1971,25 +1975,23 @@ export default {
           currentLayoutInstance.simulation.stop();
         }
 
-        // Update drag behavior if switching to/from force layout
-        const wasForce = previousLayout === 'd3-force';
-        const isForce = layoutType === 'd3-force';
-        if (wasForce !== isForce) {
-          // Remove old drag behavior and add new one
-          if (wasForce) {
-            this.g6Graph.removeBehaviors(['drag-element-force']);
-            this.g6Graph.addBehaviors([{ type: 'drag-element' }]);
-          } else {
-            this.g6Graph.removeBehaviors(['drag-element']);
-            this.g6Graph.addBehaviors([{ type: 'drag-element-force', fixed: true }]);
-          }
-        }
-
         // Update layout
         this.g6Graph.setLayout(layoutConfig);
 
         // Execute layout with animation
         await this.g6Graph.layout();
+
+        // Update drag behaviors AFTER successful layout
+        const wasForce = previousLayout === 'd3-force';
+        const isForce = layoutType === 'd3-force';
+        if (wasForce !== isForce) {
+          try {
+            this.g6Graph.updateBehavior({ key: 'drag-force', enable: isForce });
+            this.g6Graph.updateBehavior({ key: 'drag-normal', enable: !isForce });
+          } catch (e) {
+            console.warn('Failed to update drag behavior:', e);
+          }
+        }
 
         // Update current layout state
         this.currentLayout = layoutType;
@@ -1997,8 +1999,13 @@ export default {
         // Save preference to settings store
         this.settingsStore.setGraphLayout(layoutType);
 
+        // Clear any pending fit timeout before scheduling a new one
+        if (this.layoutFitTimeout) {
+          clearTimeout(this.layoutFitTimeout);
+        }
+
         // After layout animation, center on graph and only zoom out if needed
-        setTimeout(() => {
+        this.layoutFitTimeout = setTimeout(() => {
           if (!this.g6Graph) return;
 
           const canvas = this.g6Graph.getCanvas();

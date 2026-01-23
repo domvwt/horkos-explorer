@@ -88,7 +88,6 @@
             <div
               v-if="layoutDropdownOpen"
               class="layout-dropdown"
-              @mouseleave="closeLayoutDropdown"
             >
               <div class="layout-dropdown__header">
                 Graph Layout
@@ -667,10 +666,9 @@ button {
     font-size: 13px;
     color: var(--bs-body-text);
     cursor: pointer;
-    transition: background-color 0.15s ease;
 
     &:hover {
-      background-color: var(--bs-body-bg-accent);
+      background-color: var(--bs-body-bg-secondary);
     }
 
     &--active {
