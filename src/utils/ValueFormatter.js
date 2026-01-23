@@ -40,6 +40,17 @@ class ValueFormatter {
         value,
       });
     });
+
+    // Move internal/technical fields to the end (id, source_records)
+    const deprioritizedFields = ['id', 'source_records'];
+    const toMove = [];
+    for (let i = properties.length - 1; i > 0; i--) { // Start at 1 to skip label
+      if (deprioritizedFields.includes(properties[i].name.toLowerCase())) {
+        toMove.unshift(properties.splice(i, 1)[0]);
+      }
+    }
+    properties.push(...toMove);
+
     return properties;
   }
 

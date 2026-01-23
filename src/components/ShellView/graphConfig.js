@@ -197,10 +197,8 @@ export function getLayoutConfig(layoutType, options = {}) {
 export function createGraphConfig({ container, width, height, edges, labelColor, edgeColor, layoutType = 'd3-force', layoutOptions = {} }) {
   const layout = getLayoutConfig(layoutType, { edges, ...layoutOptions });
 
-  // Use drag-element-force for force layout, drag-element for others
-  const dragBehavior = layoutType === 'd3-force'
-    ? { type: 'drag-element-force', fixed: true }
-    : { type: 'drag-element' };
+  // Include both drag behaviors with keys, enable only the appropriate one
+  const isForceLayout = layoutType === 'd3-force';
 
   return {
     container,
@@ -255,12 +253,26 @@ export function createGraphConfig({ container, width, height, edges, labelColor,
         },
       },
     },
-    behaviors: ['zoom-canvas', 'drag-canvas',
+    behaviors: ['zoom-canvas',
+      {
+        type: 'drag-canvas',
+        key: 'drag-canvas',
+      },
       {
         type: 'optimize-viewport-transform',
         debounce: 300,
       },
-      dragBehavior,
+      {
+        type: 'drag-element-force',
+        key: 'drag-force',
+        fixed: true,
+        enable: isForceLayout,
+      },
+      {
+        type: 'drag-element',
+        key: 'drag-normal',
+        enable: !isForceLayout,
+      },
       {
         type: 'click-select',
         key: 'click-select-element',
