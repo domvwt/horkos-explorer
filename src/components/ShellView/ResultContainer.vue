@@ -73,6 +73,42 @@
           v-show="showGraph"
           class="result-container__button-group result-container__tools--bottom"
         >
+          <!-- Layout Dropdown -->
+          <button
+            class="button layout-dropdown-trigger"
+            @click="toggleLayoutDropdown"
+          >
+            <i
+              class="fa-lg fa-solid"
+              :class="currentLayoutIcon"
+              data-bs-toggle="tooltip"
+              data-bs-placement="right"
+              title="Graph Layout"
+            />
+            <div
+              v-if="layoutDropdownOpen"
+              class="layout-dropdown"
+              @mouseleave="closeLayoutDropdown"
+            >
+              <div class="layout-dropdown__header">
+                Graph Layout
+              </div>
+              <button
+                v-for="layout in graphLayouts"
+                :key="layout.key"
+                class="layout-dropdown__item"
+                :class="{ 'layout-dropdown__item--active': (settingsStore.graphLayout || 'd3-force') === layout.key }"
+                @click.stop="changeLayout(layout.key)"
+              >
+                <i
+                  class="fa-solid"
+                  :class="layout.icon"
+                />
+                <span class="layout-dropdown__label">{{ layout.label }}</span>
+              </button>
+            </div>
+          </button>
+
           <button
             class="button"
             @click="$refs.resultGraph.zoomIn()"
@@ -116,42 +152,6 @@
               data-bs-placement="right"
               title="Actual Size"
             />
-          </button>
-
-          <!-- Layout Dropdown -->
-          <button
-            class="button layout-dropdown-trigger"
-            @click="toggleLayoutDropdown"
-          >
-            <i
-              class="fa-lg fa-solid"
-              :class="currentLayoutIcon"
-              data-bs-toggle="tooltip"
-              data-bs-placement="right"
-              title="Graph Layout"
-            />
-            <div
-              v-if="layoutDropdownOpen"
-              class="layout-dropdown"
-              @mouseleave="closeLayoutDropdown"
-            >
-              <div class="layout-dropdown__header">
-                Graph Layout
-              </div>
-              <button
-                v-for="layout in graphLayouts"
-                :key="layout.key"
-                class="layout-dropdown__item"
-                :class="{ 'layout-dropdown__item--active': (settingsStore.graphLayout || 'd3-force') === layout.key }"
-                @click.stop="changeLayout(layout.key)"
-              >
-                <i
-                  class="fa-solid"
-                  :class="layout.icon"
-                />
-                <span class="layout-dropdown__label">{{ layout.label }}</span>
-              </button>
-            </div>
           </button>
         </ul>
       </aside>
