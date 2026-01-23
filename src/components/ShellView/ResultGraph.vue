@@ -362,6 +362,9 @@ export default {
     },
     draggedNodeDebounceTimer: null,
     expansions: [],
+    originalNodeIds: new Set(),
+    // Maps nodeId -> expansionId that first introduced this node
+    nodeIntroducedBy: {},
     isResizing: false,
     minSidebarWidth: 350,
     maxSidebarWidth: 800,
@@ -751,13 +754,13 @@ export default {
         }
       });
 
-      this.g6Graph.on('node:dblclick', (e) => {
+      this.g6Graph.on('node:dblclick', async (e) => {
         const itemId = e.target.id;
         const isCurrentNodeExpanded = this.isNeighborExpanded(e.target);
         if (isCurrentNodeExpanded) {
-          this.collapseNode(itemId);
+          await this.collapseNodeById(itemId);
           this.deselectAll();
-          return this.redrawGraph();
+          return;
         }
         const nodeData = this.g6Graph.getNodeData(itemId);
         this.expandOnNode(nodeData);
@@ -786,6 +789,11 @@ export default {
       }
       let { counters, nodes, edges, } = this.extractGraphFromQueryResult(this.queryResult);
       this.counters = counters;
+      // Track original node IDs so they're never removed during collapse
+      this.originalNodeIds = new Set(nodes.map(n => n.id));
+      // Reset expansion tracking for new query
+      this.nodeIntroducedBy = {};
+      this.expansions = [];
       if (nodes.length === 0) {
         this.$emit("graphEmpty");
       }
@@ -1391,6 +1399,17 @@ export default {
       this.expansions.push({
         id: model.id, neighbors
       });
+
+      // Track which expansion introduced each new node (only if not already tracked)
+      neighbors.rows.forEach((row) => {
+        if (row.dst && row.dst._id) {
+          const nodeId = this.encodeId(row.dst._id);
+          if (!this.nodeIntroducedBy[nodeId] && !this.originalNodeIds.has(nodeId)) {
+            this.nodeIntroducedBy[nodeId] = model.id;
+          }
+        }
+      });
+
       this.isCurrentNodeExpanded = true;
 
       // Trigger neighbor count update for any new leaf nodes
@@ -1523,6 +1542,15 @@ export default {
           id: nodeId,
           neighbors: neighbors
         });
+        // Track which expansion introduced each new node
+        neighbors.rows.forEach((row) => {
+          if (row.dst && row.dst._id) {
+            const newNodeId = this.encodeId(row.dst._id);
+            if (!this.nodeIntroducedBy[newNodeId] && !this.originalNodeIds.has(newNodeId)) {
+              this.nodeIntroducedBy[newNodeId] = nodeId;
+            }
+          }
+        });
       });
 
       this.deselectAll();
@@ -1548,27 +1576,220 @@ export default {
       });
     },
 
+    /**
+     * Get all expansion IDs that should be removed when collapsing a node.
+     * This includes the node itself and any nodes that were introduced by it (recursively).
+     */
+    getExpansionSubtree(id, visited = new Set()) {
+      if (visited.has(id)) return visited;
+      visited.add(id);
+
+      // Find all nodes that were introduced by this expansion
+      Object.entries(this.nodeIntroducedBy).forEach(([nodeId, introducedBy]) => {
+        if (introducedBy === id) {
+          // If this introduced node was also expanded, include its subtree
+          const isExpanded = this.expansions.some(e => e.id === nodeId);
+          if (isExpanded) {
+            this.getExpansionSubtree(nodeId, visited);
+          }
+        }
+      });
+
+      return visited;
+    },
+
     collapseNode(id) {
-      const expansion = this.expansions.find((e) => e.id === id);
-      if (!expansion) {
+      // Get all expansions in this subtree (this node + any nodes it introduced that were expanded)
+      const subtree = this.getExpansionSubtree(id);
+
+      // Remove all expansions in the subtree
+      this.expansions = this.expansions.filter((e) => !subtree.has(e.id));
+    },
+
+    /**
+     * Extract node and edge IDs from an expansion's neighbors result.
+     * Note: The NeighborsFetcher query returns 'r' for relationship and 'dst' for destination node.
+     */
+    getExpansionIds(neighbors) {
+      const nodeIds = new Set();
+      const edgeIds = new Set();
+      neighbors.rows.forEach((row) => {
+        if (row.dst && row.dst._id) {
+          nodeIds.add(this.encodeId(row.dst._id));
+        }
+        if (row.r && row.r._id) {
+          edgeIds.add(this.encodeId(row.r._id));
+        }
+      });
+      return { nodeIds, edgeIds };
+    },
+
+    /**
+     * Collect node/edge IDs from this expansion and all child expansions in the subtree.
+     * @param {string} id - The node ID to collect targets for
+     */
+    collectCollapseTargets(id) {
+      const allNodeIds = new Set();
+      const allEdgeIds = new Set();
+
+      // Get all expansion IDs in the subtree
+      const subtree = this.getExpansionSubtree(id);
+
+      // Collect nodes/edges from all expansions in the subtree
+      subtree.forEach((expansionId) => {
+        const expansion = this.expansions.find((e) => e.id === expansionId);
+        if (expansion) {
+          const { nodeIds, edgeIds } = this.getExpansionIds(expansion.neighbors);
+          nodeIds.forEach(nid => allNodeIds.add(nid));
+          edgeIds.forEach(eid => allEdgeIds.add(eid));
+        }
+      });
+
+      return { nodeIds: allNodeIds, edgeIds: allEdgeIds };
+    },
+
+    /**
+     * Get node and edge IDs that should never be removed during collapse.
+     * This includes original query result nodes and all nodes/edges from remaining active expansions.
+     */
+    getProtectedIds() {
+      const protectedNodeIds = new Set(this.originalNodeIds);
+      const protectedEdgeIds = new Set();
+
+      // Add the source nodes and destination nodes/edges of remaining active expansions
+      this.expansions.forEach((exp) => {
+        protectedNodeIds.add(exp.id); // The expanded node itself (source of expansion)
+        // Protect all nodes and edges reachable from remaining expansions
+        exp.neighbors.rows.forEach((row) => {
+          if (row.dst && row.dst._id) {
+            const nodeId = this.encodeId(row.dst._id);
+            protectedNodeIds.add(nodeId);
+          }
+          if (row.r && row.r._id) {
+            protectedEdgeIds.add(this.encodeId(row.r._id));
+          }
+        });
+      });
+
+      return { protectedNodeIds, protectedEdgeIds };
+    },
+
+    /**
+     * Collapse a node by ID - collects targets, updates expansions, removes nodes from graph.
+     * This is the core collapse logic used by both collapseSelectedNode() and double-click handler.
+     */
+    async collapseNodeById(id) {
+      // Early return if node was never expanded
+      const wasExpanded = this.expansions.some(e => e.id === id);
+      if (!wasExpanded) {
         return;
       }
-      const neighbors = expansion.neighbors;
-      this.expansions = this.expansions.filter((e) => e.id !== id);
-      // Recursively collapse neighbors
-      neighbors.rows.forEach((neighbor) => {
-        if (neighbor.dst) {
-          const id = this.encodeId(neighbor.dst._id);
-          this.collapseNode(id);
-        }
+
+      // 1. Collect all IDs to potentially remove BEFORE modifying expansions
+      const targets = this.collectCollapseTargets(id);
+
+      // 2. Update expansions tracking (handles recursion)
+      this.collapseNode(id);
+
+      // 3. Get protected nodes and edges (after expansions array is updated)
+      const { protectedNodeIds, protectedEdgeIds } = this.getProtectedIds();
+
+      // 4. Filter out protected nodes and edges from removal sets
+      const nodeIdsToRemove = new Set(
+        [...targets.nodeIds].filter(nodeId => !protectedNodeIds.has(nodeId))
+      );
+      const edgeIdsToRemove = new Set(
+        [...targets.edgeIds].filter(edgeId => !protectedEdgeIds.has(edgeId))
+      );
+
+      // 5. Remove from graph
+      await this.removeFromGraph(nodeIdsToRemove, edgeIdsToRemove);
+
+      // 6. Clean up nodeIntroducedBy for removed nodes
+      nodeIdsToRemove.forEach(nodeId => {
+        delete this.nodeIntroducedBy[nodeId];
+      });
+
+      // 7. Update isCurrentNodeExpanded if this was the clicked node
+      if (id === this.clickedId) {
+        this.isCurrentNodeExpanded = false;
+      }
+
+      // 8. Trigger neighbor count update
+      this.$nextTick(() => {
+        this.updateNeighborCounts();
       });
     },
 
+    /**
+     * Remove specified nodes/edges from the graph and update counters.
+     */
+    async removeFromGraph(nodeIdsToRemove, edgeIdsToRemove) {
+      if (!this.g6Graph) return;
+      if (nodeIdsToRemove.size === 0 && edgeIdsToRemove.size === 0) return;
+
+      const currentNodes = this.g6Graph.getNodeData() || [];
+      const currentEdges = this.g6Graph.getEdgeData() || [];
+
+      // Filter nodes - keep nodes NOT in removal set
+      const filteredNodes = currentNodes.filter(n => !nodeIdsToRemove.has(n.id));
+
+      // Build set of remaining node IDs for edge validation
+      const remainingNodeIds = new Set(filteredNodes.map(n => n.id));
+
+      // Filter edges - keep edges that:
+      // 1. Are NOT in removal set, AND
+      // 2. Have both source and target in remaining nodes
+      const filteredEdges = currentEdges.filter(e =>
+        !edgeIdsToRemove.has(e.id) &&
+        remainingNodeIds.has(e.source) &&
+        remainingNodeIds.has(e.target)
+      );
+
+      // Update counters for removed nodes (with bounds checking to prevent underflow)
+      const actualRemovedNodes = currentNodes.filter(n => nodeIdsToRemove.has(n.id));
+      actualRemovedNodes.forEach(node => {
+        const label = node.data?.properties?._label;
+        if (label && this.counters.node[label] > 0) {
+          this.counters.node[label] -= 1;
+        }
+        if (this.counters.total.node > 0) {
+          this.counters.total.node -= 1;
+        }
+      });
+
+      // Update counters for removed edges (with bounds checking to prevent underflow)
+      const removedEdgeIds = new Set(currentEdges.map(e => e.id));
+      filteredEdges.forEach(e => removedEdgeIds.delete(e.id));
+      currentEdges.forEach(edge => {
+        if (removedEdgeIds.has(edge.id)) {
+          const label = edge.data?.properties?._label;
+          if (label && this.counters.rel[label] > 0) {
+            this.counters.rel[label] -= 1;
+          }
+          if (this.counters.total.rel > 0) {
+            this.counters.total.rel -= 1;
+          }
+        }
+      });
+
+      // Pin remaining nodes at their current positions to prevent layout drift
+      const pinnedNodes = filteredNodes.map(node => ({
+        ...node,
+        data: {
+          ...node.data,
+          fx: node.style?.x,
+          fy: node.style?.y
+        }
+      }));
+
+      // Update graph with filtered data
+      this.g6Graph.setData({ nodes: pinnedNodes, edges: filteredEdges });
+      await this.render();
+    },
+
     collapseSelectedNode() {
-      this.collapseNode(this.clickedId);
-      this.redrawGraph();
-      this.isCurrentNodeExpanded = false;
-      this.deselectAll();
+      this.collapseNodeById(this.clickedId);
     },
 
     addDataWithQueryResult(queryResult) {
