@@ -149,46 +149,51 @@
           />
         </div>
         <div v-else>
+          <!-- Overview Actions -->
+          <div
+            v-if="counters.total.node > 0"
+            class="result-graph__actions"
+          >
+            <button
+              v-if="numHiddenNodes > 0"
+              class="btn btn-sm btn-outline-secondary"
+              @click="showAllNodesRels()"
+            >
+              <i class="fa-solid fa-eye" />
+              Show All
+            </button>
+            <button
+              v-if="hasUnexpandedNodes"
+              class="btn btn-sm btn-outline-secondary"
+              @click="expandOneMoreHop()"
+            >
+              <i class="fa-solid fa-diagram-project" />
+              <span v-if="expandGraphInfo.hasCount">
+                Expand Graph (+{{ expandGraphInfo.willExpand }})
+              </span>
+              <span v-else>
+                Expand Graph
+              </span>
+            </button>
+            <button
+              v-else
+              class="btn btn-sm btn-outline-secondary"
+              disabled
+              style="opacity: 0.6; cursor: not-allowed;"
+            >
+              <i class="fa-solid fa-check-circle" />
+              Fully Expanded
+            </button>
+          </div>
+
+          <!-- Node Counts -->
           <div v-if="counters.total.node > 0">
-            <div class="result-graph__summary-section">
-              <p>
-                Showing
-                <span v-if="numHiddenNodes > 0">
-                  {{ counters.total.node - numHiddenNodes }}/</span>{{ counters.total.node }} nodes
-                <span v-if="numHiddenNodes > 0"> ({{ numHiddenNodes }} hidden) </span>
-              </p>
-              <button
-                v-if="numHiddenNodes > 0"
-                class="btn btn-sm btn-outline-secondary"
-                @click="showAllNodesRels()"
-              >
-                <i class="fa-solid fa-eye" />
-                Show All
-              </button>
-              <button
-                v-if="hasUnexpandedNodes"
-                class="btn btn-sm btn-outline-secondary"
-                @click="expandOneMoreHop()"
-              >
-                <i class="fa-solid fa-diagram-project" />
-                <span v-if="expandGraphInfo.hasCount">
-                  Expand Graph (+{{ expandGraphInfo.willExpand }})
-                </span>
-                <span v-else>
-                  Expand Graph
-                </span>
-              </button>
-              <button
-                v-else
-                class="btn btn-sm btn-outline-secondary"
-                disabled
-                style="opacity: 0.6; cursor: not-allowed;"
-              >
-                <i class="fa-solid fa-check-circle" />
-                Fully Expanded
-              </button>
-            </div>
-            <hr>
+            <p class="result-graph__count-summary">
+              Showing
+              <span v-if="numHiddenNodes > 0">
+                {{ counters.total.node - numHiddenNodes }}/</span>{{ counters.total.node }} nodes
+              <span v-if="numHiddenNodes > 0"> ({{ numHiddenNodes }} hidden)</span>
+            </p>
             <table class="table table-sm table-borderless result-graph__overview-table">
               <tbody>
                 <tr
@@ -199,25 +204,22 @@
                     <span
                       class="badge bg-primary"
                       :style="{ backgroundColor: `${getColor(label)} !important`, textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000', color: 'white !important' }"
-                    >{{
-                      label
-                    }}</span>
+                    >{{ label }}</span>
                   </th>
                   <td>{{ counters.node[label] }}</td>
                 </tr>
               </tbody>
             </table>
-            <br>
           </div>
 
+          <!-- Rel Counts -->
           <div v-if="counters.total.rel > 0">
-            <p>
+            <p class="result-graph__count-summary">
               Showing
               <span v-if="numHiddenRels > 0">
                 {{ counters.total.rel - numHiddenRels }}/</span>{{ counters.total.rel }} rels
-              <span v-if="numHiddenRels > 0"> ({{ numHiddenRels }} hidden) </span>
+              <span v-if="numHiddenRels > 0"> ({{ numHiddenRels }} hidden)</span>
             </p>
-            <hr>
             <table class="table table-sm table-borderless result-graph__overview-table">
               <tbody>
                 <tr
@@ -232,9 +234,7 @@
                         color: 'white !important',
                         textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
                       }"
-                    >
-                      {{ label }}
-                    </span>
+                    >{{ label }}</span>
                   </th>
                   <td>{{ counters.rel[label] }}</td>
                 </tr>
@@ -2442,6 +2442,12 @@ export default {
       margin-right: 0;
       margin-top: 0.25rem;
     }
+  }
+
+  .result-graph__count-summary {
+    font-size: 0.85rem;
+    color: var(--bs-body-text-secondary);
+    margin-bottom: 0.5rem;
   }
 
   .result-graph__side-panel {
