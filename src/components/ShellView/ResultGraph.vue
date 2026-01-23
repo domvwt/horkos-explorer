@@ -2827,7 +2827,7 @@ export default {
   .result-graph__share-section {
     margin-bottom: 1rem;
     padding-bottom: 1rem;
-    border-bottom: 1px solid var(--bs-border-color);
+    border-bottom: 1px solid var(--bs-body-inactive);
 
     button i {
       margin-right: 0.5rem;

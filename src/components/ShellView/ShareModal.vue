@@ -162,7 +162,7 @@ export default {
     justify-content: space-between;
     align-items: center;
     padding: 1.25rem;
-    border-bottom: 1px solid var(--bs-border-color);
+    border-bottom: 1px solid var(--bs-body-inactive);
 
     h5 {
       margin: 0;
@@ -199,7 +199,7 @@ export default {
     .share-modal-description {
       color: var(--bs-body-text-secondary);
       margin-bottom: 1rem;
-      font-size: 0.95rem;
+      font-size: 0.875rem;
     }
 
     .share-code-container {
@@ -212,7 +212,7 @@ export default {
         font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
         font-size: 0.8rem;
         padding: 0.75rem;
-        border: 1px solid var(--bs-border-color);
+        border: 1px solid var(--bs-body-inactive);
         border-radius: 0.375rem;
         background-color: var(--bs-body-bg-secondary);
         color: var(--bs-body-text);
@@ -246,7 +246,7 @@ export default {
       padding: 0.5rem 0.75rem;
       background-color: var(--bs-body-bg-secondary);
       border-radius: 0.375rem;
-      border: 1px solid var(--bs-border-color);
+      border: 1px solid var(--bs-body-inactive);
 
       small {
         display: flex;
@@ -263,8 +263,8 @@ export default {
   .share-modal-footer {
     display: flex;
     justify-content: flex-end;
-    padding: 1rem 1.25rem;
-    border-top: 1px solid var(--bs-border-color);
+    padding: 1.25rem;
+    border-top: 1px solid var(--bs-body-inactive);
   }
 }
 </style>

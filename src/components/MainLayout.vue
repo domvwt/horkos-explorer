@@ -559,7 +559,7 @@ body {
 
 .main-layout__header {
   background-color: var(--bs-body-bg-secondary);
-  border-bottom: 1px solid var(--bs-border-color);
+  border-bottom: 1px solid var(--bs-body-inactive);
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   z-index: 1000;
   position: relative;
