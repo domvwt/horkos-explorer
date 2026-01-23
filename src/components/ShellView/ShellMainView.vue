@@ -3,26 +3,18 @@
     class="shell-main-view__wrapper"
     :class="{ 'is-maximized': maximizedCellIndex !== -1 }"
   >
-    <div v-if="maximizedCellIndex < 0">
-      <div class="d-flex align-items-center gap-3 m-4">
-        <button
-          v-if="!isReadOnly"
-          type="button"
-          class="btn btn-link text-body p-0 text-decoration-none"
-          @click="addCell"
-        >
-          + Click here to add a new cell
-        </button>
-        <button
-          type="button"
-          class="btn btn-outline-secondary btn-sm"
-          @click="showImportModal = true"
-        >
-          <i class="fa-solid fa-file-import" />
-          Import Investigation
-        </button>
-        <div class="flex-grow-1 border-top border-secondary" />
-      </div>
+    <div
+      v-if="maximizedCellIndex < 0 && !isReadOnly"
+      class="shell-main-view__add-cell-row"
+    >
+      <button
+        type="button"
+        class="btn btn-link text-body p-0 text-decoration-none"
+        @click="addCell"
+      >
+        + Click here to add a new cell
+      </button>
+      <div class="flex-grow-1 border-top border-secondary" />
     </div>
     <ShellCell
       v-for="(cell, index) in shellCell"
@@ -38,19 +30,11 @@
       @minimize="minimize()"
       @reload-schema="reloadSchema()"
     />
-
-    <!-- Import Investigation Modal -->
-    <ImportModal
-      :visible="showImportModal"
-      @close="showImportModal = false"
-      @import="handleImportInvestigation"
-    />
   </div>
 </template>
 
 <script lang="js">
 import ShellCell from "./ShellCell.vue";
-import ImportModal from "./ImportModal.vue";
 import { v4 as uuidv4 } from 'uuid';
 import Axios from "@/utils/AxiosWrapper";
 import { MODES } from "@/utils/Constants";
@@ -59,7 +43,6 @@ export default {
   name: "ShellMainView",
   components: {
     ShellCell,
-    ImportModal,
   },
   props: {
     schema: {
@@ -91,7 +74,6 @@ export default {
     isDemo: false,
     maximizedCellIndex: -1,
     isRestoringInvestigation: false,
-    showImportModal: false,
   }),
   computed: {
     isReadOnly() {
@@ -305,6 +287,20 @@ MATCH (a)-[r]->(b) RETURN * LIMIT 5;`,
     },
 
     /**
+     * Get investigation state from the first shell cell
+     * Used by MainLayout to generate share export code
+     */
+    getInvestigationState() {
+      if (this.shellCell.length === 0) return null;
+      const cellRef = this.getCellRef(0);
+      const cell = this.$refs[cellRef]?.[0];
+      if (cell) {
+        return cell.getInvestigationState();
+      }
+      return null;
+    },
+
+    /**
      * Handle import investigation from modal
      * Receives parsed state from ImportModal component
      */
@@ -328,6 +324,13 @@ MATCH (a)-[r]->(b) RETURN * LIMIT 5;`,
 
   &.is-maximized {
     margin-bottom: 2px;
+  }
+
+  .shell-main-view__add-cell-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 1rem;
   }
 
   .shell-main-view__placeholder {

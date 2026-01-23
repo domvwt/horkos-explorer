@@ -26,7 +26,7 @@
             v-model="importCode"
             class="form-control"
             rows="5"
-            placeholder="Paste export code here (starts with HKS1:...)"
+            placeholder="Paste export code here (HKS1:...:Z)"
             @paste="handlePaste"
           />
         </div>
@@ -109,9 +109,29 @@ export default {
     }
   },
   methods: {
-    handlePaste() {
+    handlePaste(event) {
       // Clear error on paste
       this.errorMessage = '';
+
+      // Get pasted text from clipboard
+      const pastedText = (event.clipboardData || window.clipboardData).getData('text');
+      if (!pastedText) return;
+
+      const code = pastedText.trim();
+
+      // Check if it looks like a valid export code (must have both prefix and end marker)
+      if (code.startsWith('HKS1:') && code.endsWith(':Z')) {
+        // Try to parse it
+        const state = parseExportCode(code);
+        if (state && state.minimalNodes && state.minimalNodes.length > 0) {
+          // Valid code - auto-import
+          event.preventDefault();
+          this.importCode = code;
+          this.$nextTick(() => {
+            this.importInvestigation();
+          });
+        }
+      }
     },
     importInvestigation() {
       this.errorMessage = '';
@@ -122,10 +142,16 @@ export default {
         return;
       }
 
+      // Check for truncated code (missing end marker)
+      if (code.startsWith('HKS1:') && !code.endsWith(':Z')) {
+        this.errorMessage = 'Export code appears to be truncated. Make sure you copied the entire code.';
+        return;
+      }
+
       // Parse the export code
       const state = parseExportCode(code);
       if (!state) {
-        this.errorMessage = 'Invalid export code. Make sure it starts with "HKS1:" and is complete.';
+        this.errorMessage = 'Invalid export code. Make sure it starts with "HKS1:" and ends with ":Z".';
         return;
       }
 

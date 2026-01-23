@@ -372,6 +372,12 @@ export default {
         this.$refs.resultGraph.redrawGraph();
       }
     },
+    getInvestigationState() {
+      if (this.$refs.resultGraph) {
+        return this.$refs.resultGraph.getInvestigationState();
+      }
+      return null;
+    },
   },
 };
 </script>

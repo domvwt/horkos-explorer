@@ -12,6 +12,20 @@
         </a>
 
         <div class="main-layout__header-actions">
+          <button
+            class="header-link"
+            @click="handleShare"
+          >
+            <i class="fa-solid fa-share-nodes" />
+            <span>Share</span>
+          </button>
+          <button
+            class="header-link"
+            @click="showImportInvestigationModal = true"
+          >
+            <i class="fa-solid fa-file-import" />
+            <span>Import</span>
+          </button>
           <a
             href="https://github.com/domvwt/horkos"
             target="_blank"
@@ -153,6 +167,22 @@
         </div>
       </div>
     </div>
+
+    <!-- Import Investigation Modal -->
+    <ImportModal
+      :visible="showImportInvestigationModal"
+      @close="showImportInvestigationModal = false"
+      @import="handleImportInvestigation"
+    />
+
+    <!-- Share Investigation Modal -->
+    <ShareModal
+      :visible="showShareModal"
+      :export-code="shareExportCode"
+      :export-code-length="shareExportCodeLength"
+      :hidden-count="shareHiddenCount"
+      @close="showShareModal = false"
+    />
   </div>
 </template>
 
@@ -162,7 +192,10 @@ import ShellMainView from "./ShellView/ShellMainView.vue";
 import SettingsMainView from "./SettingsView/SettingsMainView.vue"
 import DatasetMainView from "./DatasetView/DatasetMainView.vue"
 import ImporterMainView from "./ImporterView/ImporterMainView.vue";
+import ImportModal from "./ShellView/ImportModal.vue";
+import ShareModal from "./ShellView/ShareModal.vue";
 import Axios from "@/utils/AxiosWrapper";
+import { generateExportCode } from "@/utils/InvestigationState";
 import { useSettingsStore } from "../store/SettingsStore";
 import { useModeStore } from "../store/ModeStore";
 import { mapActions, mapStores } from 'pinia'
@@ -179,6 +212,8 @@ export default {
     SettingsMainView,
     DatasetMainView,
     ImporterMainView,
+    ImportModal,
+    ShareModal,
   },
   data: () => ({
     accessModeModal: null,
@@ -187,6 +222,11 @@ export default {
     showShell: true,
     showLoader: false,
     showSettings: false,
+    showImportInvestigationModal: false,
+    showShareModal: false,
+    shareExportCode: '',
+    shareExportCodeLength: 0,
+    shareHiddenCount: 0,
     schema: null,
     isKuzuWasmInitialized: false,
     headerHeight: 0,
@@ -458,6 +498,39 @@ export default {
         this.$refs.shellView.redrawAllGraphs();
       }
     },
+    // Handle import investigation from header button
+    handleImportInvestigation(state) {
+      // Ensure we're on the shell view
+      if (!this.showShell) {
+        this.toggleShell();
+      }
+      // Delegate to ShellMainView to restore the investigation
+      this.$nextTick(() => {
+        if (this.$refs.shellView) {
+          this.$refs.shellView.handleImportInvestigation(state);
+        }
+      });
+    },
+    // Handle share investigation from header button
+    handleShare() {
+      // Ensure we're on the shell view
+      if (!this.showShell) {
+        this.toggleShell();
+      }
+      this.$nextTick(() => {
+        const state = this.$refs.shellView?.getInvestigationState();
+        if (!state || !state.graphData?.nodes?.length) {
+          // No graph data to share - could show toast/alert
+          return;
+        }
+        const result = generateExportCode(state);
+        this.shareExportCode = result.code;
+        this.shareExportCodeLength = result.length;
+        this.shareHiddenCount = Object.keys(state.hiddenElements?.nodes || {}).length
+                              + Object.keys(state.hiddenElements?.edges || {}).length;
+        this.showShareModal = true;
+      });
+    },
   },
 };
 </script>
@@ -496,7 +569,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.75rem 1.5rem;
+  padding: 0.4rem 1rem;
   max-width: 100%;
 }
 

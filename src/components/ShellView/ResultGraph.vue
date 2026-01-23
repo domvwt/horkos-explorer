@@ -32,20 +32,6 @@
           <i class="fa-solid fa-times" />
         </button>
 
-        <!-- Share Investigation Button - Always Visible -->
-        <div
-          v-if="queryInfo && queryInfo.query"
-          class="result-graph__share-section"
-        >
-          <button
-            class="btn btn-sm btn-primary w-100"
-            @click="generateShareUrl()"
-          >
-            <i class="fa-solid fa-share-nodes" />
-            Share Investigation
-          </button>
-        </div>
-
         <div
           v-if="clickedIsNode"
           class="result-graph__actions"
@@ -291,15 +277,6 @@
       :right-position="isSidePanelOpen ? sidebarWidth + 16 : 16"
       @dismiss="dismissToast"
     />
-
-    <!-- Share Investigation Modal -->
-    <ShareModal
-      :visible="shareModalVisible"
-      :export-code="shareExportCode"
-      :export-code-length="shareExportCodeLength"
-      :hidden-count="Object.keys(hiddenElements.nodes).length + Object.keys(hiddenElements.edges).length"
-      @close="closeShareModal"
-    />
   </div>
 </template>
 
@@ -315,12 +292,10 @@ import { useModeStore } from "../../store/ModeStore";
 import { mapStores } from 'pinia'
 import ValueFormatter from "../../utils/ValueFormatter";
 import HoverContainer from "./HoverContainer.vue";
-import ShareModal from "./ShareModal.vue";
 import GraphToast from "./GraphToast.vue";
 import ExternalLinksPanel from "./ExternalLinksPanel.vue";
 import SourceProvenancePanel from "./SourceProvenancePanel.vue";
 import g6Utils from '../../utils/G6Utils';
-import { generateExportCode } from "../../utils/InvestigationState";
 import Axios from "@/utils/AxiosWrapper";
 import { createGraphConfig } from "./graphConfig";
 
@@ -328,7 +303,6 @@ export default {
   name: "ResultGraph",
   components: {
     HoverContainer,
-    ShareModal,
     GraphToast,
     ExternalLinksPanel,
     SourceProvenancePanel
@@ -409,10 +383,6 @@ export default {
     toastMessage: null,
     toastTimeout: null,
     shownProfligateWarnings: new Set(),
-    // Investigation state sharing
-    shareModalVisible: false,
-    shareExportCode: '',
-    shareExportCodeLength: 0,
   }),
   computed: {
     graphVizSettings() {
@@ -2167,6 +2137,15 @@ export default {
       this.$nextTick(() => {
         this.updateNeighborCounts();
       });
+
+      // Step 8: Resize graph to fit container and auto-fit content
+      await this.$nextTick();
+      this.handleResize();
+      await this.$nextTick();
+      // Fit to view if no viewport zoom was specified
+      if (!state.viewport?.zoom && this.g6Graph) {
+        this.fitToView();
+      }
     },
 
     /**
@@ -2415,26 +2394,6 @@ export default {
       }
 
       return results;
-    },
-
-
-    /**
-     * Generate export code and show share modal
-     */
-    generateShareUrl() {
-      const state = this.getInvestigationState();
-      const result = generateExportCode(state);
-
-      this.shareExportCode = result.code;
-      this.shareExportCodeLength = result.length;
-      this.shareModalVisible = true;
-    },
-
-    /**
-     * Close share modal
-     */
-    closeShareModal() {
-      this.shareModalVisible = false;
     },
   },
 };

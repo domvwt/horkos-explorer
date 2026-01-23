@@ -362,6 +362,16 @@ export default {
      * @param {Object} [state.viewport] - Viewport state passed to ResultGraph
      * @returns {Promise<void>}
      */
+    getInvestigationState() {
+      // Get investigation state from the first result container
+      const refName = this.getRefName(0);
+      const container = this.$refs[refName]?.[0];
+      if (container) {
+        return container.getInvestigationState();
+      }
+      return null;
+    },
+
     async loadSavedGraphData(state) {
       // Build queryInfo from state
       const queryInfo = state.queries && state.queries.length > 0 ? {

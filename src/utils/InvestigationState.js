@@ -117,13 +117,15 @@ function deserializeState(compressed) {
 
 /**
  * Generate an export code for clipboard sharing.
+ * Format: HKS1:<compressed_data>:Z
+ * The :Z suffix acts as an end marker to detect truncated codes.
  *
  * @param {Object} state - Investigation state object
  * @returns {Object} {code, length}
  */
 export function generateExportCode(state) {
   const compressed = serializeState(state);
-  const code = `HKS1:${compressed}`;
+  const code = `HKS1:${compressed}:Z`;
 
   return {
     code,
@@ -133,6 +135,7 @@ export function generateExportCode(state) {
 
 /**
  * Parse an export code from clipboard back to state.
+ * Validates both the HKS1: prefix and :Z end marker.
  *
  * @param {string} code - Export code from generateExportCode
  * @returns {Object|null} Deserialized state or null if invalid
@@ -149,7 +152,13 @@ export function parseExportCode(code) {
     return null;
   }
 
-  const compressed = code.slice(5);
+  if (!code.endsWith(':Z')) {
+    console.error('[InvestigationState] Invalid export code: missing end marker (code may be truncated)');
+    return null;
+  }
+
+  // Extract compressed data between "HKS1:" and ":Z"
+  const compressed = code.slice(5, -2);
   return deserializeState(compressed);
 }
 
