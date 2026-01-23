@@ -145,6 +145,7 @@
           v-if="queryResult && showCode"
           ref="resultCode"
           :query-result="queryResult"
+          :graph-data="currentGraphData"
           :schema="schema"
           :container-height="containerHeight"
         />
@@ -215,6 +216,7 @@ export default {
     graphSidebarOpen: false,
     windowResizeDebounceTimer: null,
     windowResizeDebounceMs: 100,
+    currentGraphData: null,
   }),
   computed: {
     ...mapStores(useModeStore),
@@ -286,9 +288,21 @@ export default {
       this.graphSidebarOpen = false;
     },
     toggleCodeView() {
+      // Capture current graph state before switching views
+      this.updateCurrentGraphData();
       this.hideAll();
       this.showCode = true;
       this.graphSidebarOpen = false;
+    },
+    updateCurrentGraphData() {
+      if (this.$refs.resultGraph && this.$refs.resultGraph.g6Graph) {
+        this.currentGraphData = {
+          nodes: this.$refs.resultGraph.g6Graph.getNodeData() || [],
+          edges: this.$refs.resultGraph.g6Graph.getEdgeData() || [],
+        };
+      } else {
+        this.currentGraphData = null;
+      }
     },
     handleGraphEmpty() {
       this.isGraphEmpty = true;

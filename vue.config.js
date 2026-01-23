@@ -67,7 +67,7 @@ module.exports = defineConfig({
         filename: '[name].worker.js',
         // Only include languages needed for Cypher editor
         // This dramatically reduces build time and bundle size
-        languages: ['cypher'],
+        languages: ['cypher', 'json'],
         // Disable features not needed for a simple query editor
         features: [
           'bracketMatching',
