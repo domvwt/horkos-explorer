@@ -25,18 +25,25 @@
         @mousedown="startResize"
       />
       <div class="result-graph__side-panel-content">
-        <button
-          class="result-graph__sidebar-button--close"
-          @click="toggleSidePanel"
-        >
-          <i class="fa-solid fa-times" />
-        </button>
+        <div class="result-graph__side-panel-header">
+          <h5 v-if="clickedIsNode">
+            Actions
+          </h5>
+          <h5 v-else>
+            Overview
+          </h5>
+          <button
+            class="result-graph__sidebar-button--close"
+            @click="toggleSidePanel"
+          >
+            <i class="fa-solid fa-times" />
+          </button>
+        </div>
 
         <div
           v-if="clickedIsNode"
           class="result-graph__actions"
         >
-          <h5>Actions</h5>
           <button
             class="btn btn-sm btn-outline-secondary"
             @click="hideNode()"
@@ -67,12 +74,22 @@
             @click="expandSelectedNode()"
           >
             <i class="fa-solid fa-up-down-left-right" />
-            Expand Neighbors
+            <span v-if="currentNodeNeighborInfo && currentNodeNeighborInfo.hasCount">
+              Expand Neighbors (+{{ currentNodeNeighborInfo.count }})
+              <i
+                v-if="currentNodeNeighborInfo.isProfligate"
+                class="fa-solid fa-triangle-exclamation neighbor-warning"
+                title="High connectivity (>10 connections)"
+              />
+            </span>
+            <span v-else>
+              Expand Neighbors
+            </span>
           </button>
 
           <button
             v-else
-            class="btn btn-sm btn-outline-primary"
+            class="btn btn-sm btn-outline-secondary"
             @click="collapseSelectedNode()"
           >
             <i class="fa-solid fa-up-down-left-right" />
@@ -80,30 +97,6 @@
           </button>
         </div>
 
-        <!-- Neighbor Count Info -->
-        <div
-          v-if="clickedIsNode && currentNodeNeighborInfo && currentNodeNeighborInfo.hasCount"
-          class="result-graph__neighbor-info"
-        >
-          <div class="neighbor-info-row">
-            <span class="neighbor-info-label">
-              <i class="fa-solid fa-diagram-project" /> Connections
-            </span>
-            <span
-              class="neighbor-info-value"
-              :class="{ 'neighbor-info-value--profligate': currentNodeNeighborInfo.isProfligate }"
-            >
-              {{ currentNodeNeighborInfo.count }} new
-              <i
-                v-if="currentNodeNeighborInfo.isProfligate"
-                class="fa-solid fa-triangle-exclamation"
-                title="High connectivity (>10 connections)"
-              />
-            </span>
-          </div>
-        </div>
-
-        <br>
         <div v-if="displayLabel">
           <div class="result-graph__summary-section">
             <h5>{{ sidePanelPropertyTitlePrefix }} Properties</h5>
@@ -156,8 +149,6 @@
           />
         </div>
         <div v-else>
-          <h5>Overview</h5>
-
           <div v-if="counters.total.node > 0">
             <div class="result-graph__summary-section">
               <p>
@@ -207,7 +198,7 @@
                   <th scope="row">
                     <span
                       class="badge bg-primary"
-                      :style="{ backgroundColor: ` ${getColor(label)} !important`, textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000', color: 'white !important' }"
+                      :style="{ backgroundColor: `${getColor(label)} !important`, textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000', color: 'white !important' }"
                     >{{
                       label
                     }}</span>
@@ -237,7 +228,7 @@
                     <span
                       class="badge bg-primary"
                       :style="{
-                        backgroundColor: ` ${getColor(label)} !important`,
+                        backgroundColor: `${getColor(label)} !important`,
                         color: 'white !important',
                         textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
                       }"
@@ -1395,7 +1386,7 @@ export default {
       this.expansions.push({
         id: model.id, neighbors
       });
-      this.deselectAll();
+      this.isCurrentNodeExpanded = true;
 
       // Trigger neighbor count update for any new leaf nodes
       this.$nextTick(() => {
@@ -2504,8 +2495,7 @@ export default {
       height: 100%;
       overflow-x: hidden;
       overflow-y: auto;
-      padding: 1rem;
-      padding-left: 1.5rem;
+      padding: 0.75rem 1rem 1rem 1.5rem;
 
       /* Thin scrollbar always visible */
       scrollbar-width: thin;
@@ -2529,19 +2519,28 @@ export default {
       }
     }
 
+    .result-graph__side-panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.5rem;
+
+      h5 {
+        margin: 0;
+      }
+    }
+
     .result-graph__sidebar-button--close {
-      position: absolute;
-      top: 1rem;
-      right: 1rem;
       background: none;
       border: none;
-      font-size: 1.5rem;
+      font-size: 1.25rem;
       cursor: pointer;
       color: var(--bs-body-text);
-      z-index: 3;
+      padding: 0;
+      line-height: 1;
 
       &:hover {
-        opacity: 0.7;
+        color: var(--bs-body-bg-accent);
       }
     }
 
@@ -2550,59 +2549,15 @@ export default {
       flex-direction: column;
       gap: 0.5rem;
       margin-bottom: 1rem;
-
-      h5 {
-        margin-bottom: 0.5rem;
-      }
     }
 
-    .result-graph__neighbor-info {
-      background-color: var(--bs-body-bg);
-      border-radius: 0.5rem;
-      padding: 0.75rem;
-      margin-bottom: 1rem;
+    .result-graph__summary-section {
+      margin-top: 0.5rem;
+    }
 
-      .neighbor-info-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 0.5rem;
-      }
-
-      .neighbor-info-label {
-        font-size: 0.8rem;
-        font-weight: 600;
-        color: var(--bs-body-text);
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-
-        i {
-          color: var(--bs-body-text-secondary);
-        }
-      }
-
-      .neighbor-info-value {
-        font-size: 0.8rem;
-        font-weight: 500;
-        color: var(--bs-body-text-secondary);
-        display: flex;
-        align-items: center;
-        gap: 0.375rem;
-
-        &.neighbor-info-value--profligate {
-          color: #ffc107;
-          font-weight: 600;
-
-          i {
-            color: #ffc107;
-          }
-        }
-
-        i {
-          font-size: 0.75rem;
-        }
-      }
+    .neighbor-warning {
+      color: #ffc107;
+      margin-left: 0.25rem;
     }
 
     table {
@@ -2733,12 +2688,6 @@ export default {
           white-space: nowrap;
           padding-right: 0;
         }
-
-        &:hover {
-          .value-text {
-            opacity: 0.8;
-          }
-        }
       }
 
       .copyable-cell {
@@ -2777,8 +2726,11 @@ export default {
       }
     }
 
-    h5 {
-      margin-bottom: 1rem;
+    h5,
+    .section-title {
+      font-size: 0.9rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
       color: var(--bs-body-text);
     }
 
@@ -2813,11 +2765,24 @@ export default {
       i {
         margin-right: 0.5rem;
       }
+
+      &.btn-active {
+        background-color: var(--bs-body-bg-accent);
+        color: white;
+
+        &:hover {
+          opacity: 0.9;
+        }
+      }
     }
 
     button.btn-outline-primary {
       background-color: var(--bs-body-bg-accent);
-      color: var(--bs-body-bg);
+      color: white;
+
+      &:hover {
+        opacity: 0.9;
+      }
     }
 
     .badge.bg-primary {
@@ -2843,7 +2808,8 @@ export default {
     height: 3rem;
 
     &:hover {
-      opacity: 0.8;
+      background-color: var(--bs-body-bg-hover);
+      border-color: var(--bs-body-text);
     }
 
     i {
@@ -2857,17 +2823,8 @@ export default {
     padding-bottom: 1rem;
     border-bottom: 1px solid var(--bs-border-color);
 
-    button {
-      transition: all 0.2s;
-
-      &:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-      }
-
-      i {
-        margin-right: 0.5rem;
-      }
+    button i {
+      margin-right: 0.5rem;
     }
   }
 }
