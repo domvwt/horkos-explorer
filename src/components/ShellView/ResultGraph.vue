@@ -563,6 +563,17 @@ export default {
         this.handleResize();
       });
     }
+
+    // Prevent right-click from triggering G6's drag-canvas behavior
+    // G6's drag-canvas starts on pointerdown, but when right-click opens the
+    // context menu, the pointerup never fires, leaving drag mode stuck.
+    // By stopping propagation on right-click pointerdown, we let the browser
+    // handle the context menu natively without G6 interference.
+    this.$refs.graph.addEventListener('pointerdown', (e) => {
+      if (e.button === 2) {
+        e.stopPropagation();
+      }
+    }, true); // Use capture phase to intercept before G6
   },
   beforeUnmount() {
     if (this.layoutFitTimeout) {
