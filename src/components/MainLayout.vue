@@ -7,8 +7,7 @@
           class="horkos-brand"
           :href="homeUrl"
         >
-          <span class="trident-icon">🔱</span>
-          <span class="brand-text">horkos</span>
+<span class="brand-text">horkos</span>
         </a>
 
         <div class="main-layout__header-actions">
@@ -586,11 +585,6 @@ body {
   &:hover {
     opacity: 0.7;
   }
-}
-
-.horkos-brand .trident-icon {
-  font-size: 1.5rem;
-  line-height: 1;
 }
 
 .horkos-brand .brand-text {

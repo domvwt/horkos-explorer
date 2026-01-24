@@ -996,7 +996,6 @@ export default {
         combined[edge.id] = [];
       });
       this.setElementState(combined);
-      this.deselectAll();
     },
 
     showAllNodesRels() {
@@ -3136,6 +3135,7 @@ export default {
       color: white;
 
       &:hover {
+        background-color: var(--bs-body-bg-accent);
         opacity: 0.9;
       }
     }
