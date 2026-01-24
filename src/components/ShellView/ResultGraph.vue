@@ -42,6 +42,7 @@
       ref="sidePanel"
       class="result-graph__side-panel"
       :style="{ width: sidebarWidth + 'px' }"
+      @mouseenter="$refs.hoverContainer.resetHover()"
     >
       <div
         class="resize-handle"
@@ -163,6 +164,20 @@
             v-if="clickedIsNode"
             :entity-type="clickedLabel"
             :properties="clickedProperties"
+          />
+
+          <!-- Connected Entities -->
+          <ConnectedEntitiesPanel
+            v-if="clickedIsNode && clickedId"
+            :node-id="clickedId"
+            :node-label="clickedLabel"
+            :node-properties="clickedProperties"
+            :schema="schema"
+            :g6-graph="g6Graph"
+            :is-wasm="modeStore.isWasm"
+            :settings-store="settingsStore"
+            @select-node="handleConnectedNodeClick"
+            @add-node="handleAddConnectedNode"
           />
 
           <!-- Source Provenance -->
@@ -310,6 +325,7 @@ import {
   extractGraphFromQueryResult
 } from "../../utils/GraphResultExtractor";
 import NeighborsFetcher from "../../utils/NeighborsFetcher";
+import DataDefinitionLanguage from "../../utils/DataDefinitionLanguage";
 import { useSettingsStore } from "../../store/SettingsStore";
 import { useModeStore } from "../../store/ModeStore";
 import { mapStores } from 'pinia'
@@ -318,6 +334,7 @@ import HoverContainer from "./HoverContainer.vue";
 import GraphToast from "./GraphToast.vue";
 import ExternalLinksPanel from "./ExternalLinksPanel.vue";
 import SourceProvenancePanel from "./SourceProvenancePanel.vue";
+import ConnectedEntitiesPanel from "./ConnectedEntitiesPanel.vue";
 import g6Utils from '../../utils/G6Utils';
 import Axios from "@/utils/AxiosWrapper";
 import { createGraphConfig, getLayoutConfig } from "./graphConfig";
@@ -329,7 +346,8 @@ export default {
     HoverContainer,
     GraphToast,
     ExternalLinksPanel,
-    SourceProvenancePanel
+    SourceProvenancePanel,
+    ConnectedEntitiesPanel
   },
   props: {
     queryResult: {
@@ -1066,6 +1084,105 @@ export default {
           this.countNewNeighbors(model.id);
         }
       }
+    },
+
+    handleConnectedNodeClick(nodeId) {
+      // Select the connected node in the graph
+      try {
+        const nodeData = this.g6Graph.getNodeData(nodeId);
+        if (nodeData) {
+          this.handleClick(nodeData);
+        }
+      } catch (e) {
+        // Node not found in graph
+        console.warn('Connected node not found in graph:', nodeId);
+      }
+    },
+
+    async handleAddConnectedNode(entity) {
+      // Add a connected node from the ConnectedEntitiesPanel to the graph
+      // Keep the current node selected (don't switch to the new node)
+      if (!entity.rawNode || !entity.rawRel) {
+        console.warn('Cannot add node: missing raw data');
+        return;
+      }
+
+      const rawNode = entity.rawNode;
+
+      // Capture state before adding for undo
+      const nodesBefore = new Set((this.g6Graph.getNodeData() || []).map(n => n.id));
+      const edgesBefore = new Set((this.g6Graph.getEdgeData() || []).map(e => e.id));
+
+      // First add the node with the initial edge
+      const initialQueryResult = {
+        rows: [[entity.rawRel, rawNode]],
+        dataTypes: ['REL', 'NODE'],
+      };
+      this.addDataWithQueryResult(initialQueryResult);
+
+      // Now fetch ALL edges between the current node and the newly added node
+      // to ensure we don't miss any relationships
+      try {
+        const currentNodeData = this.g6Graph.getNodeData(this.clickedId);
+        const { tableName, primaryKeyName, primaryKeyValue } = this.getInfoForExpansion(currentNodeData);
+        const newNodeTableName = rawNode._label;
+        const newNodeSchema = this.schema.nodeTables.find(t => t.name === newNodeTableName);
+        const newNodePkProp = newNodeSchema?.properties.find(p => p.isPrimaryKey);
+        const newNodePkName = newNodePkProp?.name;
+        const newNodePkValue = rawNode[newNodePkName];
+
+        if (newNodePkName && newNodePkValue !== undefined) {
+          // Query for all edges between these two nodes in both directions
+          // Escape identifiers to prevent injection
+          const escapedTableName = DataDefinitionLanguage._escapeName(tableName);
+          const escapedNewNodeTableName = DataDefinitionLanguage._escapeName(newNodeTableName);
+          const escapedPrimaryKeyName = DataDefinitionLanguage._escapeName(primaryKeyName);
+          const escapedNewNodePkName = DataDefinitionLanguage._escapeName(newNodePkName);
+          const query = `
+            MATCH (a:${escapedTableName})-[r]-(b:${escapedNewNodeTableName})
+            WHERE a.${escapedPrimaryKeyName} = $pk1 AND b.${escapedNewNodePkName} = $pk2
+            RETURN r
+          `;
+          const params = { pk1: primaryKeyValue, pk2: newNodePkValue };
+
+          const result = this.modeStore.isWasm
+            ? await import("../../utils/KuzuWasm").then(m => m.default.query(query, params))
+            : await Axios.post("api/cypher", { query, params }).then(r => r.data);
+
+          if (result && result.rows) {
+            // Add any additional edges we found
+            result.rows.forEach(row => {
+              const rel = row.r || row[0];
+              if (rel && rel._id) {
+                const edgeQueryResult = {
+                  rows: [[rel]],
+                  dataTypes: ['REL'],
+                };
+                this.addDataWithQueryResult(edgeQueryResult);
+              }
+            });
+          }
+        }
+      } catch (e) {
+        // If fetching additional edges fails, we still have the initial edge
+        console.warn('Failed to fetch additional edges:', e);
+      }
+
+      // Capture added nodes/edges after adding
+      const nodesAfter = this.g6Graph.getNodeData() || [];
+      const edgesAfter = this.g6Graph.getEdgeData() || [];
+      const addedNodes = nodesAfter.filter(n => !nodesBefore.has(n.id));
+      const addedEdges = edgesAfter.filter(e => !edgesBefore.has(e.id));
+
+      // Record undo action
+      if (addedNodes.length > 0 || addedEdges.length > 0) {
+        this.historyManager.push({
+          type: 'add-connected-node',
+          addedNodes,
+          addedEdges,
+        });
+      }
+      // Keep current node selected - no need to change selection
     },
 
     togglePropertyExpansion(index) {

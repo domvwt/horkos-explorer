@@ -3,10 +3,8 @@ class DataDefinitionLanguage {
     if (!name) {
       return "";
     }
-    if (name.includes(" ") || name.includes(".")) {
-      return `\`${name}\``;
-    }
-    return name;
+    const escaped = name.replace(/`/g, '``');
+    return `\`${escaped}\``;
   }
 
   _jsonEscapedString = (str) => {
