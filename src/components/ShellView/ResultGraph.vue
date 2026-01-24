@@ -297,6 +297,7 @@ import SourceProvenancePanel from "./SourceProvenancePanel.vue";
 import g6Utils from '../../utils/G6Utils';
 import Axios from "@/utils/AxiosWrapper";
 import { createGraphConfig, getLayoutConfig } from "./graphConfig";
+import { parseStableKey } from "@/utils/InvestigationState";
 
 export default {
   name: "ResultGraph",
@@ -1909,26 +1910,9 @@ export default {
     // Investigation State Management Methods
 
     /**
-     * Capture the complete current investigation state for URL sharing.
-     *
-     * Extracts all graph data (nodes and edges with full properties), executed queries,
-     * hidden elements, and viewport settings. The returned state object can be serialized
-     * and compressed for URL parameters, allowing users to share their exact investigation
-     * view with colleagues.
-     *
-     * Note: This saves the complete graph data rather than just expansion IDs, trading
-     * URL size for guaranteed accuracy and avoiding additional database queries during
-     * restoration. For very large graphs (>1000 nodes), consider implementing server-side
-     * storage with short URL codes.
-     *
-     * @returns {Object} Investigation state object with structure:
-     *   - queries: Array of {query, params, timestamp} objects
-     *   - graphData: {nodes: Array, edges: Array} with complete G6 graph data
-     *   - hiddenElements: {nodes: Object, edges: Object} map of hidden element IDs
-     *   - viewport: {zoom: number} current zoom level (null if default)
+     * Capture current investigation state for sharing.
      */
     getInvestigationState() {
-      // Build queries array from current queryInfo prop
       const queries = [];
       if (this.queryInfo && this.queryInfo.query) {
         queries.push({
@@ -1938,10 +1922,6 @@ export default {
         });
       }
 
-      // Get complete graph data
-      // Note: Saving full data makes URLs larger, but ensures accurate restoration
-      // without additional DB queries. For large graphs, consider implementing
-      // a server-side storage solution with short URL codes.
       let graphData = { nodes: [], edges: [] };
       if (this.g6Graph) {
         graphData = {
@@ -1952,7 +1932,7 @@ export default {
 
       return {
         queries,
-        graphData, // Save entire graph instead of just expansion IDs
+        graphData,
         hiddenElements: this.hiddenElements,
         viewport: this.getViewportState(),
       };
@@ -1983,72 +1963,40 @@ export default {
 
 
     /**
-     * Restore a previously saved investigation state into the graph visualization.
-     *
-     * This method reconstructs the exact graph view from a shared investigation link by:
-     * 1. Refetching full node/edge properties from the database using minimal IDs
-     * 2. Initializing an empty G6 graph with appropriate force layout
-     * 3. Building full G6 node/edge objects from refetched data + saved positions
-     * 4. Re-applying hidden element states
-     * 5. Restoring the viewport zoom level
-     *
-     * The parent component (ShellCell) is responsible for loading the query text into
-     * the editor. This method focuses solely on reconstructing the graph visualization.
-     *
-     * @param {Object} state - Investigation state object from deserializeState()
-     * @param {Array} state.queries - Array of executed queries (unused here, handled by parent)
-     * @param {Array} state.minimalNodes - Minimal node data [{id, x, y, pk}]
-     * @param {Array} state.minimalEdges - Minimal edge data [{id, src, tgt}]
-     * @param {Object} state.hiddenElements - Map of hidden elements {nodes: Object, edges: Object}
-     * @param {Object} [state.viewport] - Optional viewport state {zoom: number}
-     * @returns {Promise<void>}
+     * Restore graph from a shared investigation link.
+     * Refetches full node/edge properties from database using label+pk, then rebuilds the graph.
      */
     async restoreInvestigationState(state) {
       if (!state) return;
 
-      // Wait for graph to be initialized
       await this.$nextTick();
 
-      // Check for minimal format (new) vs full format (legacy - shouldn't exist in v1)
-      const hasMinimalData = state.minimalNodes && state.minimalNodes.length > 0;
-
-      if (!hasMinimalData) {
+      if (!state.minimalNodes || state.minimalNodes.length === 0) {
         this.showToast('Import failed: no node data found in export code', 5000);
         return;
       }
 
-      // Check for legacy export codes without label field
-      if (state.hasLegacyNodes) {
-        this.showToast(
-          `This export code is outdated. ${state.legacyNodeCount} nodes cannot be restored. Please create a new export from the original investigation.`,
-          8000
-        );
-      }
-
-      // Step 1: Refetch full node properties from database
       const nodePropsMap = await this.refetchNodeProperties(state.minimalNodes);
+      const edgePropsMap = await this.refetchEdgeProperties(state.minimalEdges);
 
-      // Step 2: Refetch full edge properties from database
-      const edgePropsMap = await this.refetchEdgeProperties(state.minimalEdges, nodePropsMap);
-
-      // Step 3: Build full G6 nodes from refetched data + saved positions
+      // Build G6 nodes from refetched data + saved positions
       const nodes = [];
-      const positionMap = {}; // Map node ID to saved position
+      const pkToG6Id = {};
 
       state.minimalNodes.forEach(minNode => {
-        positionMap[minNode.id] = { x: minNode.x, y: minNode.y };
+        if (!minNode.pk) return;
 
-        const rawNode = nodePropsMap[minNode.id];
+        const rawNode = nodePropsMap[minNode.pk];
         if (!rawNode) {
-          console.warn('[ResultGraph] Could not refetch node:', minNode.id);
+          console.warn('[ResultGraph] Could not refetch node:', minNode.pk);
           return;
         }
 
-        // Format label for display (consistent with extractGraphFromQueryResult)
-        const formattedLabel = formatNodeLabel(rawNode, this.schema, this.settingsStore);
+        const g6Id = encodeId(rawNode._id);
+        pkToG6Id[minNode.pk] = g6Id;
 
-        // Build G6 node using shared utility with position pinning
-        const g6Node = buildG6Node(minNode.id, rawNode, this.settingsStore, {
+        const formattedLabel = formatNodeLabel(rawNode, this.schema, this.settingsStore);
+        const g6Node = buildG6Node(g6Id, rawNode, this.settingsStore, {
           x: minNode.x,
           y: minNode.y,
           fx: minNode.x,
@@ -2057,44 +2005,47 @@ export default {
           rawProperties: rawNode,
         });
 
-        if (g6Node) {
-          nodes.push(g6Node);
-        }
+        if (g6Node) nodes.push(g6Node);
       });
 
-      // Step 4: Build full G6 edges from refetched data
+      // Build G6 edges from refetched data
       const edges = [];
-      const edgeCountBetweenNodes = {};  // Track overlapping edges for proper arc rendering
+      const edgePkToG6Id = {};
+      const edgeCountBetweenNodes = {};
 
       state.minimalEdges.forEach(minEdge => {
-        const rawRel = edgePropsMap[minEdge.id];
+        if (!minEdge.pk) return;
+
+        const rawRel = edgePropsMap[minEdge.pk];
         if (!rawRel) {
-          console.warn('[ResultGraph] Could not refetch edge:', minEdge.id);
+          console.warn('[ResultGraph] Could not refetch edge:', minEdge.pk);
           return;
         }
 
-        // Track edge count between node pairs for proper arc/curve rendering
-        const pairKey = [minEdge.src, minEdge.tgt].sort().join('|');
+        const edgeG6Id = encodeId(rawRel._id);
+        edgePkToG6Id[minEdge.pk] = edgeG6Id;
+
+        const srcG6Id = encodeId(rawRel._src);
+        const tgtG6Id = encodeId(rawRel._dst);
+
+        const pairKey = [srcG6Id, tgtG6Id].sort().join('|');
         edgeCountBetweenNodes[pairKey] = (edgeCountBetweenNodes[pairKey] || 0) + 1;
         const overlapIndex = edgeCountBetweenNodes[pairKey];
 
-        // Build G6 edge using shared utility (handles self-loops and overlapping edges)
-        const g6Rel = buildG6Edge(
-          minEdge.id,
-          minEdge.src,
-          minEdge.tgt,
+        const g6Edge = buildG6Edge(
+          edgeG6Id,
+          srcG6Id,
+          tgtG6Id,
           rawRel,
           this.settingsStore,
           this.schema,
           { overlapIndex }
         );
 
-        if (g6Rel) {
-          edges.push(g6Rel);
-        }
+        if (g6Edge) edges.push(g6Edge);
       });
 
-      // Step 5: Initialize graph and load data
+      // Initialize graph and load data
       if (!this.g6Graph) {
         await this.initializeEmptyGraph(edges);
         await this.$nextTick();
@@ -2102,72 +2053,73 @@ export default {
 
       if (this.g6Graph) {
         this.g6Graph.clear();
-
         this.g6Graph.addData({ nodes, edges });
         await this.render();
-
-        // Calculate counters
         this.calculateCountersFromGraphData({ nodes, edges });
       } else {
         this.showToast('Import failed: could not initialize graph', 5000);
         return;
       }
 
-      // Show success feedback if nodes were restored
-      if (nodes.length > 0) {
-        const skippedNodes = state.minimalNodes.length - nodes.length;
-        if (skippedNodes > 0) {
-          this.showToast(`Restored ${nodes.length} nodes (${skippedNodes} could not be found in database)`, 5000);
+      // Show success feedback
+      if (nodes.length > 0 || edges.length > 0) {
+        const skippedNodes = state.minimalNodes.filter(n => n.pk).length - nodes.length;
+        const skippedEdges = state.minimalEdges.filter(e => e.pk).length - edges.length;
+        const parts = [];
+        if (nodes.length > 0) parts.push(`${nodes.length} nodes`);
+        if (edges.length > 0) parts.push(`${edges.length} edges`);
+
+        if (skippedNodes > 0 || skippedEdges > 0) {
+          const skippedParts = [];
+          if (skippedNodes > 0) skippedParts.push(`${skippedNodes} nodes`);
+          if (skippedEdges > 0) skippedParts.push(`${skippedEdges} edges`);
+          this.showToast(`Restored ${parts.join(', ')} (${skippedParts.join(', ')} not found)`, 5000);
         } else {
-          this.showToast(`Successfully restored ${nodes.length} nodes`, 3000);
+          this.showToast(`Successfully restored ${parts.join(' and ')}`, 3000);
         }
       } else if (state.minimalNodes.length > 0) {
-        this.showToast('Import failed: none of the nodes could be found in the database', 5000);
+        this.showToast('Import failed: none of the elements could be found in the database', 5000);
       }
 
-      // Step 6: Restore hidden elements
+      // Convert hidden elements from stable keys to G6 IDs
+      this.hiddenElements = { nodes: {}, edges: {} };
+
       if (state.hiddenElements) {
-        this.hiddenElements = {
-          nodes: { ...(state.hiddenElements.nodes || {}) },
-          edges: { ...(state.hiddenElements.edges || {}) }
-        };
-
-        // Apply hidden state to graph
-        Object.keys(this.hiddenElements.nodes).forEach(nodeId => {
-          if (this.hiddenElements.nodes[nodeId]) {
-            this.hideGraphElement(nodeId, 'node');
-          }
-        });
-        Object.keys(this.hiddenElements.edges).forEach(edgeId => {
-          if (this.hiddenElements.edges[edgeId]) {
-            this.hideGraphElement(edgeId, 'edge');
-          }
-        });
-      }
-
-      // Step 7: Restore viewport (zoom level)
-      if (state.viewport && state.viewport.zoom && this.g6Graph) {
-        try {
-          await this.$nextTick();
-          this.g6Graph.zoomTo(state.viewport.zoom, { duration: 300 });
-        } catch (e) {
-          console.warn('[ResultGraph] Failed to restore viewport zoom:', e);
+        if (state.hiddenElements.nodes) {
+          Object.keys(state.hiddenElements.nodes).forEach(key => {
+            if (!state.hiddenElements.nodes[key]) return;
+            const { pk } = parseStableKey(key);
+            const g6Id = pkToG6Id[pk];
+            if (g6Id) this.hiddenElements.nodes[g6Id] = true;
+          });
         }
+
+        if (state.hiddenElements.edges) {
+          Object.keys(state.hiddenElements.edges).forEach(key => {
+            if (!state.hiddenElements.edges[key]) return;
+            const { pk } = parseStableKey(key);
+            const g6Id = edgePkToG6Id[pk];
+            if (g6Id) this.hiddenElements.edges[g6Id] = true;
+          });
+        }
+
+        Object.keys(this.hiddenElements.nodes).forEach(g6Id => {
+          this.hideGraphElement(g6Id, 'node');
+        });
+        Object.keys(this.hiddenElements.edges).forEach(g6Id => {
+          this.hideGraphElement(g6Id, 'edge');
+        });
       }
 
-      // Trigger neighbor count update
+      // Resize and fit
       this.$nextTick(() => {
         this.updateNeighborCounts();
       });
 
-      // Step 8: Resize graph to fit container and auto-fit content
       await this.$nextTick();
       this.handleResize();
       await this.$nextTick();
-      // Fit to view if no viewport zoom was specified
-      if (!state.viewport?.zoom && this.g6Graph) {
-        this.fitToView();
-      }
+      this.fitToView();
     },
 
     /**
@@ -2227,12 +2179,6 @@ export default {
       };
     },
 
-    /**
-     * Get valid node labels from schema.
-     * Used to validate labels before query construction to prevent injection.
-     *
-     * @returns {Set<string>} Set of valid node label names
-     */
     getValidNodeLabels() {
       if (!this.schema || !this.schema.nodeTables) {
         return new Set();
@@ -2240,54 +2186,41 @@ export default {
       return new Set(this.schema.nodeTables.map(t => t.name));
     },
 
+    getValidEdgeLabels() {
+      if (!this.schema || !this.schema.relTables) {
+        return new Set();
+      }
+      return new Set(this.schema.relTables.map(t => t.name));
+    },
+
     /**
-     * Refetch full node properties from the database given minimal node data.
-     *
-     * Groups nodes by label and executes batch queries to retrieve full properties.
-     * This is used when restoring from a shared investigation link.
-     *
-     * @param {Array} minimalNodes - Array of {id, x, y, pk, label} minimal node objects
-     * @returns {Promise<Object>} Map of node ID to full node data
+     * Refetch node properties from database. Returns map of pk -> node data.
      */
     async refetchNodeProperties(minimalNodes) {
       if (!minimalNodes || minimalNodes.length === 0) {
         return {};
       }
 
-      // Get valid labels from schema to prevent query injection
       const validLabels = this.getValidNodeLabels();
-
-      // Group nodes by label (stored in minimal node format)
       const nodesByLabel = {};
       let skippedInvalidLabels = 0;
+
       minimalNodes.forEach(node => {
-        const label = node.label;
-        if (!label) {
-          return;
-        }
-        // Validate label against schema to prevent injection attacks
-        if (!validLabels.has(label)) {
+        if (!node.label || !node.pk) return;
+        if (!validLabels.has(node.label)) {
           skippedInvalidLabels++;
           return;
         }
-        if (!nodesByLabel[label]) {
-          nodesByLabel[label] = [];
-        }
-        nodesByLabel[label].push(node);
+        if (!nodesByLabel[node.label]) nodesByLabel[node.label] = [];
+        nodesByLabel[node.label].push(node.pk);
       });
 
       if (skippedInvalidLabels > 0) {
         this.showToast(`Skipped ${skippedInvalidLabels} nodes with invalid labels`, 4000);
       }
 
-      // Build and execute queries for each label
       const results = {};
-
-      for (const [label, nodes] of Object.entries(nodesByLabel)) {
-        const pks = nodes.map(n => n.pk).filter(pk => pk !== null);
-        if (pks.length === 0) continue;
-
-        // Build query - labels are validated against schema, PKs are quoted strings
+      for (const [label, pks] of Object.entries(nodesByLabel)) {
         const pkList = pks.map(pk => `"${pk.replace(/"/g, '\\"')}"`).join(', ');
         const query = `MATCH (n:${label}) WHERE n.id IN [${pkList}] RETURN n`;
 
@@ -2297,126 +2230,73 @@ export default {
             const Kuzu = (await import('@/utils/KuzuWasm')).default;
             response = await Kuzu.query(query);
           } else {
-            const res = await Axios.post('/api/cypher', {
-              query,
-              params: {},
-              updateHistory: false,
-            });
+            const res = await Axios.post('/api/cypher', { query, params: {}, updateHistory: false });
             response = res.data;
           }
-
-          // Process results
-          if (response && response.rows) {
+          if (response?.rows) {
             response.rows.forEach(row => {
-              if (row.n && row.n._id) {
-                const nodeId = encodeId(row.n._id);
-                results[nodeId] = row.n;
-              }
+              if (row.n?.id) results[row.n.id] = row.n;
             });
           }
         } catch (error) {
-          // Silently ignore errors - nodes that can't be refetched will be skipped
+          console.warn('[ResultGraph] Failed to refetch nodes for label:', label, error);
         }
       }
-
       return results;
     },
 
     /**
-     * Refetch full edge properties from the database given minimal edge data.
-     *
-     * Queries edges by their source and target node pairs.
-     *
-     * @param {Array} minimalEdges - Array of {id, src, tgt} minimal edge objects
-     * @param {Object} nodePropsMap - Map of node ID to refetched node properties (for _id lookup)
-     * @returns {Promise<Object>} Map of edge ID to full edge data
+     * Refetch edge properties from database. Returns map of pk -> edge data.
      */
-    async refetchEdgeProperties(minimalEdges, nodePropsMap) {
+    async refetchEdgeProperties(minimalEdges) {
       if (!minimalEdges || minimalEdges.length === 0) {
         return {};
       }
 
-      // We need to query edges by source/target pairs
-      // Build a single query to fetch all edges at once
-      const results = {};
+      const validLabels = this.getValidEdgeLabels();
+      const edgesByLabel = {};
+      let skippedInvalidLabels = 0;
 
-      // Get all unique source and target node IDs
-      const allNodeIds = new Set();
       minimalEdges.forEach(edge => {
-        allNodeIds.add(edge.src);
-        allNodeIds.add(edge.tgt);
+        if (!edge.label || !edge.pk) return;
+        if (!validLabels.has(edge.label)) {
+          skippedInvalidLabels++;
+          return;
+        }
+        if (!edgesByLabel[edge.label]) edgesByLabel[edge.label] = [];
+        edgesByLabel[edge.label].push(edge.pk);
       });
 
-      // Build WHERE clauses for source/target pairs grouped by label combination
-      // This is complex, so we'll use a simpler approach: query all edges between known nodes
-      const nodeIdList = Array.from(allNodeIds);
-
-      // Group nodes by label for the query
-      const nodesByLabel = {};
-      nodeIdList.forEach(nodeId => {
-        const parts = nodeId.split('_');
-        const label = parts[0];
-        if (!nodesByLabel[label]) {
-          nodesByLabel[label] = [];
-        }
-        // Get the primary key from the refetched node data
-        const nodeData = nodePropsMap[nodeId];
-        if (nodeData && nodeData.id) {
-          nodesByLabel[label].push(nodeData.id);
-        }
-      });
-
-      // Query all relationships between the nodes
-      // We query for each node label pair combination
-      const labels = Object.keys(nodesByLabel);
-
-      for (let i = 0; i < labels.length; i++) {
-        for (let j = 0; j < labels.length; j++) {
-          const srcLabel = labels[i];
-          const tgtLabel = labels[j];
-          const srcPks = nodesByLabel[srcLabel];
-          const tgtPks = nodesByLabel[tgtLabel];
-
-          if (srcPks.length === 0 || tgtPks.length === 0) continue;
-
-          const srcPkList = srcPks.map(pk => `"${pk}"`).join(', ');
-          const tgtPkList = tgtPks.map(pk => `"${pk}"`).join(', ');
-
-          const query = `MATCH (a:${srcLabel})-[r]->(b:${tgtLabel})
-                         WHERE a.id IN [${srcPkList}] AND b.id IN [${tgtPkList}]
-                         RETURN r`;
-
-          try {
-            let response;
-            if (this.modeStore.isWasm) {
-              const Kuzu = (await import('@/utils/KuzuWasm')).default;
-              response = await Kuzu.query(query);
-            } else {
-              const res = await Axios.post('/api/cypher', {
-                query,
-                params: {},
-                updateHistory: false,
-              });
-              response = res.data;
-            }
-
-            // Process results
-            if (response && response.rows) {
-              response.rows.forEach(row => {
-                if (row.r && row.r._id) {
-                  const edgeId = encodeId(row.r._id);
-                  results[edgeId] = row.r;
-                }
-              });
-            }
-          } catch (error) {
-            // Silently ignore errors - edges that can't be refetched will be skipped
-          }
-        }
+      if (skippedInvalidLabels > 0) {
+        this.showToast(`Skipped ${skippedInvalidLabels} edges with invalid labels`, 4000);
       }
 
+      const results = {};
+      for (const [label, pks] of Object.entries(edgesByLabel)) {
+        const pkList = pks.map(pk => `"${pk.replace(/"/g, '\\"')}"`).join(', ');
+        const query = `MATCH ()-[r:${label}]->() WHERE r.id IN [${pkList}] RETURN r`;
+
+        try {
+          let response;
+          if (this.modeStore.isWasm) {
+            const Kuzu = (await import('@/utils/KuzuWasm')).default;
+            response = await Kuzu.query(query);
+          } else {
+            const res = await Axios.post('/api/cypher', { query, params: {}, updateHistory: false });
+            response = res.data;
+          }
+          if (response?.rows) {
+            response.rows.forEach(row => {
+              if (row.r?.id) results[row.r.id] = row.r;
+            });
+          }
+        } catch (error) {
+          console.warn('[ResultGraph] Failed to refetch edges for label:', label, error);
+        }
+      }
       return results;
     },
+
   },
 };
 </script>

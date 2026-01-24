@@ -8,58 +8,101 @@ import LZString from 'lz-string';
  * Full node/edge properties are refetched from the database on restore.
  *
  * Format:
- * - Nodes as arrays: [id, x, y, pk, label]
- * - Edges as arrays: [src, tgt]
- * - Query as string only (first query)
+ * - Nodes as arrays: [label, pk, x, y]
+ * - Edges as arrays: [label, pk]
+ * - Hidden elements keyed by stable identifiers: "Label|pk"
  */
 
 const STATE_VERSION = 1;
 
 /**
+ * Create a stable key for hidden element tracking.
+ * Format: "Label|pk"
+ */
+function createStableKey(label, pk) {
+  return `${label}|${pk}`;
+}
+
+/**
+ * Parse a stable key back to label and pk.
+ */
+export function parseStableKey(key) {
+  const separatorIndex = key.indexOf('|');
+  if (separatorIndex === -1) {
+    return { label: null, pk: null };
+  }
+  return {
+    label: key.slice(0, separatorIndex),
+    pk: key.slice(separatorIndex + 1),
+  };
+}
+
+/**
  * Serialize investigation state to a compressed string.
- *
- * @param {Object} state - Investigation state object
- * @param {Array} state.queries - Array of executed queries [{query, params, timestamp}]
- * @param {Object} state.graphData - Full graph data {nodes: [], edges: []}
- * @param {Object} state.hiddenElements - Object with {nodes: {}, edges: {}}
- * @returns {string} Compressed string
  */
 function serializeState(state) {
   const nodes = state.graphData?.nodes || [];
   const edges = state.graphData?.edges || [];
 
-  // Nodes as arrays: [id, x, y, pk, label]
+  // Nodes: [label, pk, x, y]
   const compactNodes = nodes.map(node => [
-    node.id,
+    node.data?.properties?._label || null,
+    node.data?.properties?.id || null,
     Math.round(node.style?.x || 0),
     Math.round(node.style?.y || 0),
-    node.data?.properties?.id || null,
-    node.data?.properties?._label || null,
   ]);
 
-  // Edges as arrays: [src, tgt]
-  const compactEdges = edges.map(edge => [edge.source, edge.target]);
+  // Edges: [label, pk]
+  const compactEdges = edges.map(edge => [
+    edge.data?.properties?._label || null,
+    edge.data?.properties?.id || null,
+  ]);
+
+  // Convert hidden element keys from G6 IDs to stable format
+  const hiddenNodes = {};
+  const hiddenEdges = {};
+
+  if (state.hiddenElements?.nodes) {
+    Object.keys(state.hiddenElements.nodes).forEach(g6Id => {
+      if (!state.hiddenElements.nodes[g6Id]) return;
+      const node = nodes.find(n => n.id === g6Id);
+      if (node?.data?.properties) {
+        const label = node.data.properties._label;
+        const pk = node.data.properties.id;
+        if (label && pk) {
+          hiddenNodes[createStableKey(label, pk)] = true;
+        }
+      }
+    });
+  }
+
+  if (state.hiddenElements?.edges) {
+    Object.keys(state.hiddenElements.edges).forEach(g6Id => {
+      if (!state.hiddenElements.edges[g6Id]) return;
+      const edge = edges.find(e => e.id === g6Id);
+      if (edge?.data?.properties) {
+        const label = edge.data.properties._label;
+        const pk = edge.data.properties.id;
+        if (label && pk) {
+          hiddenEdges[createStableKey(label, pk)] = true;
+        }
+      }
+    });
+  }
 
   const stateObj = {
     v: STATE_VERSION,
     q: state.queries?.[0]?.query || '',
     n: compactNodes,
     e: compactEdges,
-    h: state.hiddenElements || { nodes: {}, edges: {} },
+    h: { nodes: hiddenNodes, edges: hiddenEdges },
   };
 
-  const json = JSON.stringify(stateObj);
-  return LZString.compressToBase64(json);
+  return LZString.compressToBase64(JSON.stringify(stateObj));
 }
 
 /**
  * Deserialize investigation state from compressed string.
- *
- * Returns minimal node/edge data that must be refetched from the database
- * to restore full properties.
- *
- * @param {string} compressed - Compressed state string
- * @returns {Object|null} Deserialized state object or null if invalid
  */
 function deserializeState(compressed) {
   if (!compressed) {
@@ -75,29 +118,24 @@ function deserializeState(compressed) {
 
     const state = JSON.parse(json);
 
-    // Validate version
     if (!state.v || state.v > STATE_VERSION) {
       console.error('[InvestigationState] Invalid or unsupported state version:', state.v);
       return null;
     }
 
-    // Convert compact arrays back to objects
-    const minimalNodes = (state.n || []).map(([id, x, y, pk, label]) => ({
-      id,
+    // Format: [label, pk, x, y]
+    const minimalNodes = (state.n || []).map(([label, pk, x, y]) => ({
+      label,
+      pk,
       x,
       y,
-      pk,
+    }));
+
+    // Format: [label, pk]
+    const minimalEdges = (state.e || []).map(([label, pk]) => ({
       label,
+      pk,
     }));
-
-    const minimalEdges = (state.e || []).map(([src, tgt], i) => ({
-      id: `e_${i}`,
-      src,
-      tgt,
-    }));
-
-    // Check if nodes have labels
-    const nodesWithoutLabels = minimalNodes.filter(n => !n.label);
 
     return {
       version: state.v,
@@ -105,9 +143,6 @@ function deserializeState(compressed) {
       minimalNodes,
       minimalEdges,
       hiddenElements: state.h || { nodes: {}, edges: {} },
-      viewport: null,
-      hasLegacyNodes: nodesWithoutLabels.length > 0,
-      legacyNodeCount: nodesWithoutLabels.length,
     };
   } catch (error) {
     console.error('[InvestigationState] Failed to deserialize investigation state:', error);
@@ -118,27 +153,15 @@ function deserializeState(compressed) {
 /**
  * Generate an export code for clipboard sharing.
  * Format: HKS1:<compressed_data>:Z
- * The :Z suffix acts as an end marker to detect truncated codes.
- *
- * @param {Object} state - Investigation state object
- * @returns {Object} {code, length}
  */
 export function generateExportCode(state) {
   const compressed = serializeState(state);
   const code = `HKS1:${compressed}:Z`;
-
-  return {
-    code,
-    length: code.length,
-  };
+  return { code, length: code.length };
 }
 
 /**
  * Parse an export code from clipboard back to state.
- * Validates both the HKS1: prefix and :Z end marker.
- *
- * @param {string} code - Export code from generateExportCode
- * @returns {Object|null} Deserialized state or null if invalid
  */
 export function parseExportCode(code) {
   if (!code || typeof code !== 'string') {
@@ -157,7 +180,6 @@ export function parseExportCode(code) {
     return null;
   }
 
-  // Extract compressed data between "HKS1:" and ":Z"
   const compressed = code.slice(5, -2);
   return deserializeState(compressed);
 }
@@ -165,4 +187,5 @@ export function parseExportCode(code) {
 export default {
   generateExportCode,
   parseExportCode,
+  parseStableKey,
 };
