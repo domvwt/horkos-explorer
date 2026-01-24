@@ -275,8 +275,16 @@
 import { Graph, GraphEvent } from '@antv/g6';
 import G6Utils from "../../utils/G6Utils";
 import {
-  DATA_TYPES, UI_SIZE, LOOP_POSITIONS, ARC_CURVE_OFFSETS, GRAPH_LAYOUTS
+  DATA_TYPES, UI_SIZE, GRAPH_LAYOUTS
 } from "../../utils/Constants";
+import {
+  encodeId,
+  getNodeIcon,
+  formatNodeLabel,
+  buildG6Node,
+  buildG6Edge,
+  extractGraphFromQueryResult
+} from "../../utils/GraphResultExtractor";
 import NeighborsFetcher from "../../utils/NeighborsFetcher";
 import { useSettingsStore } from "../../store/SettingsStore";
 import { useModeStore } from "../../store/ModeStore";
@@ -808,7 +816,7 @@ export default {
       if (!this.queryResult) {
         return;
       }
-      let { counters, nodes, edges, } = this.extractGraphFromQueryResult(this.queryResult);
+      let { counters, nodes, edges, } = this.extractGraphFromQueryResultMethod(this.queryResult);
       this.counters = counters;
       // Track original node IDs so they're never removed during collapse
       this.originalNodeIds = new Set(nodes.map(n => n.id));
@@ -943,321 +951,14 @@ export default {
       });
     },
 
-    encodeId(id) {
-      return `${id.table}_${id.offset}`;
-    },
-
-    getNodeIcon(nodeLabel) {
-      // Font Awesome 6 unicode characters
-      const iconMap = {
-        'Person': '\uf007',      // fa-user
-        'Company': '\uf1ad',     // fa-building
-        'Address': '\uf3c5',     // fa-map-marker-alt
-      };
-      return iconMap[nodeLabel] || '\uf111'; // fa-circle as fallback
-    },
-
-    extractGraphFromQueryResult(queryResult) {
-      const rows = queryResult.rows;
-      const dataTypes = queryResult.dataTypes;
-      const nodes = {};
-      const edges = {};
-      const numberOfRelsBetweenNodes = {};
-      const nodeLabels = {};
-
-      const sortNodes = (src, dst) => {
-        const sortedLabels = [src.table, dst.table].sort();
-        const sortedSrcDst = [src.offset, dst.offset].sort();
-        return [sortedLabels[0], sortedSrcDst[0], sortedLabels[1], sortedSrcDst[1]];
-      }
-
-      const increaseRelCounter = (src, dst) => {
-        const sortedNodeInfo = sortNodes(src, dst);
-        if (!numberOfRelsBetweenNodes[sortedNodeInfo[0]]) {
-          numberOfRelsBetweenNodes[sortedNodeInfo[0]] = {};
-        }
-        if (!numberOfRelsBetweenNodes[sortedNodeInfo[0]][sortedNodeInfo[2]]) {
-          numberOfRelsBetweenNodes[sortedNodeInfo[0]][sortedNodeInfo[2]] = {};
-        }
-        if (!numberOfRelsBetweenNodes[sortedNodeInfo[0]][sortedNodeInfo[2]][sortedNodeInfo[1]]) {
-          numberOfRelsBetweenNodes[sortedNodeInfo[0]][sortedNodeInfo[2]][sortedNodeInfo[1]] = {};
-        }
-        const currentMap = numberOfRelsBetweenNodes[sortedNodeInfo[0]][sortedNodeInfo[2]][sortedNodeInfo[1]];
-        if (!currentMap[sortedNodeInfo[3]]) {
-          currentMap[sortedNodeInfo[3]] = 0;
-        }
-        currentMap[sortedNodeInfo[3]] += 1;
-        return currentMap[sortedNodeInfo[3]];
-      }
-      const processNode = (rawNode) => {
-        if (!rawNode || !rawNode._id || !rawNode._label) {
-          console.warn('Invalid node data:', rawNode);
-          return;
-        }
-
-        const nodeId = this.encodeId(rawNode._id);
-        nodeLabels[rawNode._id.table] = rawNode._label;
-        const nodeSettings = this.settingsStore.settingsForLabel(rawNode._label);
-        const nodeFill = nodeSettings.g6Settings.style.fill;
-        const labelColor = G6Utils.getReadableTextColor(nodeFill);
-
-        if (nodes[nodeId]) {
-          return;
-        }
-
-        const expectedPropertiesType = {};
-        const nodeTable = this.schema.nodeTables.find((table) => table.name === rawNode._label);
-        if (!nodeTable) {
-          console.warn('Node table not found for label:', rawNode._label);
-          return;
-        }
-        const expectedProperties = nodeTable.properties;
-        expectedProperties.forEach((property) => {
-          expectedPropertiesType[property.name] = property.type;
-        });
-
-        let nodeLabel = "";
-        const nodeLabelProp = nodeSettings.label;
-        if (nodeLabelProp) {
-          nodeLabel = rawNode[nodeLabelProp];
-          if (nodeLabelProp in expectedPropertiesType) {
-            nodeLabel = ValueFormatter.beautifyValue(rawNode[nodeLabelProp], expectedPropertiesType[nodeLabelProp]);
-          }
-          nodeLabel = String(nodeLabel);
-          // Don't truncate - let G6's labelMaxWidth and word wrap handle it
-        }
-
-        // Cap node size to prevent extreme zoom when there are few nodes
-        const maxNodeSize = 100;
-        const displaySize = Math.min(nodeSettings.g6Settings.size, maxNodeSize);
-
-        const g6Node = {
-          id: nodeId,
-          data: {
-            properties: rawNode,
-            ...nodeSettings.g6Settings,
-          },
-          style: {
-            size: displaySize,
-            fill: nodeFill,
-            stroke: G6Utils.shadeColor(nodeFill),
-            lineWidth: nodeSettings.g6Settings.style.lineWidth || 0,
-            labelText: nodeLabel,
-            // labelFill inherited from graph-level config
-            iconText: this.getNodeIcon(rawNode._label),
-            iconFontFamily: "Font Awesome 6 Free",
-            iconFontWeight: 900,
-            iconFontSize: displaySize * 0.35,
-            iconFill: "#ffffff",
-          },
-        };
-
-        nodes[nodeId] = g6Node;
-      };
-
-      const processRel = (rawRel) => {
-        if (!rawRel || !rawRel._id || !rawRel._label || !rawRel._src || !rawRel._dst) {
-          console.warn('Invalid rel data:', rawRel);
-          return;
-        }
-
-        const relSettings = this.settingsStore.settingsForLabel(rawRel._label);
-        const relId = this.encodeId(rawRel._id);
-        const numberOfOverlappingRels = increaseRelCounter(rawRel._src, rawRel._dst);
-
-        if (edges[relId]) {
-          return;
-        }
-
-        const expectedPropertiesType = {};
-        const relTable = this.schema.relTables.find((table) => table.name === rawRel._label);
-        if (!relTable) {
-          console.warn('Rel table not found for label:', rawRel._label);
-          return;
-        }
-        const expectedProperties = relTable.properties;
-        expectedProperties.forEach((property) => {
-          expectedPropertiesType[property.name] = property.type;
-        });
-
-        let relLabel = "";
-        const relLabelProp = relSettings.label;
-        if (relLabelProp) {
-          relLabel = rawRel[relLabelProp];
-          if (relLabelProp === '_label' && relTable.group) {
-            relLabel = relTable.group;
-          }
-          if (relLabelProp in expectedPropertiesType) {
-            relLabel = ValueFormatter.beautifyValue(rawRel[relLabelProp], expectedPropertiesType[relLabelProp]);
-          }
-          relLabel = String(relLabel);
-          const fontSize = relSettings.g6Settings.labelCfg.style.fontSize;
-          // Truncate edge label to max width 80px
-          relLabel = G6Utils.fittingString(relLabel, 80, fontSize);
-        }
-
-        const g6Rel = {
-          id: relId,
-          source: this.encodeId(rawRel._src),
-          target: this.encodeId(rawRel._dst),
-          data: {
-            properties: rawRel,
-            ...relSettings.g6Settings,
-          },
-          style: {
-            stroke: relSettings.g6Settings.style.stroke,
-            lineWidth: relSettings.g6Settings.size || 3,
-            labelText: relLabel,
-          },
-        };
-
-        // Handle self-loops and overlapping edges
-        if (g6Rel.source === g6Rel.target) {
-          // Self-loop (do not set type, otherwise it will not work)
-          g6Rel.style.loopDist = 50;
-          g6Rel.style.loopPlacement = LOOP_POSITIONS[(numberOfOverlappingRels - 1) % LOOP_POSITIONS.length];
-        } else if (numberOfOverlappingRels > 1) {
-          g6Rel.type = 'quadratic';
-          g6Rel.style.curveOffset = ARC_CURVE_OFFSETS[(numberOfOverlappingRels - 1) % ARC_CURVE_OFFSETS.length];
-          g6Rel.style.curvePosition = 0.5;
-        } else {
-          g6Rel.type = 'line';
-        }
-
-        edges[relId] = g6Rel;
-      }
-      // Deduplicate nodes and edges
-      rows.forEach((row) => {
-        for (let key in row) {
-          switch (dataTypes[key]) {
-            case DATA_TYPES.NODE: {
-              if (!row[key] || !row[key]._id) {
-                continue;
-              }
-              const node = { ...row[key] };
-              processNode(node);
-              break;
-            }
-            case DATA_TYPES.REL: {
-              if (!row[key] || !row[key]._src || !row[key]._dst) {
-                continue;
-              }
-              const rel = { ...row[key] };
-              processRel(rel);
-              break;
-            }
-            case DATA_TYPES.RECURSIVE_REL: {
-              const recursiveRel = { ...row[key] };
-              if (recursiveRel._nodes && Array.isArray(recursiveRel._nodes)) {
-                recursiveRel._nodes.forEach((node) => {
-                  if (!node || !node._id) return;
-                  node = { ...node };
-                  const nodeId = this.encodeId(node._id);
-                  if (nodes[nodeId]) {
-                    return;
-                  }
-                  for (let key in node) {
-                    if (node[key] === null || node[key] === undefined) {
-                      delete node[key];
-                    }
-                  }
-                  processNode(node);
-                });
-              }
-              if (recursiveRel._rels && Array.isArray(recursiveRel._rels)) {
-                recursiveRel._rels.forEach((rel) => {
-                  if (!rel || !rel._id) return;
-                  rel = { ...rel };
-                  const relId = this.encodeId(rel._id);
-                  if (edges[relId]) {
-                    return;
-                  }
-                  for (let key in rel) {
-                    if (rel[key] === null || rel[key] === undefined) {
-                      delete rel[key];
-                    }
-                  }
-                  processRel(rel);
-                });
-              }
-              break;
-            }
-            default:
-              break;
-          }
-        }
-      });
-      if (Object.keys(nodes).length > this.settingsStore.performance.maxNumberOfNodes) {
-        const nodeIds = Object.keys(nodes);
-        while (nodeIds.length > this.settingsStore.performance.maxNumberOfNodes) {
-          const indexToRemove = Math.floor(Math.random() * nodeIds.length);
-          const nodeIdToRemove = nodeIds[indexToRemove];
-          delete nodes[nodeIdToRemove];
-          nodeIds.splice(indexToRemove, 1);
-        }
-        for (let key in edges) {
-          const edge = edges[key];
-          if (!nodes[edge.source] || !nodes[edge.target]) {
-            delete edges[key];
-          }
-        }
-      }
-      const nodeCounters = {};
-      for (let key in nodes) {
-        const label = nodes[key].data.properties._label;
-        if (!nodeCounters[label]) {
-          nodeCounters[label] = 0;
-        }
-        nodeCounters[label] += 1;
-      }
-      const relCounters = {};
-      for (let key in edges) {
-        const label = edges[key].data.properties._label;
-        if (!relCounters[label]) {
-          relCounters[label] = 0;
-        }
-        relCounters[label] += 1;
-      }
-      const totalNodeCount = Object.values(nodeCounters).reduce((a, b) => a + b, 0);
-      const totalRelCount = Object.values(relCounters).reduce((a, b) => a + b, 0);
-      const counters = {
-        node: nodeCounters,
-        rel: relCounters,
-        total: {
-          node: totalNodeCount,
-          rel: totalRelCount,
-        },
-      };
-      // Calculate node degrees for dynamic distance
-      const nodeDegrees = {};
-      Object.values(edges).forEach(edge => {
-        nodeDegrees[edge.source] = (nodeDegrees[edge.source] || 0) + 1;
-        nodeDegrees[edge.target] = (nodeDegrees[edge.target] || 0) + 1;
-      });
-
-      // Add degree information to node data
-      Object.values(nodes).forEach(node => {
-        node.data.degree = nodeDegrees[node.id] || 0;
-      });
-
-      if (totalNodeCount > this.settingsStore.performance.maxNumberOfNodesWithLabels) {
-        for (let key in nodes) {
-          const node = nodes[key];
-          delete node.style.labelText;
-        }
-        for (let key in edges) {
-          const edge = edges[key];
-          delete edge.style.labelText;
-        }
-      }
-
-      return {
-        counters,
-        nodes: Object.values(nodes),
-        edges: Object.values(edges),
-        nodesMap: nodes,
-        edgesMap: edges,
-      };
+    // Delegate to utility function for extracting G6 graph data from query results
+    extractGraphFromQueryResultMethod(queryResult) {
+      return extractGraphFromQueryResult(
+        queryResult,
+        this.schema,
+        this.settingsStore,
+        this.settingsStore.performance
+      );
     },
 
     handleResize() {
@@ -1345,7 +1046,7 @@ export default {
 
         // Count NEW neighbor NODES only (not edges)
         let newCount = 0;
-        const { nodes } = this.extractGraphFromQueryResult(neighbors);
+        const { nodes } = this.extractGraphFromQueryResultMethod(neighbors);
 
         nodes.forEach(n => {
           try {
@@ -1429,7 +1130,7 @@ export default {
       // Track which expansion introduced each new node (only if not already tracked)
       neighbors.rows.forEach((row) => {
         if (row.dst && row.dst._id) {
-          const nodeId = this.encodeId(row.dst._id);
+          const nodeId = encodeId(row.dst._id);
           if (!this.nodeIntroducedBy[nodeId] && !this.originalNodeIds.has(nodeId)) {
             this.nodeIntroducedBy[nodeId] = model.id;
           }
@@ -1507,7 +1208,7 @@ export default {
 
       for (const result of validResults) {
         const { nodeId, neighbors } = result;
-        const { nodes } = this.extractGraphFromQueryResult(neighbors);
+        const { nodes } = this.extractGraphFromQueryResultMethod(neighbors);
 
         // Count NEW neighbor NODES only (not edges)
         let newCount = 0;
@@ -1544,7 +1245,7 @@ export default {
       let newEdges = new Set();
 
       nodesToExpand.forEach(({ neighbors }) => {
-        const { nodes, edges } = this.extractGraphFromQueryResult(neighbors);
+        const { nodes, edges } = this.extractGraphFromQueryResultMethod(neighbors);
         nodes.forEach(n => {
           try {
             this.g6Graph.getNodeData(n.id);
@@ -1571,7 +1272,7 @@ export default {
         // Track which expansion introduced each new node
         neighbors.rows.forEach((row) => {
           if (row.dst && row.dst._id) {
-            const newNodeId = this.encodeId(row.dst._id);
+            const newNodeId = encodeId(row.dst._id);
             if (!this.nodeIntroducedBy[newNodeId] && !this.originalNodeIds.has(newNodeId)) {
               this.nodeIntroducedBy[newNodeId] = nodeId;
             }
@@ -1641,10 +1342,10 @@ export default {
       const edgeIds = new Set();
       neighbors.rows.forEach((row) => {
         if (row.dst && row.dst._id) {
-          nodeIds.add(this.encodeId(row.dst._id));
+          nodeIds.add(encodeId(row.dst._id));
         }
         if (row.r && row.r._id) {
-          edgeIds.add(this.encodeId(row.r._id));
+          edgeIds.add(encodeId(row.r._id));
         }
       });
       return { nodeIds, edgeIds };
@@ -1688,11 +1389,11 @@ export default {
         // Protect all nodes and edges reachable from remaining expansions
         exp.neighbors.rows.forEach((row) => {
           if (row.dst && row.dst._id) {
-            const nodeId = this.encodeId(row.dst._id);
+            const nodeId = encodeId(row.dst._id);
             protectedNodeIds.add(nodeId);
           }
           if (row.r && row.r._id) {
-            protectedEdgeIds.add(this.encodeId(row.r._id));
+            protectedEdgeIds.add(encodeId(row.r._id));
           }
         });
       });
@@ -1819,7 +1520,7 @@ export default {
     },
 
     addDataWithQueryResult(queryResult) {
-      const { nodes, edges } = this.extractGraphFromQueryResult(queryResult);
+      const { nodes, edges } = this.extractGraphFromQueryResultMethod(queryResult);
       this.addData(nodes, edges);
     },
 
@@ -2343,47 +2044,27 @@ export default {
           return;
         }
 
-        // Build G6 node using existing extraction logic
-        const nodeSettings = this.settingsStore.settingsForLabel(rawNode._label);
-        const nodeFill = nodeSettings.g6Settings.style.fill;
-        const maxNodeSize = 100;
-        const displaySize = Math.min(nodeSettings.g6Settings.size, maxNodeSize);
+        // Format label for display (consistent with extractGraphFromQueryResult)
+        const formattedLabel = formatNodeLabel(rawNode, this.schema, this.settingsStore);
 
-        let nodeLabel = "";
-        const nodeLabelProp = nodeSettings.label;
-        if (nodeLabelProp && rawNode[nodeLabelProp]) {
-          nodeLabel = String(rawNode[nodeLabelProp]);
+        // Build G6 node using shared utility with position pinning
+        const g6Node = buildG6Node(minNode.id, rawNode, this.settingsStore, {
+          x: minNode.x,
+          y: minNode.y,
+          fx: minNode.x,
+          fy: minNode.y,
+          formattedLabel,
+          rawProperties: rawNode,
+        });
+
+        if (g6Node) {
+          nodes.push(g6Node);
         }
-
-        const g6Node = {
-          id: minNode.id,
-          data: {
-            properties: rawNode,
-            ...nodeSettings.g6Settings,
-            fx: minNode.x,  // Pin at saved position
-            fy: minNode.y,
-          },
-          style: {
-            x: minNode.x,
-            y: minNode.y,
-            size: displaySize,
-            fill: nodeFill,
-            stroke: G6Utils.shadeColor(nodeFill),
-            lineWidth: nodeSettings.g6Settings.style.lineWidth || 0,
-            labelText: nodeLabel,
-            iconText: this.getNodeIcon(rawNode._label),
-            iconFontFamily: "Font Awesome 6 Free",
-            iconFontWeight: 900,
-            iconFontSize: displaySize * 0.35,
-            iconFill: "#ffffff",
-          },
-        };
-
-        nodes.push(g6Node);
       });
 
       // Step 4: Build full G6 edges from refetched data
       const edges = [];
+      const edgeCountBetweenNodes = {};  // Track overlapping edges for proper arc rendering
 
       state.minimalEdges.forEach(minEdge => {
         const rawRel = edgePropsMap[minEdge.id];
@@ -2392,38 +2073,25 @@ export default {
           return;
         }
 
-        const relSettings = this.settingsStore.settingsForLabel(rawRel._label);
+        // Track edge count between node pairs for proper arc/curve rendering
+        const pairKey = [minEdge.src, minEdge.tgt].sort().join('|');
+        edgeCountBetweenNodes[pairKey] = (edgeCountBetweenNodes[pairKey] || 0) + 1;
+        const overlapIndex = edgeCountBetweenNodes[pairKey];
 
-        let relLabel = "";
-        const relLabelProp = relSettings.label;
-        if (relLabelProp && rawRel[relLabelProp]) {
-          relLabel = String(rawRel[relLabelProp]);
-          const fontSize = relSettings.g6Settings.labelCfg.style.fontSize;
-          relLabel = G6Utils.fittingString(relLabel, 80, fontSize);
+        // Build G6 edge using shared utility (handles self-loops and overlapping edges)
+        const g6Rel = buildG6Edge(
+          minEdge.id,
+          minEdge.src,
+          minEdge.tgt,
+          rawRel,
+          this.settingsStore,
+          this.schema,
+          { overlapIndex }
+        );
+
+        if (g6Rel) {
+          edges.push(g6Rel);
         }
-
-        const g6Rel = {
-          id: minEdge.id,
-          source: minEdge.src,
-          target: minEdge.tgt,
-          data: {
-            properties: rawRel,
-            ...relSettings.g6Settings,
-          },
-          style: {
-            stroke: relSettings.g6Settings.style.stroke,
-            lineWidth: relSettings.g6Settings.size || 3,
-            labelText: relLabel,
-          },
-        };
-
-        // Handle self-loops
-        if (g6Rel.source === g6Rel.target) {
-          g6Rel.style.loopDist = 50;
-          g6Rel.style.loopPlacement = 'top';
-        }
-
-        edges.push(g6Rel);
       });
 
       // Step 5: Initialize graph and load data
@@ -2641,7 +2309,7 @@ export default {
           if (response && response.rows) {
             response.rows.forEach(row => {
               if (row.n && row.n._id) {
-                const nodeId = this.encodeId(row.n._id);
+                const nodeId = encodeId(row.n._id);
                 results[nodeId] = row.n;
               }
             });
@@ -2736,7 +2404,7 @@ export default {
             if (response && response.rows) {
               response.rows.forEach(row => {
                 if (row.r && row.r._id) {
-                  const edgeId = this.encodeId(row.r._id);
+                  const edgeId = encodeId(row.r._id);
                   results[edgeId] = row.r;
                 }
               });
