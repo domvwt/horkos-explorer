@@ -81,6 +81,11 @@ export default {
             url: `https://opencorporates.com/companies?q=${encodeURIComponent(entityName)}`,
             icon: 'fa-solid fa-briefcase'
           });
+          links.push({
+            label: 'Google News',
+            url: `https://news.google.com/search?q=${encodeURIComponent(entityName)}`,
+            icon: 'fa-solid fa-newspaper'
+          });
         }
       } else if (this.entityType === 'Person') {
         if (entityName) {
@@ -100,11 +105,6 @@ export default {
             label: 'Google Maps',
             url: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addressQuery)}`,
             icon: 'fa-solid fa-map-marked-alt'
-          });
-          links.push({
-            label: 'Street View',
-            url: `https://www.google.com/maps/@?api=1&map_action=pano&parameters&query=${encodeURIComponent(addressQuery)}`,
-            icon: 'fa-solid fa-street-view'
           });
         }
       }
