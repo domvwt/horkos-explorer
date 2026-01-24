@@ -169,6 +169,7 @@
           <!-- Connected Entities -->
           <ConnectedEntitiesPanel
             v-if="clickedIsNode && clickedId"
+            ref="connectedEntitiesPanel"
             :node-id="clickedId"
             :node-label="clickedLabel"
             :node-properties="clickedProperties"
@@ -1100,28 +1101,17 @@ export default {
     },
 
     async handleAddConnectedNode(entity) {
-      // Add a connected node from the ConnectedEntitiesPanel to the graph
-      // Keep the current node selected (don't switch to the new node)
       if (!entity.rawNode || !entity.rawRel) {
         console.warn('Cannot add node: missing raw data');
         return;
       }
 
       const rawNode = entity.rawNode;
-
-      // Capture state before adding for undo
       const nodesBefore = new Set((this.g6Graph.getNodeData() || []).map(n => n.id));
       const edgesBefore = new Set((this.g6Graph.getEdgeData() || []).map(e => e.id));
 
-      // First add the node with the initial edge
-      const initialQueryResult = {
-        rows: [[entity.rawRel, rawNode]],
-        dataTypes: ['REL', 'NODE'],
-      };
-      this.addDataWithQueryResult(initialQueryResult);
-
-      // Now fetch ALL edges between the current node and the newly added node
-      // to ensure we don't miss any relationships
+      // Fetch all edges between the two nodes to add them in a single render
+      const allRels = [entity.rawRel];
       try {
         const currentNodeData = this.g6Graph.getNodeData(this.clickedId);
         const { tableName, primaryKeyName, primaryKeyValue } = this.getInfoForExpansion(currentNodeData);
@@ -1132,8 +1122,6 @@ export default {
         const newNodePkValue = rawNode[newNodePkName];
 
         if (newNodePkName && newNodePkValue !== undefined) {
-          // Query for all edges between these two nodes in both directions
-          // Escape identifiers to prevent injection
           const escapedTableName = DataDefinitionLanguage._escapeName(tableName);
           const escapedNewNodeTableName = DataDefinitionLanguage._escapeName(newNodeTableName);
           const escapedPrimaryKeyName = DataDefinitionLanguage._escapeName(primaryKeyName);
@@ -1150,39 +1138,40 @@ export default {
             : await Axios.post("api/cypher", { query, params }).then(r => r.data);
 
           if (result && result.rows) {
-            // Add any additional edges we found
+            const initialRelId = entity.rawRel._id;
             result.rows.forEach(row => {
               const rel = row.r || row[0];
-              if (rel && rel._id) {
-                const edgeQueryResult = {
-                  rows: [[rel]],
-                  dataTypes: ['REL'],
-                };
-                this.addDataWithQueryResult(edgeQueryResult);
+              if (rel && rel._id && (rel._id.table !== initialRelId.table || rel._id.offset !== initialRelId.offset)) {
+                allRels.push(rel);
               }
             });
           }
         }
       } catch (e) {
-        // If fetching additional edges fails, we still have the initial edge
         console.warn('Failed to fetch additional edges:', e);
       }
 
-      // Capture added nodes/edges after adding
+      const queryResult = {
+        rows: [[rawNode, ...allRels]],
+        dataTypes: ['NODE', ...allRels.map(() => 'REL')],
+      };
+      await this.addDataWithQueryResult(queryResult);
+
       const nodesAfter = this.g6Graph.getNodeData() || [];
       const edgesAfter = this.g6Graph.getEdgeData() || [];
       const addedNodes = nodesAfter.filter(n => !nodesBefore.has(n.id));
       const addedEdges = edgesAfter.filter(e => !edgesBefore.has(e.id));
 
-      // Record undo action
       if (addedNodes.length > 0 || addedEdges.length > 0) {
         this.historyManager.push({
           type: 'add-connected-node',
-          addedNodes,
-          addedEdges,
+          data: {
+            sourceNodeId: this.clickedId,
+            addedNodes: JSON.parse(JSON.stringify(addedNodes)),
+            addedEdges: JSON.parse(JSON.stringify(addedEdges)),
+          }
         });
       }
-      // Keep current node selected - no need to change selection
     },
 
     togglePropertyExpansion(index) {
@@ -1776,9 +1765,9 @@ export default {
       this.collapseNodeById(this.clickedId);
     },
 
-    addDataWithQueryResult(queryResult) {
+    async addDataWithQueryResult(queryResult) {
       const { nodes, edges } = this.extractGraphFromQueryResultMethod(queryResult);
-      this.addData(nodes, edges);
+      await this.addData(nodes, edges);
     },
 
     async addData(nodes, edges) {
@@ -2605,6 +2594,9 @@ export default {
           case 'showAll':
             await this.undoShowAll(cmd.data);
             break;
+          case 'add-connected-node':
+            await this.undoAddConnectedNode(cmd.data);
+            break;
         }
       } catch (e) {
         // Reverse the stack operation on failure
@@ -2644,6 +2636,9 @@ export default {
             break;
           case 'showAll':
             await this.redoShowAll(cmd.data);
+            break;
+          case 'add-connected-node':
+            await this.redoAddConnectedNode(cmd.data);
             break;
         }
       } catch (e) {
@@ -2810,6 +2805,79 @@ export default {
       Object.keys(combined).forEach(key => combined[key] = 'visible');
       await this.setElementVisibility(combined);
       this.hiddenElements = { nodes: {}, edges: {} };
+    },
+
+    async undoAddConnectedNode(data) {
+      const nodeIdsToRemove = new Set(data.addedNodes.map(n => n.id));
+      const edgeIdsToRemove = new Set(data.addedEdges.map(e => e.id));
+
+      nodeIdsToRemove.forEach(nodeId => {
+        delete this.neighborCounts[nodeId];
+        this.neighborCountsLoading.delete(nodeId);
+      });
+      if (data.sourceNodeId) {
+        delete this.neighborCounts[data.sourceNodeId];
+        this.neighborCountsLoading.delete(data.sourceNodeId);
+      }
+
+      await this.removeFromGraph(nodeIdsToRemove, edgeIdsToRemove);
+
+      this.$nextTick(() => {
+        this.$refs.connectedEntitiesPanel?.refreshInGraphStatus();
+        this.updateNeighborCounts();
+      });
+    },
+
+    /**
+     * Unlike restoreNodesAndEdges, don't pin restored nodes so layout positions them naturally
+     */
+    async redoAddConnectedNode(data) {
+      if (data.sourceNodeId) {
+        delete this.neighborCounts[data.sourceNodeId];
+        this.neighborCountsLoading.delete(data.sourceNodeId);
+      }
+
+      const currentNodes = this.g6Graph.getNodeData() || [];
+      const currentEdges = this.g6Graph.getEdgeData() || [];
+
+      const pinnedExisting = currentNodes.map(node => ({
+        ...node,
+        data: { ...node.data, fx: node.style?.x, fy: node.style?.y }
+      }));
+
+      const restoredNodes = data.addedNodes.map(node => ({
+        ...node,
+        data: { ...node.data, fx: undefined, fy: undefined },
+        style: { ...node.style, x: undefined, y: undefined }
+      }));
+
+      data.addedNodes.forEach(node => {
+        const label = node.data?.properties?._label;
+        if (label) {
+          this.counters.node[label] = (this.counters.node[label] || 0) + 1;
+          this.counters.total.node += 1;
+        }
+      });
+      data.addedEdges.forEach(edge => {
+        const label = edge.data?.properties?._label;
+        if (label) {
+          this.counters.rel[label] = (this.counters.rel[label] || 0) + 1;
+          this.counters.total.rel += 1;
+        }
+      });
+
+      const newData = {
+        nodes: pinnedExisting.concat(restoredNodes),
+        edges: currentEdges.concat(data.addedEdges),
+      };
+
+      this.g6Graph.setData(newData);
+      await this.render();
+
+      this.$nextTick(() => {
+        this.$refs.connectedEntitiesPanel?.refreshInGraphStatus();
+        this.updateNeighborCounts();
+      });
     },
 
     /**

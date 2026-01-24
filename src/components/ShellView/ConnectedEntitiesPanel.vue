@@ -419,6 +419,22 @@ export default {
       entity.inGraph = true;
     },
 
+    /**
+     * Refresh inGraph status for all entities by checking against current graph.
+     * Called by parent after undo/redo operations.
+     */
+    refreshInGraphStatus() {
+      if (!this.g6Graph) return;
+      this.connectedEntities.forEach(entity => {
+        try {
+          this.g6Graph.getNodeData(entity.id);
+          entity.inGraph = true;
+        } catch (e) {
+          entity.inGraph = false;
+        }
+      });
+    },
+
     formatPercentage(value) {
       if (value === null || value === undefined) {
         return '';
