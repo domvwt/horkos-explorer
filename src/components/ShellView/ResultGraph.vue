@@ -9,6 +9,29 @@
       :style="{ width: graphWidth + 'px' }"
     />
 
+    <!-- Undo/Redo Controls - positioned dynamically based on sidebar state -->
+    <div
+      class="result-graph__controls"
+      :style="{ right: isSidePanelOpen ? (sidebarWidth + 16) + 'px' : '16px' }"
+    >
+      <button
+        class="result-graph__control-btn"
+        :disabled="historyVersion >= 0 && !historyManager?.canUndo()"
+        title="Undo (Ctrl+Z)"
+        @click="undo"
+      >
+        <i class="fa-solid fa-rotate-left" />
+      </button>
+      <button
+        class="result-graph__control-btn"
+        :disabled="historyVersion >= 0 && !historyManager?.canRedo()"
+        title="Redo (Ctrl+Y)"
+        @click="redo"
+      >
+        <i class="fa-solid fa-rotate-right" />
+      </button>
+    </div>
+
     <HoverContainer
       ref="hoverContainer"
       :schema="schema"
@@ -274,6 +297,7 @@
 <script lang="js">
 import { Graph, GraphEvent } from '@antv/g6';
 import G6Utils from "../../utils/G6Utils";
+import { GraphHistoryManager } from "../../utils/GraphHistoryManager";
 import {
   DATA_TYPES, UI_SIZE, GRAPH_LAYOUTS
 } from "../../utils/Constants";
@@ -388,6 +412,9 @@ export default {
     shownProfligateWarnings: new Set(),
     currentLayout: 'd3-force',
     layoutFitTimeout: null,
+    historyManager: null,
+    historyVersion: 0,
+    isUndoRedoInProgress: false,
   }),
   computed: {
     graphVizSettings() {
@@ -562,6 +589,11 @@ export default {
       }
     },
   },
+  created() {
+    this.historyManager = new GraphHistoryManager(50, () => {
+      this.historyVersion++;
+    });
+  },
   mounted() {
     this.computeGraphWidth();
     window.addEventListener("resize", this.handleResize);
@@ -583,6 +615,21 @@ export default {
         e.stopPropagation();
       }
     }, true); // Use capture phase to intercept before G6
+
+    // Keyboard shortcuts for undo/redo
+    this.handleKeydown = (e) => {
+      // Ctrl+Z (or Cmd+Z on Mac) for undo
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        this.undo();
+      }
+      // Ctrl+Y or Ctrl+Shift+Z (or Cmd variants) for redo
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+        e.preventDefault();
+        this.redo();
+      }
+    };
+    window.addEventListener('keydown', this.handleKeydown);
   },
   beforeUnmount() {
     if (this.layoutFitTimeout) {
@@ -594,6 +641,7 @@ export default {
     window.removeEventListener("resize", this.handleResize);
     window.removeEventListener("mousemove", this.handleResizeMove);
     window.removeEventListener("mouseup", this.stopResize);
+    window.removeEventListener('keydown', this.handleKeydown);
   },
   methods: {
     copyToClipboard(text) {
@@ -824,6 +872,8 @@ export default {
       // Reset expansion tracking for new query
       this.nodeIntroducedBy = {};
       this.expansions = [];
+      // Clear undo/redo history for new query
+      this.historyManager.clear();
       if (nodes.length === 0) {
         this.$emit("graphEmpty");
       }
@@ -885,14 +935,21 @@ export default {
     },
 
     hideNode() {
-      this.hiddenElements.nodes[this.clickedId] = 'hidden';
       const nodeId = this.clickedId;
-      this.deselectAll();
-
       const edges = this.g6Graph.getEdgeData();
       const relatedEdges = edges.filter((edge) => {
         return edge.source === nodeId || edge.target === nodeId;
       });
+      const autoHiddenEdgeIds = relatedEdges.map(e => e.id);
+
+      // Record command for undo/redo
+      this.historyManager.push({
+        type: 'hide',
+        data: { nodeId, autoHiddenEdgeIds }
+      });
+
+      this.hiddenElements.nodes[nodeId] = 'hidden';
+      this.deselectAll();
       relatedEdges.forEach((edge) => this.hiddenElements.edges[edge.id] = 'hidden');
       const combined = { ...this.hiddenElements.nodes, ...this.hiddenElements.edges };
       return this.setElementVisibility(combined);
@@ -943,6 +1000,17 @@ export default {
     },
 
     showAllNodesRels() {
+      // Capture previous hidden state before clearing
+      const previouslyHidden = JSON.parse(JSON.stringify(this.hiddenElements));
+
+      // Only record if there was something hidden
+      if (Object.keys(previouslyHidden.nodes).length > 0 || Object.keys(previouslyHidden.edges).length > 0) {
+        this.historyManager.push({
+          type: 'showAll',
+          data: { previouslyHidden }
+        });
+      }
+
       const combined = { ...this.hiddenElements.nodes, ...this.hiddenElements.edges };
       Object.keys(combined).forEach((key) => {
         combined[key] = 'visible';
@@ -1123,18 +1191,44 @@ export default {
       if (!neighbors) {
         return;
       }
+
+      // Capture state BEFORE adding
+      const nodesBefore = new Set((this.g6Graph.getNodeData() || []).map(n => n.id));
+      const edgesBefore = new Set((this.g6Graph.getEdgeData() || []).map(e => e.id));
+
       this.addDataWithQueryResult(neighbors);
+
+      // Capture added nodes/edges AFTER adding
+      const nodesAfter = this.g6Graph.getNodeData() || [];
+      const edgesAfter = this.g6Graph.getEdgeData() || [];
+      const addedNodes = nodesAfter.filter(n => !nodesBefore.has(n.id));
+      const addedEdges = edgesAfter.filter(e => !edgesBefore.has(e.id));
+
       this.expansions.push({
         id: model.id, neighbors
       });
 
       // Track which expansion introduced each new node (only if not already tracked)
+      const nodeIntroducedByEntries = {};
       neighbors.rows.forEach((row) => {
         if (row.dst && row.dst._id) {
           const nodeId = encodeId(row.dst._id);
           if (!this.nodeIntroducedBy[nodeId] && !this.originalNodeIds.has(nodeId)) {
             this.nodeIntroducedBy[nodeId] = model.id;
+            nodeIntroducedByEntries[nodeId] = model.id;
           }
+        }
+      });
+
+      // Record command for undo/redo
+      this.historyManager.push({
+        type: 'expand',
+        data: {
+          sourceNodeId: model.id,
+          addedNodes: JSON.parse(JSON.stringify(addedNodes)),
+          addedEdges: JSON.parse(JSON.stringify(addedEdges)),
+          expansionEntry: { id: model.id, neighbors },
+          nodeIntroducedByEntries
         }
       });
 
@@ -1241,45 +1335,51 @@ export default {
         return;
       }
 
-      // Calculate total entities from normal nodes only
-      let newNodes = new Set();
-      let newEdges = new Set();
+      // Capture state BEFORE adding for undo
+      const nodesBefore = new Set((this.g6Graph.getNodeData() || []).map(n => n.id));
+      const edgesBefore = new Set((this.g6Graph.getEdgeData() || []).map(e => e.id));
 
-      nodesToExpand.forEach(({ neighbors }) => {
-        const { nodes, edges } = this.extractGraphFromQueryResultMethod(neighbors);
-        nodes.forEach(n => {
-          try {
-            this.g6Graph.getNodeData(n.id);
-          } catch (e) {
-            newNodes.add(n.id);
-          }
-        });
-        edges.forEach(e => {
-          try {
-            this.g6Graph.getEdgeData(e.id);
-          } catch (err) {
-            newEdges.add(e.id);
-          }
-        });
-      });
+      // Track all expansions and nodeIntroducedBy entries for undo
+      const allExpansionEntries = [];
+      const allNodeIntroducedByEntries = {};
 
       // Add normal nodes only
       nodesToExpand.forEach(({ nodeId, neighbors }) => {
         this.addDataWithQueryResult(neighbors);
-        this.expansions.push({
-          id: nodeId,
-          neighbors: neighbors
-        });
+        const expansionEntry = { id: nodeId, neighbors };
+        this.expansions.push(expansionEntry);
+        allExpansionEntries.push(expansionEntry);
+
         // Track which expansion introduced each new node
         neighbors.rows.forEach((row) => {
           if (row.dst && row.dst._id) {
             const newNodeId = encodeId(row.dst._id);
             if (!this.nodeIntroducedBy[newNodeId] && !this.originalNodeIds.has(newNodeId)) {
               this.nodeIntroducedBy[newNodeId] = nodeId;
+              allNodeIntroducedByEntries[newNodeId] = nodeId;
             }
           }
         });
       });
+
+      // Capture added nodes/edges AFTER adding for undo
+      const nodesAfter = this.g6Graph.getNodeData() || [];
+      const edgesAfter = this.g6Graph.getEdgeData() || [];
+      const addedNodes = nodesAfter.filter(n => !nodesBefore.has(n.id));
+      const addedEdges = edgesAfter.filter(e => !edgesBefore.has(e.id));
+
+      // Record command for undo/redo (batch expansion)
+      if (addedNodes.length > 0 || addedEdges.length > 0) {
+        this.historyManager.push({
+          type: 'expandGraph',
+          data: {
+            addedNodes: JSON.parse(JSON.stringify(addedNodes)),
+            addedEdges: JSON.parse(JSON.stringify(addedEdges)),
+            expansionEntries: allExpansionEntries,
+            nodeIntroducedByEntries: allNodeIntroducedByEntries
+          }
+        });
+      }
 
       this.deselectAll();
 
@@ -1413,6 +1513,14 @@ export default {
         return;
       }
 
+      // Capture removed expansions BEFORE modification
+      const subtree = this.getExpansionSubtree(id);
+      const removedExpansions = [];
+      subtree.forEach(expId => {
+        const exp = this.expansions.find(e => e.id === expId);
+        if (exp) removedExpansions.push(JSON.parse(JSON.stringify(exp)));
+      });
+
       // 1. Collect all IDs to potentially remove BEFORE modifying expansions
       const targets = this.collectCollapseTargets(id);
 
@@ -1430,12 +1538,38 @@ export default {
         [...targets.edgeIds].filter(edgeId => !protectedEdgeIds.has(edgeId))
       );
 
+      // Capture full node/edge data BEFORE removal
+      const currentNodes = this.g6Graph.getNodeData() || [];
+      const currentEdges = this.g6Graph.getEdgeData() || [];
+      const removedNodes = currentNodes.filter(n => nodeIdsToRemove.has(n.id));
+      const removedEdges = currentEdges.filter(e => edgeIdsToRemove.has(e.id));
+
+      // Capture nodeIntroducedBy entries being removed
+      const removedNodeIntroducedBy = {};
+      nodeIdsToRemove.forEach(nodeId => {
+        if (this.nodeIntroducedBy[nodeId]) {
+          removedNodeIntroducedBy[nodeId] = this.nodeIntroducedBy[nodeId];
+        }
+      });
+
       // 5. Remove from graph
       await this.removeFromGraph(nodeIdsToRemove, edgeIdsToRemove);
 
       // 6. Clean up nodeIntroducedBy for removed nodes
       nodeIdsToRemove.forEach(nodeId => {
         delete this.nodeIntroducedBy[nodeId];
+      });
+
+      // Record command for undo/redo
+      this.historyManager.push({
+        type: 'collapse',
+        data: {
+          sourceNodeId: id,
+          removedNodes: JSON.parse(JSON.stringify(removedNodes)),
+          removedEdges: JSON.parse(JSON.stringify(removedEdges)),
+          removedExpansions,
+          removedNodeIntroducedBy
+        }
       });
 
       // 7. Update isCurrentNodeExpanded if this was the clicked node
@@ -1667,6 +1801,27 @@ export default {
      */
     async changeLayout(layoutType) {
       if (!this.g6Graph || this.currentLayout === layoutType) {
+        return;
+      }
+
+      const previousLayout = this.currentLayout;
+      await this.applyLayoutInternal(layoutType);
+
+      // Record command for undo/redo (only if layout actually changed)
+      if (previousLayout !== this.currentLayout) {
+        this.historyManager.push({
+          type: 'layout',
+          data: { from: previousLayout, to: layoutType }
+        });
+      }
+    },
+
+    /**
+     * Apply a layout without recording to history.
+     * Used by changeLayout() and undo/redo operations.
+     */
+    async applyLayoutInternal(layoutType) {
+      if (!this.g6Graph) {
         return;
       }
 
@@ -2297,6 +2452,289 @@ export default {
       return results;
     },
 
+    // ========== Undo/Redo Methods ==========
+
+    /**
+     * Undo the last graph action.
+     */
+    async undo() {
+      if (this.isUndoRedoInProgress) return;
+      const cmd = this.historyManager.undo();
+      if (!cmd) return;
+
+      this.isUndoRedoInProgress = true;
+      try {
+        switch (cmd.type) {
+          case 'layout':
+            await this.applyLayoutInternal(cmd.data.from);
+            break;
+          case 'expand':
+            await this.undoExpand(cmd.data);
+            break;
+          case 'expandGraph':
+            await this.undoExpandGraph(cmd.data);
+            break;
+          case 'collapse':
+            await this.undoCollapse(cmd.data);
+            break;
+          case 'hide':
+            await this.undoHide(cmd.data);
+            break;
+          case 'showAll':
+            await this.undoShowAll(cmd.data);
+            break;
+        }
+      } catch (e) {
+        // Reverse the stack operation on failure
+        this.historyManager.redoStack.pop();
+        this.historyManager.undoStack.push(cmd);
+        console.error('Undo failed:', e);
+      } finally {
+        this.isUndoRedoInProgress = false;
+      }
+    },
+
+    /**
+     * Redo the last undone graph action.
+     */
+    async redo() {
+      if (this.isUndoRedoInProgress) return;
+      const cmd = this.historyManager.redo();
+      if (!cmd) return;
+
+      this.isUndoRedoInProgress = true;
+      try {
+        switch (cmd.type) {
+          case 'layout':
+            await this.applyLayoutInternal(cmd.data.to);
+            break;
+          case 'expand':
+            await this.redoExpand(cmd.data);
+            break;
+          case 'expandGraph':
+            await this.redoExpandGraph(cmd.data);
+            break;
+          case 'collapse':
+            await this.redoCollapse(cmd.data);
+            break;
+          case 'hide':
+            await this.redoHide(cmd.data);
+            break;
+          case 'showAll':
+            await this.redoShowAll(cmd.data);
+            break;
+        }
+      } catch (e) {
+        // Reverse the stack operation on failure
+        this.historyManager.undoStack.pop();
+        this.historyManager.redoStack.push(cmd);
+        console.error('Redo failed:', e);
+      } finally {
+        this.isUndoRedoInProgress = false;
+      }
+    },
+
+    /**
+     * Undo expand = remove the expansion
+     */
+    async undoExpand(data) {
+      const nodeIdsToRemove = new Set(data.addedNodes.map(n => n.id));
+      const edgeIdsToRemove = new Set(data.addedEdges.map(e => e.id));
+
+      await this.removeFromGraph(nodeIdsToRemove, edgeIdsToRemove);
+      this.expansions = this.expansions.filter(e => e.id !== data.sourceNodeId);
+
+      Object.keys(data.nodeIntroducedByEntries || {}).forEach(nodeId => {
+        delete this.nodeIntroducedBy[nodeId];
+      });
+
+      if (data.sourceNodeId === this.clickedId) {
+        this.isCurrentNodeExpanded = false;
+      }
+      this.$nextTick(() => this.updateNeighborCounts());
+    },
+
+    /**
+     * Redo expand = restore the expansion
+     */
+    async redoExpand(data) {
+      await this.restoreNodesAndEdges(data.addedNodes, data.addedEdges);
+      this.expansions.push(data.expansionEntry);
+      Object.assign(this.nodeIntroducedBy, data.nodeIntroducedByEntries || {});
+
+      if (data.sourceNodeId === this.clickedId) {
+        this.isCurrentNodeExpanded = true;
+      }
+      this.$nextTick(() => this.updateNeighborCounts());
+    },
+
+    /**
+     * Undo expandGraph = remove all nodes/edges added by batch expansion
+     */
+    async undoExpandGraph(data) {
+      const nodeIdsToRemove = new Set(data.addedNodes.map(n => n.id));
+      const edgeIdsToRemove = new Set(data.addedEdges.map(e => e.id));
+
+      await this.removeFromGraph(nodeIdsToRemove, edgeIdsToRemove);
+
+      // Remove all expansion entries
+      const expIdsToRemove = new Set(data.expansionEntries.map(e => e.id));
+      this.expansions = this.expansions.filter(e => !expIdsToRemove.has(e.id));
+
+      // Clean up nodeIntroducedBy
+      Object.keys(data.nodeIntroducedByEntries || {}).forEach(nodeId => {
+        delete this.nodeIntroducedBy[nodeId];
+      });
+
+      this.$nextTick(() => this.updateNeighborCounts());
+    },
+
+    /**
+     * Redo expandGraph = restore all nodes/edges from batch expansion
+     */
+    async redoExpandGraph(data) {
+      await this.restoreNodesAndEdges(data.addedNodes, data.addedEdges);
+
+      // Restore all expansion entries
+      data.expansionEntries.forEach(exp => this.expansions.push(exp));
+      Object.assign(this.nodeIntroducedBy, data.nodeIntroducedByEntries || {});
+
+      this.$nextTick(() => this.updateNeighborCounts());
+    },
+
+    /**
+     * Undo collapse = restore removed nodes/edges
+     */
+    async undoCollapse(data) {
+      await this.restoreNodesAndEdges(data.removedNodes, data.removedEdges);
+
+      // Restore expansions in order
+      data.removedExpansions.forEach(exp => this.expansions.push(exp));
+      Object.assign(this.nodeIntroducedBy, data.removedNodeIntroducedBy || {});
+
+      if (data.sourceNodeId === this.clickedId) {
+        this.isCurrentNodeExpanded = true;
+      }
+      this.$nextTick(() => this.updateNeighborCounts());
+    },
+
+    /**
+     * Redo collapse = remove nodes/edges again
+     */
+    async redoCollapse(data) {
+      const nodeIdsToRemove = new Set(data.removedNodes.map(n => n.id));
+      const edgeIdsToRemove = new Set(data.removedEdges.map(e => e.id));
+
+      await this.removeFromGraph(nodeIdsToRemove, edgeIdsToRemove);
+
+      // Remove expansions
+      const expIdsToRemove = new Set(data.removedExpansions.map(e => e.id));
+      this.expansions = this.expansions.filter(e => !expIdsToRemove.has(e.id));
+
+      Object.keys(data.removedNodeIntroducedBy || {}).forEach(nodeId => {
+        delete this.nodeIntroducedBy[nodeId];
+      });
+
+      if (data.sourceNodeId === this.clickedId) {
+        this.isCurrentNodeExpanded = false;
+      }
+      this.$nextTick(() => this.updateNeighborCounts());
+    },
+
+    /**
+     * Undo hide = show the element
+     */
+    async undoHide(data) {
+      delete this.hiddenElements.nodes[data.nodeId];
+      const combined = { [data.nodeId]: 'visible' };
+
+      (data.autoHiddenEdgeIds || []).forEach(edgeId => {
+        delete this.hiddenElements.edges[edgeId];
+        combined[edgeId] = 'visible';
+      });
+
+      await this.setElementVisibility(combined);
+    },
+
+    /**
+     * Redo hide = hide the element again
+     */
+    async redoHide(data) {
+      this.hiddenElements.nodes[data.nodeId] = 'hidden';
+      const combined = { [data.nodeId]: 'hidden' };
+
+      (data.autoHiddenEdgeIds || []).forEach(edgeId => {
+        this.hiddenElements.edges[edgeId] = 'hidden';
+        combined[edgeId] = 'hidden';
+      });
+
+      await this.setElementVisibility(combined);
+    },
+
+    /**
+     * Undo showAll = re-hide previously hidden elements
+     */
+    async undoShowAll(data) {
+      this.hiddenElements = JSON.parse(JSON.stringify(data.previouslyHidden));
+      const combined = { ...this.hiddenElements.nodes, ...this.hiddenElements.edges };
+      await this.setElementVisibility(combined);
+    },
+
+    /**
+     * Redo showAll = show all again
+     */
+    async redoShowAll(data) {
+      const combined = { ...this.hiddenElements.nodes, ...this.hiddenElements.edges };
+      Object.keys(combined).forEach(key => combined[key] = 'visible');
+      await this.setElementVisibility(combined);
+      this.hiddenElements = { nodes: {}, edges: {} };
+    },
+
+    /**
+     * Shared helper to restore nodes and edges.
+     * Used by undo collapse and redo expand.
+     */
+    async restoreNodesAndEdges(nodesToRestore, edgesToRestore) {
+      const currentNodes = this.g6Graph.getNodeData() || [];
+      const currentEdges = this.g6Graph.getEdgeData() || [];
+
+      // Pin existing nodes
+      const pinnedExisting = currentNodes.map(node => ({
+        ...node,
+        data: { ...node.data, fx: node.style?.x, fy: node.style?.y }
+      }));
+
+      // Restore with saved positions
+      const restoredNodes = nodesToRestore.map(node => ({
+        ...node,
+        data: { ...node.data, fx: node.style?.x, fy: node.style?.y }
+      }));
+
+      // Update counters
+      nodesToRestore.forEach(node => {
+        const label = node.data?.properties?._label;
+        if (label) {
+          this.counters.node[label] = (this.counters.node[label] || 0) + 1;
+          this.counters.total.node += 1;
+        }
+      });
+      edgesToRestore.forEach(edge => {
+        const label = edge.data?.properties?._label;
+        if (label) {
+          this.counters.rel[label] = (this.counters.rel[label] || 0) + 1;
+          this.counters.total.rel += 1;
+        }
+      });
+
+      const newData = {
+        nodes: pinnedExisting.concat(restoredNodes),
+        edges: currentEdges.concat(edgesToRestore),
+      };
+
+      this.g6Graph.setData(newData);
+      await this.render();
+    },
+
   },
 };
 </script>
@@ -2742,6 +3180,44 @@ export default {
 
     button i {
       margin-right: 0.5rem;
+    }
+  }
+
+  // Undo/Redo Controls
+  .result-graph__controls {
+    position: absolute;
+    top: 1rem;
+    // right is set dynamically via :style binding
+    display: flex;
+    gap: 0.25rem;
+    z-index: 1;  // Lower than sidebar (z-index: 2)
+  }
+
+  .result-graph__control-btn {
+    background-color: var(--bs-body-bg-secondary);
+    border: 1px solid var(--bs-body-inactive);
+    border-radius: 0.375rem;
+    padding: 0.5rem;
+    cursor: pointer;
+    color: var(--bs-body-text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    transition: background-color 0.15s ease, opacity 0.15s ease;
+
+    &:hover:not(:disabled) {
+      background-color: var(--bs-body-bg-hover);
+    }
+
+    &:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+
+    i {
+      font-size: 0.875rem;
     }
   }
 }
