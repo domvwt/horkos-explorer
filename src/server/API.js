@@ -11,7 +11,7 @@ const isWasmMode = process.env.KUZU_WASM &&
 
 // APIs that are only available in backend mode
 if (!isWasmMode) {
-    database = require("./utils/Database");
+    const database = require("./utils/Database");
     const currentMode = database.getAccessModeString();
     const schema = require("./Schema");
     const cypher = require("./Cypher");
@@ -45,5 +45,9 @@ const datasets = require("./Datasets");
 const mode = require("./Mode");
 router.use("/datasets", apiLimiter, datasets);
 router.use("/mode", apiLimiter, mode);
+
+// Autocomplete endpoint (available if DUCKDB_PATH is configured)
+const suggest = require("./Suggest");
+router.use("/suggest", apiLimiter, suggest);
 
 module.exports = router;

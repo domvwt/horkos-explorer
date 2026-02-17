@@ -5,16 +5,31 @@
       <div class="row g-2 mb-1">
         <div class="col-6">
           <label class="form-label-sm">{{ nameFieldLabel }}</label>
-          <input
-            v-model="filters.name"
-            type="text"
-            class="form-control form-control-sm"
-            :placeholder="nameFieldPlaceholder"
-          >
+          <div class="position-relative">
+            <input
+              ref="nameInput"
+              v-model="filters.name"
+              type="text"
+              class="form-control form-control-sm"
+              :placeholder="nameFieldPlaceholder"
+              autocomplete="off"
+              @input="onNameInput"
+              @keydown="onNameKeydown"
+              @focus="showSuggestionsOnFocus"
+              @blur="hideSuggestionsDelayed"
+            >
+            <AutocompleteDropdown
+              v-if="showSuggestions && suggestions.length > 0"
+              :suggestions="suggestions"
+              :selected-index="selectedSuggestionIndex"
+              @select="onSuggestionSelect"
+              @hover="selectedSuggestionIndex = $event"
+            />
+          </div>
         </div>
         <div class="col-6">
           <label class="form-label-sm">Entity Type</label>
-          <select v-model="selectedType" class="form-select form-select-sm">
+          <select v-model="selectedType" class="form-select form-select-sm" @change="onEntityTypeChange">
             <option value="Person">Person</option>
             <option value="Company">Company</option>
             <option value="Address">Address</option>
@@ -123,8 +138,14 @@
 </template>
 
 <script>
+import axios from "@/utils/AxiosWrapper";
+import AutocompleteDropdown from "./AutocompleteDropdown.vue";
+
 export default {
   name: "NodeSearch",
+  components: {
+    AutocompleteDropdown,
+  },
   emits: ["executeQuery"],
   data() {
     return {
@@ -141,6 +162,13 @@ export default {
       queryParams: {},
       showQuery: false,
       copiedToClipboard: false,
+      // Autocomplete state
+      suggestions: [],
+      showSuggestions: false,
+      selectedSuggestionIndex: -1,
+      autocompleteAvailable: true,
+      debounceTimer: null,
+      autocompleteRequestId: 0,
     };
   },
   computed: {
@@ -183,6 +211,11 @@ export default {
         this.loadFromUrl();
       }, 500);
     });
+  },
+  beforeUnmount() {
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+    }
   },
   methods: {
     loadFromUrl() {
@@ -252,6 +285,27 @@ export default {
       // Clear URL parameters
       window.history.pushState({}, '', window.location.pathname);
     },
+    /**
+     * Parse name filter for exact match syntax.
+     * Returns { value, exactMatch } where:
+     *   - value: The name without quotes (escaped quotes unescaped)
+     *   - exactMatch: true if wrapped in double quotes
+     */
+    parseNameFilter(nameFilter) {
+      const trimmed = nameFilter?.trim() || "";
+      if (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length > 2) {
+        // Remove outer quotes and unescape any escaped quotes
+        const inner = trimmed.slice(1, -1).replace(/\\"/g, '"');
+        return {
+          value: inner,
+          exactMatch: true,
+        };
+      }
+      return {
+        value: trimmed,
+        exactMatch: false,
+      };
+    },
     generateQuery() {
       const type = this.selectedType;
       const conditions = [];
@@ -261,14 +315,24 @@ export default {
       if (type === "Person") {
         nodeLabel = ":Person";
         if (this.filters.name) {
-          conditions.push(`toLower(n.name) CONTAINS toLower($name)`);
-          params.name = this.filters.name;
+          const { value, exactMatch } = this.parseNameFilter(this.filters.name);
+          if (exactMatch) {
+            conditions.push(`n.name = $name`);
+          } else {
+            conditions.push(`toLower(n.name) CONTAINS toLower($name)`);
+          }
+          params.name = value;
         }
       } else if (type === "Company") {
         nodeLabel = ":Company";
         if (this.filters.name) {
-          conditions.push(`toLower(n.name) CONTAINS toLower($name)`);
-          params.name = this.filters.name;
+          const { value, exactMatch } = this.parseNameFilter(this.filters.name);
+          if (exactMatch) {
+            conditions.push(`n.name = $name`);
+          } else {
+            conditions.push(`toLower(n.name) CONTAINS toLower($name)`);
+          }
+          params.name = value;
         }
         if (this.filters.companyNumber) {
           conditions.push(`toLower(n.company_number) = toLower($companyNumber)`);
@@ -281,8 +345,13 @@ export default {
       } else if (type === "Address") {
         nodeLabel = ":Address";
         if (this.filters.name) {
-          conditions.push(`toLower(n.full) CONTAINS toLower($address)`);
-          params.address = this.filters.name;
+          const { value, exactMatch } = this.parseNameFilter(this.filters.name);
+          if (exactMatch) {
+            conditions.push(`n.full = $address`);
+          } else {
+            conditions.push(`toLower(n.full) CONTAINS toLower($address)`);
+          }
+          params.address = value;
         }
         if (this.filters.postCode) {
           conditions.push(`toLower(n.post_code) CONTAINS toLower($postCode)`);
@@ -303,6 +372,10 @@ export default {
       return { query, params };
     },
     executeSearch() {
+      // Close autocomplete
+      this.showSuggestions = false;
+      this.suggestions = [];
+
       const { query, params } = this.generateQuery();
       this.generatedQuery = query;
       this.queryParams = params;
@@ -312,12 +385,132 @@ export default {
     copyQuery() {
       // Copy the query with values substituted
       navigator.clipboard.writeText(this.displayQuery);
-
-      // Show visual feedback
       this.copiedToClipboard = true;
       setTimeout(() => {
         this.copiedToClipboard = false;
       }, 2000);
+    },
+    // Autocomplete methods
+    onNameInput() {
+      // Clear any pending debounce
+      if (this.debounceTimer) {
+        clearTimeout(this.debounceTimer);
+      }
+
+      const query = this.filters.name?.trim();
+      if (!this.autocompleteAvailable || !query || query.length < 2) {
+        this.suggestions = [];
+        this.showSuggestions = false;
+        return;
+      }
+
+      // Don't fetch if already using exact match syntax (quoted)
+      if (query.startsWith('"')) {
+        this.suggestions = [];
+        this.showSuggestions = false;
+        return;
+      }
+
+      // Debounce the API call
+      this.debounceTimer = setTimeout(() => {
+        this.fetchSuggestions(query);
+      }, 300);
+    },
+    async fetchSuggestions(query) {
+      // Increment request ID to track this request
+      const requestId = ++this.autocompleteRequestId;
+
+      try {
+        const response = await axios.get("/api/suggest", {
+          params: {
+            q: query,
+            type: this.selectedType,
+            limit: 10,
+          },
+        });
+
+        // Ignore stale responses from earlier requests
+        if (requestId !== this.autocompleteRequestId) {
+          return;
+        }
+
+        this.suggestions = response.data;
+        this.showSuggestions = this.suggestions.length > 0;
+        this.selectedSuggestionIndex = -1;
+      } catch (err) {
+        // Ignore errors from stale requests
+        if (requestId !== this.autocompleteRequestId) {
+          return;
+        }
+
+        if (err.response?.status === 404) {
+          // Autocomplete not available - disable future requests
+          this.autocompleteAvailable = false;
+        }
+        this.suggestions = [];
+        this.showSuggestions = false;
+      }
+    },
+    onSuggestionSelect(name) {
+      // Escape any double quotes in the name and wrap for exact match
+      const escaped = name.replace(/"/g, '\\"');
+      this.filters.name = `"${escaped}"`;
+      this.suggestions = [];
+      this.showSuggestions = false;
+      this.selectedSuggestionIndex = -1;
+    },
+    onNameKeydown(event) {
+      if (!this.showSuggestions || this.suggestions.length === 0) {
+        return;
+      }
+
+      switch (event.key) {
+        case "ArrowDown":
+          event.preventDefault();
+          this.selectedSuggestionIndex = Math.min(
+            this.selectedSuggestionIndex + 1,
+            this.suggestions.length - 1
+          );
+          break;
+        case "ArrowUp":
+          event.preventDefault();
+          this.selectedSuggestionIndex = Math.max(
+            this.selectedSuggestionIndex - 1,
+            -1
+          );
+          break;
+        case "Enter":
+          if (this.selectedSuggestionIndex >= 0) {
+            event.preventDefault();
+            event.stopPropagation();
+            this.onSuggestionSelect(this.suggestions[this.selectedSuggestionIndex]);
+          }
+          break;
+        case "Escape":
+          event.preventDefault();
+          this.showSuggestions = false;
+          this.suggestions = [];
+          this.selectedSuggestionIndex = -1;
+          break;
+      }
+    },
+    showSuggestionsOnFocus() {
+      // Show existing suggestions on focus
+      if (this.suggestions.length > 0) {
+        this.showSuggestions = true;
+      }
+    },
+    hideSuggestionsDelayed() {
+      // Delay hiding to allow click events to fire
+      setTimeout(() => {
+        this.showSuggestions = false;
+      }, 200);
+    },
+    onEntityTypeChange() {
+      // Clear suggestions when entity type changes
+      this.suggestions = [];
+      this.showSuggestions = false;
+      this.selectedSuggestionIndex = -1;
     },
   },
 };

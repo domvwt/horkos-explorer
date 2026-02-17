@@ -403,7 +403,7 @@ export default {
 $margin: 1rem;
 
 .shell-editor__wrapper {
-  margin-top: 0.5rem;
+  margin-top: 0.75rem;
   margin-left: 1rem;
   margin-right: 1rem;
   border-radius: 1rem 1rem 0 0;

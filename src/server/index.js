@@ -4,6 +4,7 @@ const api = require("./API");
 const path = require("path");
 const process = require("process");
 const database = require("./utils/Database");
+const duckdb = require("./utils/DuckDB");
 const logger = require("./utils/Logger");
 const baseUrl = require("./utils/BaseURL");
 
@@ -21,11 +22,13 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
 
 process.on("SIGINT", () => {
   logger.info("SIGINT received, exiting");
+  duckdb.close();
   process.exit(0);
 });
 
 process.on("SIGTERM", () => {
   logger.info("SIGTERM received, exiting");
+  duckdb.close();
   process.exit(0);
 });
 
@@ -71,6 +74,9 @@ app.use(`${baseUrl}`, express.static(distPath, { maxAge: "30d" }));
 
 const isWasmMode = process.env.KUZU_WASM &&
   process.env.KUZU_WASM.toLowerCase() === "true";
+
+// Initialize DuckDB for autocomplete (optional - gracefully degrades if not configured)
+duckdb.init();
 
 if (!isWasmMode) {
   database.getDbVersion()
