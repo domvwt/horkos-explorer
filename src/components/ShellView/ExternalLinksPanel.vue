@@ -118,6 +118,8 @@ export default {
 <style lang="scss" scoped>
 .external-links {
   margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--bs-body-inactive);
 
   h6 {
     font-size: 0.9rem;

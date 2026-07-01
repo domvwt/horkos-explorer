@@ -6,6 +6,15 @@ const configureAPI = require("./src/server/Configure");
 const MonacoWebpackPlugin = require("monaco-editor-webpack-plugin");
 const CopyWebpackPlugin = require("copy-webpack-plugin");
 const BASE_URL = require("./src/server/utils/BaseURL");
+const { assertLegalConfigDeployable } = require("./src/config/legal.config");
+
+// Fail a PRODUCTION build if the Art. 14 privacy notice still has unfilled
+// [SET AT DEPLOY] values, so an incomplete legal notice can never be shipped.
+// Dev builds/serve (NODE_ENV !== 'production') are unaffected — the values are
+// meant to be placeholders during development.
+if (process.env.NODE_ENV === "production") {
+  assertLegalConfigDeployable();
+}
 
 module.exports = defineConfig({
   devServer: {

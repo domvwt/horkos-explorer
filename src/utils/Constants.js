@@ -141,6 +141,13 @@ export const LOADING_STATUS = {
   PROCESS: "Processing results...",
 };
 
+// Deploy-time legal / operator identity for the Art. 14 privacy notice and the
+// per-result disclaimer. Re-exported from a CommonJS module so the SAME single
+// source of truth is readable by both the app bundle (ESM) and the build-time
+// guard in vue.config.js (CommonJS). Complete the [SET AT DEPLOY] values before
+// public launch — a production build hard-fails until they are (see README).
+export { LEGAL } from "../config/legal.config";
+
 export const GRAPH_LAYOUTS = {
   D3_FORCE: {
     key: 'd3-force',

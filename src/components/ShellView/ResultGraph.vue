@@ -159,13 +159,6 @@
             </div>
           </div>
 
-          <!-- External Resource Links -->
-          <ExternalLinksPanel
-            v-if="clickedIsNode"
-            :entity-type="clickedLabel"
-            :properties="clickedProperties"
-          />
-
           <!-- Connected Entities -->
           <ConnectedEntitiesPanel
             v-if="clickedIsNode && clickedId"
@@ -185,6 +178,19 @@
           <SourceProvenancePanel
             v-if="clickedIsNode"
             :properties="clickedProperties"
+          />
+
+          <!-- External Resource Links -->
+          <ExternalLinksPanel
+            v-if="clickedIsNode"
+            :entity-type="clickedLabel"
+            :properties="clickedProperties"
+          />
+
+          <!-- Data-quality / provenance disclaimer for this specific entity -->
+          <ResultDisclaimer
+            v-if="clickedIsNode"
+            :entity-type="clickedLabel"
           />
         </div>
         <div v-else>
@@ -336,6 +342,7 @@ import GraphToast from "./GraphToast.vue";
 import ExternalLinksPanel from "./ExternalLinksPanel.vue";
 import SourceProvenancePanel from "./SourceProvenancePanel.vue";
 import ConnectedEntitiesPanel from "./ConnectedEntitiesPanel.vue";
+import ResultDisclaimer from "./ResultDisclaimer.vue";
 import g6Utils from '../../utils/G6Utils';
 import Axios from "@/utils/AxiosWrapper";
 import { createGraphConfig, getLayoutConfig } from "./graphConfig";
@@ -348,7 +355,8 @@ export default {
     GraphToast,
     ExternalLinksPanel,
     SourceProvenancePanel,
-    ConnectedEntitiesPanel
+    ConnectedEntitiesPanel,
+    ResultDisclaimer
   },
   props: {
     queryResult: {

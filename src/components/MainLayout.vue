@@ -33,6 +33,13 @@
             <i class="fa-solid fa-book" />
             <span>Docs</span>
           </a>
+          <a
+            href="#privacy"
+            class="header-link"
+          >
+            <i class="fa-solid fa-shield-halved" />
+            <span>Privacy</span>
+          </a>
           <button
             class="header-link"
             @click="showSettingsModal()"
@@ -89,6 +96,7 @@
             @reload-schema="reloadSchema"
             @load-bundled-dataset="toggleLoader"
           />
+          <PrivacyView v-show="showPrivacy" />
         </div>
       </div>
     </div>
@@ -191,6 +199,7 @@ import ShellMainView from "./ShellView/ShellMainView.vue";
 import SettingsMainView from "./SettingsView/SettingsMainView.vue"
 import DatasetMainView from "./DatasetView/DatasetMainView.vue"
 import ImporterMainView from "./ImporterView/ImporterMainView.vue";
+import PrivacyView from "./PrivacyView/PrivacyView.vue";
 import ImportModal from "./ShellView/ImportModal.vue";
 import ShareModal from "./ShellView/ShareModal.vue";
 import Axios from "@/utils/AxiosWrapper";
@@ -211,6 +220,7 @@ export default {
     SettingsMainView,
     DatasetMainView,
     ImporterMainView,
+    PrivacyView,
     ImportModal,
     ShareModal,
   },
@@ -221,6 +231,7 @@ export default {
     showShell: true,
     showLoader: false,
     showSettings: false,
+    showPrivacy: false,
     showImportInvestigationModal: false,
     showShareModal: false,
     shareExportCode: '',
@@ -302,13 +313,16 @@ export default {
         case 'importer':
           this.toggleImporter(true);
           break;
+        case 'privacy':
+          this.togglePrivacy();
+          break;
         // Settings modal is handled separately as it's a modal, not a view in the main container
         // case 'settings':
         //   this.showSettingsModal();
         //   break;
         default:
           // If no valid hash, default to shell view
-          if (!this.showSchema && !this.showImporter && !this.showLoader && !this.showSettings) {
+          if (!this.showSchema && !this.showImporter && !this.showLoader && !this.showSettings && !this.showPrivacy) {
             this.toggleShell();
           }
           break;
@@ -434,6 +448,11 @@ export default {
       this.showShell = false;
       this.showLoader = false;
       this.showImporter = false;
+      this.showPrivacy = false;
+    },
+    togglePrivacy() {
+      this.hideAll();
+      this.showPrivacy = true;
     },
     toggleSchema() {
       this.hideAll();

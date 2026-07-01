@@ -332,6 +332,31 @@ nvm install 20
 nvm use 20
 ```
 
+## Legal / go-live checklist (required before public deploy)
+
+The public deployment must present a complete UK GDPR **Article 14 privacy notice** (the `/privacy` page, reachable
+from the header) and a per-result data-quality disclaimer. The deploy-time values for that notice live in **one place**:
+the `LEGAL` block in **`src/config/legal.config.js`**.
+
+Before a production build, complete every value still marked `[SET AT DEPLOY]`:
+
+| `LEGAL` key        | What to set                                              | Art. 14 basis            |
+| ------------------ | ------------------------------------------------------- | ------------------------ |
+| `OPERATOR_NAME`    | Controller's real legal identity (person or company)    | 14(1)(a)                 |
+| `CONTACT_EMAIL`    | Working contact inbox for data-subject / error requests | 14(1)(a)/(b)             |
+| `HOSTING_PROVIDER` | Hosting processor's name                                | 14(1)(e)                 |
+| `HOSTING_REGION`   | Hosting region **+ transfer basis if outside the UK**   | 14(1)(f)                 |
+| `EFFECTIVE_DATE`   | The notice's effective date                             | —                        |
+| `REFRESH_CADENCE`  | How often the data copy is refreshed (e.g. monthly)     | 14(2)(a)                 |
+
+> **A production build (`npm run build`) hard-fails** if any of these still holds a `[SET AT DEPLOY]` placeholder or the
+> contact email is malformed — the guard in `vue.config.js` refuses to produce a bundle, so an incomplete legal notice
+> can never be shipped. Development (`npm run serve`) is unaffected.
+
+`LAST_REVIEWED` in the same `LEGAL` block holds a real date ("Last reviewed: …" on the notice) rather than a
+`[SET AT DEPLOY]` placeholder, so it is **not** enforced by the guard. Review and update it by hand whenever the notice
+is materially changed, so the rendered date does not silently go stale.
+
 ## Build and serve for production
 
 ### Run production server locally
