@@ -337,7 +337,6 @@ import {
   extractGraphFromQueryResult
 } from "../../utils/GraphResultExtractor";
 import NeighborsFetcher from "../../utils/NeighborsFetcher";
-import DataDefinitionLanguage from "../../utils/DataDefinitionLanguage";
 import { useSettingsStore } from "../../store/SettingsStore";
 import { useModeStore } from "../../store/ModeStore";
 import { mapStores } from 'pinia'
@@ -1141,25 +1140,21 @@ export default {
         const newNodePkValue = rawNode[newNodePkName];
 
         if (newNodePkName && newNodePkValue !== undefined) {
-          const escapedTableName = DataDefinitionLanguage._escapeName(tableName);
-          const escapedNewNodeTableName = DataDefinitionLanguage._escapeName(newNodeTableName);
-          const escapedPrimaryKeyName = DataDefinitionLanguage._escapeName(primaryKeyName);
-          const escapedNewNodePkName = DataDefinitionLanguage._escapeName(newNodePkName);
-          const query = `
-            MATCH (a:${escapedTableName})-[r]-(b:${escapedNewNodeTableName})
-            WHERE a.${escapedPrimaryKeyName} = $pk1 AND b.${escapedNewNodePkName} = $pk2
-            RETURN r
-          `;
-          const params = { pk1: primaryKeyValue, pk2: newNodePkValue };
-
-          const result = this.modeStore.isWasm
-            ? await import("../../utils/KuzuWasm").then(m => m.default.query(query, params))
-            : await Axios.post("api/cypher", { query, params }).then(r => r.data);
+          const result = await NeighborsFetcher.fetchRelsBetween({
+            tableA: tableName,
+            primaryKeyNameA: primaryKeyName,
+            primaryKeyValueA: primaryKeyValue,
+            tableB: newNodeTableName,
+            primaryKeyNameB: newNodePkName,
+            primaryKeyValueB: newNodePkValue,
+            relTables: this.schema.relTables,
+            isWasm: this.modeStore.isWasm,
+          });
 
           if (result && result.rows) {
             const initialRelId = entity.rawRel._id;
             result.rows.forEach(row => {
-              const rel = row.r || row[0];
+              const rel = row.r;
               if (rel && rel._id && (rel._id.table !== initialRelId.table || rel._id.offset !== initialRelId.offset)) {
                 allRels.push(rel);
               }
@@ -1230,13 +1225,14 @@ export default {
         const sizeLimit = this.settingsStore.performance.maxNumberOfNodesToExpand;
 
         // Fetch neighbors
-        const neighbors = await NeighborsFetcher.fetchNeighbors(
+        const neighbors = await NeighborsFetcher.fetchNeighbors({
           tableName,
           primaryKeyName,
           primaryKeyValue,
+          relTables: this.schema.relTables,
           sizeLimit,
-          this.modeStore.isWasm
-        );
+          isWasm: this.modeStore.isWasm,
+        });
 
         if (!neighbors || !neighbors.rows) {
           this.neighborCounts[nodeId] = 0;
@@ -1306,13 +1302,14 @@ export default {
       const sizeLimit = this.settingsStore.performance.maxNumberOfNodesToExpand;
       let neighbors = null;
       try {
-        neighbors = await NeighborsFetcher.fetchNeighbors(
+        neighbors = await NeighborsFetcher.fetchNeighbors({
           tableName,
           primaryKeyName,
           primaryKeyValue,
+          relTables: this.schema.relTables,
           sizeLimit,
-          this.modeStore.isWasm
-        );
+          isWasm: this.modeStore.isWasm,
+        });
       } catch (e) {
         // Ignore error for now. Just don't expand if the core does not execute the query.
         console.error(e);
@@ -1404,13 +1401,14 @@ export default {
         try {
           const { tableName, primaryKeyName, primaryKeyValue } = this.getInfoForExpansion(node);
 
-          const neighbors = await NeighborsFetcher.fetchNeighbors(
+          const neighbors = await NeighborsFetcher.fetchNeighbors({
             tableName,
             primaryKeyName,
             primaryKeyValue,
+            relTables: this.schema.relTables,
             sizeLimit,
-            this.modeStore.isWasm
-          );
+            isWasm: this.modeStore.isWasm,
+          });
 
           return { nodeId: node.id, neighbors };
         } catch (e) {

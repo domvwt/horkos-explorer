@@ -117,6 +117,11 @@ const RELATIONSHIP_LABELS = {
   CorporateInfluence: { forward: 'Controls', reverse: 'Controlled by' },
   RegisteredAddress: { forward: 'Registered at', reverse: 'Registered Address' },
   CorrespondenceAddress: { forward: 'Correspondence at', reverse: 'Correspondence Address' },
+  // Match candidates that were not merged (entity <-> VirtualHub); neutral copy,
+  // deliberately distinct from the real relationship labels above
+  PersonAmbiguousLink: { forward: 'Possible match (not merged)', reverse: 'Possible match (not merged)' },
+  CompanyAmbiguousLink: { forward: 'Possible match (not merged)', reverse: 'Possible match (not merged)' },
+  AddressAmbiguousLink: { forward: 'Possible match (not merged)', reverse: 'Possible match (not merged)' },
 };
 
 // Display labels for entity types
@@ -124,6 +129,7 @@ const ENTITY_DISPLAY_LABELS = {
   Person: 'People',
   Company: 'Companies',
   Address: 'Addresses',
+  VirtualHub: 'Possible Matches',
 };
 
 export default {
@@ -256,13 +262,14 @@ export default {
         const { tableName, primaryKeyName, primaryKeyValue } = this.getNodeInfo();
 
         // Fetch maxResults + 1 to detect if there are more
-        const result = await NeighborsFetcher.fetchNeighbors(
+        const result = await NeighborsFetcher.fetchNeighbors({
           tableName,
           primaryKeyName,
           primaryKeyValue,
-          this.maxResults + 1,
-          this.isWasm
-        );
+          relTables: this.schema.relTables,
+          sizeLimit: this.maxResults + 1,
+          isWasm: this.isWasm,
+        });
 
         // Discard stale response if user selected a different node while fetching
         if (currentFetchId !== this.fetchId) {
@@ -346,9 +353,13 @@ export default {
         const edgeLabel = rel._label || 'Connected';
         const labelMapping = RELATIONSHIP_LABELS[edgeLabel] || { forward: edgeLabel, reverse: edgeLabel };
 
-        // Check direction: if rel._src matches our node's table, we're the source (forward)
-        const isSource = rel._src && rel._src.table === this.nodeLabel;
-        const relationshipLabel = isSource ? labelMapping.forward : labelMapping.reverse;
+        // Check direction: _src/_id hold numeric {table, offset} internal ids,
+        // so compare against the neighbor node — if the neighbor is the edge
+        // source, the clicked node is the target (reverse)
+        const neighborIsSource = rel._src
+          && rel._src.table === node._id.table
+          && rel._src.offset === node._id.offset;
+        const relationshipLabel = neighborIsSource ? labelMapping.reverse : labelMapping.forward;
 
         // Check if node is already in the graph
         let inGraph = false;
@@ -393,7 +404,11 @@ export default {
         }
       }
 
-      // Fallback: use the node ID
+      // Fallback: prefer the pk (named 'id' on every node table in this
+      // schema) over the internal table:offset id
+      if (node.id !== undefined && node.id !== null) {
+        return String(node.id);
+      }
       if (node._id) {
         return `${node._id.table}:${node._id.offset}`;
       }
