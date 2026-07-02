@@ -53,6 +53,8 @@ export KUZU_DIR=/home/domvwt/projects/horkos/data            # Directory contain
 export KUZU_FILE=horkos_dev_pl_graph.kuzu                    # Database filename (use dev database for development)
 
 # Optional configurations
+export DUCKDB_FILE=/home/domvwt/projects/horkos/data/horkos_dev_sl.duckdb  # DuckDB file with search.* tables - enables /api/suggest
+                                          # autocomplete (ranked FTS + LIKE hybrid; omit to disable). DUCKDB_PATH is a legacy alias.
 export KUZU_BUFFER_POOL_SIZE=1073741824  # 1GB buffer (default: 80% of RAM)
 export KUZU_QUERY_TIMEOUT=30000          # Query timeout in ms
 export KUZU_NUM_CONNECTIONS=4            # Connection pool size

@@ -46,7 +46,7 @@ const mode = require("./Mode");
 router.use("/datasets", apiLimiter, datasets);
 router.use("/mode", apiLimiter, mode);
 
-// Autocomplete endpoint (available if DUCKDB_PATH is configured)
+// Autocomplete endpoint (available if DUCKDB_FILE is configured)
 const suggest = require("./Suggest");
 router.use("/suggest", apiLimiter, suggest);
 

@@ -18,13 +18,17 @@
               @focus="showSuggestionsOnFocus"
               @blur="hideSuggestionsDelayed"
             >
-            <AutocompleteDropdown
-              v-if="showSuggestions && suggestions.length > 0"
-              :suggestions="suggestions"
-              :selected-index="selectedSuggestionIndex"
-              @select="onSuggestionSelect"
-              @hover="selectedSuggestionIndex = $event"
-            />
+            <!-- Teleported to body so the panel's overflow-y: auto can't clip it -->
+            <Teleport to="body">
+              <AutocompleteDropdown
+                v-if="showSuggestions && suggestions.length > 0"
+                :suggestions="suggestions"
+                :selected-index="selectedSuggestionIndex"
+                :position="dropdownPosition"
+                @select="onSuggestionSelect"
+                @hover="selectedSuggestionIndex = $event"
+              />
+            </Teleport>
           </div>
         </div>
         <div class="col-6">
@@ -169,6 +173,11 @@ export default {
       autocompleteAvailable: true,
       debounceTimer: null,
       autocompleteRequestId: 0,
+      // Suggestion the user explicitly picked; enables navigation by node
+      // id instead of name matching. Cleared as soon as the name is edited.
+      selectedSuggestion: null,
+      // Viewport coordinates for the body-teleported dropdown
+      dropdownPosition: { top: 0, left: 0, width: 0, maxHeight: 260 },
     };
   },
   computed: {
@@ -203,6 +212,13 @@ export default {
       return query;
     },
   },
+  watch: {
+    showSuggestions(isShown) {
+      if (isShown) {
+        this.updateDropdownPosition();
+      }
+    },
+  },
   mounted() {
     // Delay loading from URL to ensure schema is ready
     this.$nextTick(() => {
@@ -211,11 +227,17 @@ export default {
         this.loadFromUrl();
       }, 500);
     });
+    // Capture-phase scroll catches scrolling of any ancestor panel, keeping
+    // the body-teleported dropdown anchored to the input
+    window.addEventListener("scroll", this.onViewportChange, true);
+    window.addEventListener("resize", this.onViewportChange);
   },
   beforeUnmount() {
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
     }
+    window.removeEventListener("scroll", this.onViewportChange, true);
+    window.removeEventListener("resize", this.onViewportChange);
   },
   methods: {
     loadFromUrl() {
@@ -243,6 +265,12 @@ export default {
       if (city) this.filters.city = city;
       if (limit) this.resultLimit = limit;
 
+      // Restore node-id navigation from a shared/bookmarked suggestion pick
+      const id = params.get('id');
+      if (id && name) {
+        this.selectedSuggestion = { clusterId: id, name, canonicalName: null, detail: "" };
+      }
+
       // Auto-execute search if we loaded from URL
       if (this.hasFilters) {
         this.$nextTick(() => {
@@ -258,6 +286,9 @@ export default {
 
       // Add filters if they have values
       if (this.filters.name) params.set('name', this.filters.name);
+      if (this.selectedSuggestion?.clusterId && this.filters.name === this.selectedSuggestion.name) {
+        params.set('id', this.selectedSuggestion.clusterId);
+      }
       if (this.filters.companyNumber) params.set('companyNumber', this.filters.companyNumber);
       if (this.filters.jurisdiction) params.set('jurisdiction', this.filters.jurisdiction);
       if (this.filters.postCode) params.set('postCode', this.filters.postCode);
@@ -282,6 +313,7 @@ export default {
       };
       this.generatedQuery = "";
       this.queryParams = {};
+      this.selectedSuggestion = null;
       // Clear URL parameters
       window.history.pushState({}, '', window.location.pathname);
     },
@@ -312,9 +344,21 @@ export default {
       const params = {};
       let nodeLabel = "";
 
+      // A picked autocomplete suggestion navigates by node id - exact and
+      // unambiguous even when many entities share the name. Only honoured
+      // while the input still shows the picked name.
+      const picked = this.selectedSuggestion;
+      const useNodeId = Boolean(
+        picked?.clusterId && this.filters.name === picked.name
+      );
+      if (useNodeId) {
+        conditions.push(`n.id = $id`);
+        params.id = picked.clusterId;
+      }
+
       if (type === "Person") {
         nodeLabel = ":Person";
-        if (this.filters.name) {
+        if (!useNodeId && this.filters.name) {
           const { value, exactMatch } = this.parseNameFilter(this.filters.name);
           if (exactMatch) {
             conditions.push(`n.name = $name`);
@@ -325,7 +369,7 @@ export default {
         }
       } else if (type === "Company") {
         nodeLabel = ":Company";
-        if (this.filters.name) {
+        if (!useNodeId && this.filters.name) {
           const { value, exactMatch } = this.parseNameFilter(this.filters.name);
           if (exactMatch) {
             conditions.push(`n.name = $name`);
@@ -344,7 +388,7 @@ export default {
         }
       } else if (type === "Address") {
         nodeLabel = ":Address";
-        if (this.filters.name) {
+        if (!useNodeId && this.filters.name) {
           const { value, exactMatch } = this.parseNameFilter(this.filters.name);
           if (exactMatch) {
             conditions.push(`n.full = $address`);
@@ -391,7 +435,27 @@ export default {
       }, 2000);
     },
     // Autocomplete methods
+    updateDropdownPosition() {
+      const input = this.$refs.nameInput;
+      if (!input) return;
+      const rect = input.getBoundingClientRect();
+      this.dropdownPosition = {
+        top: rect.bottom + 2,
+        left: rect.left,
+        width: rect.width,
+        // Never extend past the bottom of the viewport
+        maxHeight: Math.max(120, Math.min(260, window.innerHeight - rect.bottom - 10)),
+      };
+    },
+    onViewportChange() {
+      if (this.showSuggestions) {
+        this.updateDropdownPosition();
+      }
+    },
     onNameInput() {
+      // Typing invalidates any previously picked suggestion
+      this.selectedSuggestion = null;
+
       // Clear any pending debounce
       if (this.debounceTimer) {
         clearTimeout(this.debounceTimer);
@@ -434,7 +498,12 @@ export default {
           return;
         }
 
-        this.suggestions = response.data;
+        this.suggestions = (response.data || []).map((item) => ({
+          name: item.name,
+          clusterId: item.cluster_id || null,
+          canonicalName: item.canonical_name || null,
+          detail: this.suggestionDetail(item),
+        }));
         this.showSuggestions = this.suggestions.length > 0;
         this.selectedSuggestionIndex = -1;
       } catch (err) {
@@ -451,13 +520,49 @@ export default {
         this.showSuggestions = false;
       }
     },
-    onSuggestionSelect(name) {
-      // Escape any double quotes in the name and wrap for exact match
-      const escaped = name.replace(/"/g, '\\"');
-      this.filters.name = `"${escaped}"`;
+    /**
+     * Build the muted one-line disambiguator shown under a suggestion.
+     * Homonym clusters are common - these details (plus the canonical
+     * name when a non-canonical variant matched) are what tell two
+     * "John Smith" rows apart.
+     */
+    suggestionDetail(item) {
+      const d = item.disambiguators || {};
+      const parts = [];
+      if (item.canonical_name && item.canonical_name !== item.name) {
+        parts.push(`→ ${item.canonical_name}`);
+      }
+      if (this.selectedType === "Person") {
+        if (d.birth_date) parts.push(`b. ${d.birth_date}`);
+        if (d.nationality) parts.push(d.nationality);
+        if (d.record_count > 1) parts.push(`${d.record_count} records`);
+      } else if (this.selectedType === "Company") {
+        if (d.company_number) parts.push(`No. ${d.company_number}`);
+        if (d.status) parts.push(d.status);
+      } else if (this.selectedType === "Address") {
+        if (d.post_code) parts.push(d.post_code);
+        if (d.city) parts.push(d.city);
+      }
+      return parts.join(" · ");
+    },
+    onSuggestionSelect(suggestion) {
+      if (suggestion.clusterId) {
+        // Navigate by node id - unambiguous even when many entities share
+        // the picked name
+        this.filters.name = suggestion.name;
+        this.selectedSuggestion = suggestion;
+      } else {
+        // Legacy search tables carry no cluster id - fall back to quoted
+        // exact-name match
+        const escaped = suggestion.name.replace(/"/g, '\\"');
+        this.filters.name = `"${escaped}"`;
+        this.selectedSuggestion = null;
+      }
       this.suggestions = [];
       this.showSuggestions = false;
       this.selectedSuggestionIndex = -1;
+      // Picking a suggestion is an explicit choice - search right away
+      this.executeSearch();
     },
     onNameKeydown(event) {
       if (!this.showSuggestions || this.suggestions.length === 0) {
@@ -507,10 +612,15 @@ export default {
       }, 200);
     },
     onEntityTypeChange() {
-      // Clear suggestions when entity type changes
+      // The name field means different things per type (Person/Company name
+      // vs full address), so clear it along with suggestions; bump the
+      // request id so any in-flight fetch for the previous type is discarded
+      this.autocompleteRequestId++;
+      this.filters.name = "";
       this.suggestions = [];
       this.showSuggestions = false;
       this.selectedSuggestionIndex = -1;
+      this.selectedSuggestion = null;
     },
   },
 };
