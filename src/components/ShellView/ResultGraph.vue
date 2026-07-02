@@ -122,6 +122,11 @@
         </div>
 
         <div v-if="displayLabel">
+          <ConfidenceIndicator
+            v-if="clickedIsNode"
+            :properties="clickedProperties"
+          />
+
           <div class="result-graph__summary-section">
             <h5>{{ sidePanelPropertyTitlePrefix }} Properties</h5>
           </div>
@@ -342,6 +347,7 @@ import GraphToast from "./GraphToast.vue";
 import ExternalLinksPanel from "./ExternalLinksPanel.vue";
 import SourceProvenancePanel from "./SourceProvenancePanel.vue";
 import ConnectedEntitiesPanel from "./ConnectedEntitiesPanel.vue";
+import ConfidenceIndicator from "./ConfidenceIndicator.vue";
 import ResultDisclaimer from "./ResultDisclaimer.vue";
 import g6Utils from '../../utils/G6Utils';
 import Axios from "@/utils/AxiosWrapper";
@@ -356,6 +362,7 @@ export default {
     ExternalLinksPanel,
     SourceProvenancePanel,
     ConnectedEntitiesPanel,
+    ConfidenceIndicator,
     ResultDisclaimer
   },
   props: {
@@ -473,7 +480,11 @@ export default {
       return this.clickedLabel;
     },
     displayProperties() {
-      return this.clickedProperties;
+      // quality_level / quality_concerns stay in clickedProperties for the
+      // confidence indicator to read, but are shown there rather than as raw rows.
+      return this.clickedProperties.filter(
+        p => p.name !== 'quality_level' && p.name !== 'quality_concerns'
+      );
     },
     ...mapStores(useSettingsStore, useModeStore),
     labelColor() {
