@@ -113,9 +113,10 @@ import NeighborsFetcher from "../../utils/NeighborsFetcher";
 const RELATIONSHIP_LABELS = {
   PersonOwnership: { forward: 'Owner', reverse: 'Owned by' },
   CorporateOwnership: { forward: 'Owner', reverse: 'Owned by' },
-  Directorship: { forward: 'Director', reverse: 'Has Director' },
+  PersonInfluence: { forward: 'Controls', reverse: 'Controlled by' },
+  CorporateInfluence: { forward: 'Controls', reverse: 'Controlled by' },
   RegisteredAddress: { forward: 'Registered at', reverse: 'Registered Address' },
-  ResidentialAddress: { forward: 'Lives at', reverse: 'Residence' },
+  CorrespondenceAddress: { forward: 'Correspondence at', reverse: 'Correspondence Address' },
 };
 
 // Display labels for entity types
