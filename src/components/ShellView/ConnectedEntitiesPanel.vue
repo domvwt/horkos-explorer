@@ -117,11 +117,11 @@ const RELATIONSHIP_LABELS = {
   CorporateInfluence: { forward: 'Controls', reverse: 'Controlled by' },
   RegisteredAddress: { forward: 'Registered at', reverse: 'Registered Address' },
   CorrespondenceAddress: { forward: 'Correspondence at', reverse: 'Correspondence Address' },
-  // Match candidates that were not merged (entity <-> VirtualHub); neutral copy,
-  // deliberately distinct from the real relationship labels above
-  PersonAmbiguousLink: { forward: 'Possible match (not merged)', reverse: 'Possible match (not merged)' },
-  CompanyAmbiguousLink: { forward: 'Possible match (not merged)', reverse: 'Possible match (not merged)' },
-  AddressAmbiguousLink: { forward: 'Possible match (not merged)', reverse: 'Possible match (not merged)' },
+  // Match candidates (entity <-> VirtualHub); neutral copy, deliberately
+  // distinct from the confirmed relationship labels above
+  PersonAmbiguousLink: { forward: 'Possible match', reverse: 'Possible match' },
+  CompanyAmbiguousLink: { forward: 'Possible match', reverse: 'Possible match' },
+  AddressAmbiguousLink: { forward: 'Possible match', reverse: 'Possible match' },
 };
 
 // Display labels for entity types

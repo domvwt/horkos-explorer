@@ -26,18 +26,6 @@
         {{ state.summary }}
       </p>
 
-      <ul
-        v-if="concerns.length > 0"
-        class="confidence-indicator__concerns"
-      >
-        <li
-          v-for="(concern, index) in concerns"
-          :key="index"
-        >
-          {{ concern }}
-        </li>
-      </ul>
-
       <p class="confidence-indicator__nudge">
         Always confirm an identity against the underlying source filing, registered address,
         or other identifiers before relying on it.
@@ -112,39 +100,13 @@ export default {
           };
       }
     },
-    // The quality_concerns behind a HIGH/MEDIUM/LOW band, rendered as the "why".
-    // Stored as a STRING column; parse defensively (JSON first, then the
-    // bracket-strip-split fallback used by SourceProvenancePanel).
-    concerns() {
-      const prop = this.properties.find(p => p.name === 'quality_concerns');
-      const value = prop ? prop.value : null;
-      if (value === null || value === undefined || value === '' || value === 'NULL') {
-        return [];
-      }
-      if (Array.isArray(value)) {
-        return value.map(c => String(c).trim()).filter(c => c);
-      }
-      if (typeof value === 'string') {
-        try {
-          const parsed = JSON.parse(value);
-          if (Array.isArray(parsed)) {
-            return parsed.map(c => String(c).trim()).filter(c => c);
-          }
-        } catch (e) {
-          // Not JSON — fall through to the bracket-strip-split fallback.
-        }
-        const cleaned = value.replace(/[[\]'"]/g, '');
-        return cleaned.split(',').map(c => c.trim()).filter(c => c);
-      }
-      return [];
-    },
   },
 };
 </script>
 
 <style lang="scss" scoped>
 .confidence-indicator {
-  margin-top: 0.5rem;
+  margin-top: 1rem;
 
   .confidence-chip {
     display: inline-flex;
@@ -200,17 +162,6 @@ export default {
     font-size: 0.8rem;
     line-height: 1.4;
     color: var(--bs-body-text);
-  }
-
-  &__concerns {
-    margin: 0 0 0.5rem;
-    padding-left: 1.1rem;
-
-    li {
-      font-size: 0.8rem;
-      line-height: 1.4;
-      color: var(--bs-body-text-secondary);
-    }
   }
 
   &__nudge {

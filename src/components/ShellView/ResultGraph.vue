@@ -138,13 +138,6 @@
                 }"
               >{{ clickedTypeDisplayName }}</span>
             </div>
-            <p
-              v-if="isVirtualHubSelected"
-              class="entity-header-hint"
-            >
-              A virtual hub groups alternative candidate matches for one entity that
-              could not be confidently merged — each linked node is a possible identity.
-            </p>
           </div>
 
           <!-- Properties (collapsible, expanded by default) -->
@@ -311,20 +304,20 @@
             <table class="table table-sm table-borderless result-graph__overview-table">
               <tbody>
                 <tr
-                  v-for="label in Object.keys(counters.rel)"
-                  :key="label"
+                  v-for="rel in mergedRelCounts"
+                  :key="rel.display"
                 >
                   <th scope="row">
                     <span
                       class="badge bg-primary"
                       :style="{
-                        backgroundColor: `${getColor(label)} !important`,
+                        backgroundColor: `${getColor(rel.colorLabel)} !important`,
                         color: 'white !important',
                         textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
                       }"
-                    >{{ displayRelType(label) }}</span>
+                    >{{ rel.display }}</span>
                   </th>
-                  <td>{{ counters.rel[label] }}</td>
+                  <td>{{ rel.count }}</td>
                 </tr>
               </tbody>
             </table>
@@ -549,8 +542,18 @@ export default {
       const pk = this.clickedProperties.find(p => p.isPrimaryKey);
       return pk ? pk.value : nodeTypeDisplayName(this.clickedLabel);
     },
-    isVirtualHubSelected() {
-      return this.clickedIsNode && this.clickedLabel === 'VirtualHub';
+    // Several raw rel tables can share one display name (e.g. Person/Corporate
+    // ownership both read "Ownership"); merge their overview counts.
+    mergedRelCounts() {
+      const merged = {};
+      for (const label of Object.keys(this.counters.rel)) {
+        const display = relTypeDisplayName(label);
+        if (!merged[display]) {
+          merged[display] = { display, count: 0, colorLabel: label };
+        }
+        merged[display].count += this.counters.rel[label];
+      }
+      return Object.values(merged);
     },
     orderedNodeCountLabels() {
       // Virtual hubs are an internal construct — list them after real entity types
@@ -830,9 +833,6 @@ export default {
     },
     displayNodeType(label) {
       return nodeTypeDisplayName(label);
-    },
-    displayRelType(label) {
-      return relTypeDisplayName(label);
     },
     /**
      * Initialize an empty G6 graph instance without processing query results.
@@ -3267,12 +3267,6 @@ export default {
         }
       }
 
-      .entity-header-hint {
-        margin: 0.5rem 0 0;
-        font-size: 0.8rem;
-        line-height: 1.4;
-        color: var(--bs-body-text-secondary);
-      }
     }
 
     .result-graph__provenance-section {

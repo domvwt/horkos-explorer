@@ -64,7 +64,10 @@ export default {
       const data = model.data;
       const label = data.properties._label;
       this.hoveredLabel = label;
-      this.hoveredProperties = ValueFormatter.filterAndBeautifyProperties(data.properties, this.schema);
+      // Internal resolver fields; the side panel presents these via the
+      // confidence chip instead of raw values.
+      this.hoveredProperties = ValueFormatter.filterAndBeautifyProperties(data.properties, this.schema)
+        .filter(p => p.name !== 'quality_level' && p.name !== 'quality_concerns');
       this.hoveredIsNode = !(data.properties._src && data.properties._dst);
       this.showTooltip(event);
     },

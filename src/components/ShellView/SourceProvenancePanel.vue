@@ -15,14 +15,31 @@
         :style="{
           '--badge-bg-color': source.color,
         }"
+        :title="source.count ? `${source.count} source record${source.count === 1 ? '' : 's'} from ${source.label}` : source.label"
       >
-        {{ source.label }}
+        {{ source.label }}<span
+          v-if="source.count"
+          class="source-badge__count"
+        > · {{ source.count }}</span>
       </span>
     </div>
   </div>
 </template>
 
 <script>
+// A list-valued property may arrive as an actual array or as a string
+// representation like "['psc', 'companies_house']".
+function parseArrayValue(value) {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value !== 'NULL') {
+    const cleaned = value.replace(/[\[\]'"]/g, '');
+    return cleaned.split(',').map(s => s.trim()).filter(s => s);
+  }
+  return [];
+}
+
 export default {
   name: "SourceProvenancePanel",
   props: {
@@ -49,15 +66,17 @@ export default {
         return [];
       }
 
-      // Parse sources (could be array or string representation)
-      let sources = [];
-      if (Array.isArray(sourceProp.value)) {
-        sources = sourceProp.value;
-      } else if (typeof sourceProp.value === 'string') {
-        // Handle string representation like "['psc', 'companies_house']"
-        const cleaned = sourceProp.value.replace(/[\[\]'"]/g, '');
-        sources = cleaned.split(',').map(s => s.trim()).filter(s => s);
-      }
+      const sources = parseArrayValue(sourceProp.value);
+
+      // Count records per system from the source_records ids, which are
+      // prefixed "system:..." — note the prefix spells systems with hyphens
+      // ("companies-house") where source_systems uses underscores.
+      const recordsProp = this.properties.find(p => p.name === 'source_records');
+      const recordCounts = {};
+      parseArrayValue(recordsProp && recordsProp.value).forEach(record => {
+        const system = String(record).split(':')[0].replace(/-/g, '_');
+        recordCounts[system] = (recordCounts[system] || 0) + 1;
+      });
 
       // Map source system names to display names
       const sourceMap = {};
@@ -81,7 +100,7 @@ export default {
         if (!sourceMap[sourceType]) {
           sourceMap[sourceType] = 0;
         }
-        sourceMap[sourceType] += 1;
+        sourceMap[sourceType] += recordCounts[source] || 0;
       });
 
       // Convert to array with badge colors
@@ -150,6 +169,11 @@ export default {
     .source-badge {
       background-color: var(--badge-bg-color) !important;
       color: white !important;
+    }
+
+    .source-badge__count {
+      font-weight: 400;
+      opacity: 0.85;
     }
   }
 }
