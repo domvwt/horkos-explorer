@@ -134,3 +134,10 @@ dist
 
 # Datasets
 datasets
+
+# Shared backlog.md board — symlink to ../horkos/backlog (local convenience, not committed)
+/backlog
+.tokensave
+
+# Playwright MCP browser-session artifacts
+.playwright-mcp/
