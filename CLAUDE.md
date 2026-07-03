@@ -139,15 +139,23 @@ npm run clean
 
 ### Docker
 
+The production image defaults to `MODE=READ_ONLY` and `DISABLE_SESSION_DB=true` (see the `Dockerfile`), so no operator-supplied env vars are required for a safe, stateless deployment.
+
 ```bash
 # Build Docker image
 docker build -t kuzudb/explorer:latest .
 
-# Run Docker container with database mount
+# Run Docker container with database mount (read-only, stateless by default)
 docker run -p 8000:8000 \
   -v /path/to/database:/database \
   -e KUZU_FILE=database.kuzu \
-  -e MODE=READ_ONLY \
+  --rm kuzudb/explorer:latest
+
+# Opt in to read-write mode
+docker run -p 8000:8000 \
+  -v /path/to/database:/database \
+  -e KUZU_FILE=database.kuzu \
+  -e MODE=READ_WRITE \
   --rm kuzudb/explorer:latest
 ```
 
@@ -239,7 +247,7 @@ The access mode (`READ_ONLY`, `READ_WRITE`, etc.) is determined at server startu
 
 **CRITICAL for public deployment** (see `research-notes/README.md` for full details):
 
-1. **Session Storage**: Set `DISABLE_SESSION_DB=true` to disable server-side session storage (shared across all users). When disabled, query history and settings are stored only in browser `localStorage`, providing proper multi-user isolation.
+1. **Session Storage**: The production Docker image defaults to `DISABLE_SESSION_DB=true`, disabling server-side session storage (shared across all users). When disabled, query history and settings are stored only in browser `localStorage`, providing proper multi-user isolation. Local/dev runs outside the image must set this explicitly.
 2. **Query Validation**: Currently relies on Kuzu to reject writes in READ_ONLY mode - SHOULD add server-side validation to reject `CREATE`, `DROP`, `DELETE`, etc. before execution
 3. **Schema Editor**: Must be hidden in READ_ONLY mode (check `MainLayout.vue`)
 4. **Rate Limiting**: Add Express rate limiting middleware for public deployments

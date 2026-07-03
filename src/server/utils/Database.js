@@ -133,7 +133,14 @@ class Database {
   }
 
   getAccessModeString() {
-    return process.env.MODE ? process.env.MODE.toUpperCase() : READ_WRITE_MODE;
+    if (!process.env.MODE) {
+      logger.warn(
+        "MODE environment variable not set, defaulting to READ_WRITE. " +
+        "The database will be opened writable and query validation will not block write operations."
+      );
+      return READ_WRITE_MODE;
+    }
+    return process.env.MODE.toUpperCase();
   }
 
   getDb() {

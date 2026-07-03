@@ -18,7 +18,7 @@ Below we show two different ways to launch Kuzu Explorer. Each of these options 
 Kuzu Explorer accessible on [http://localhost:8000](http://localhost:8000). If the launching is successful, you should see the logs similar to the following in your shell:
 
 ```
-Access mode: READ_WRITE
+Access mode: READ_ONLY
 Version of Kuzu: v0.0.11
 Deployed server started on port: 8000
 ```
@@ -57,17 +57,17 @@ finally use Kuzu Explorer to explore it.
 
 #### Access mode
 
-By default, Kuzu Explorer is launched in read-write mode, which means that you can modify the database. If you want to launch Kuzu Explorer in read-only mode, you can do so by setting the `MODE` environment variable to `READ_ONLY` as follows.
+By default, Horkos Explorer is launched in read-only, stateless mode (`MODE=READ_ONLY` and `DISABLE_SESSION_DB=true`): you can issue read queries and visualize the results, but you cannot run write queries, modify the schema, or persist session state server-side. This is the safe default for public deployments and does not require any operator-supplied environment variables.
+
+If you want to launch Horkos Explorer in read-write mode, you can opt in by setting the `MODE` environment variable to `READ_WRITE` as follows.
 
 ```bash
 docker run -p 8000:8000 \
            -v {path to the directory containing the database file}:/database \
            -e KUZU_FILE={database file name} \
-           -e MODE=READ_ONLY \
+           -e MODE=READ_WRITE \
            --rm kuzudb/explorer:latest
 ```
-
-In read-only mode, you can still issue read queries and visualize the results, but you cannot run write queries or modify the schema.
 
 #### Buffer pool size
 

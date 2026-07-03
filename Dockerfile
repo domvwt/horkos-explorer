@@ -48,9 +48,13 @@ RUN if [ "$SKIP_BUILD_APP" != "true" ] ; then npm run build ; else echo "Skippin
 EXPOSE 8000
 
 # Set environment variables
+# MODE and DISABLE_SESSION_DB default to safe (read-only, stateless) settings.
+# Operators must explicitly opt in to write mode, e.g. `-e MODE=READ_WRITE`.
 ENV NODE_ENV=production
 ENV PORT=8000
 ENV KUZU_DIR=/database
+ENV MODE=READ_ONLY
+ENV DISABLE_SESSION_DB=true
 
 # Run app
 ENTRYPOINT ["node", "src/server/index.js"]
