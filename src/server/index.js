@@ -67,7 +67,13 @@ if (ALLOWED_ORIGINS && ALLOWED_ORIGINS.length > 0) {
   logger.info("CORS enabled for all origins");
 }
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 8000;
-app.use(express.json({ limit: "128mb" }));
+// JSON request-body cap. This is a DoS guardrail, not a data path: the largest
+// legitimate JSON body is a Cypher query (already capped at 50KB by
+// QueryValidator) or an import plan config (small). Bulk CSV/Parquet uploads for
+// the importer go through multer's multipart/disk handling (src/server/Import.js)
+// and do NOT pass through this parser, so a small limit here does not break
+// import. Operators can override via the JSON_BODY_LIMIT env var if needed.
+app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "1mb" }));
 app.use(`${baseUrl}api`, api);
 const distPath = path.join(__dirname, "..", "..", "dist");
 app.use(`${baseUrl}`, express.static(distPath, { maxAge: "30d" }));

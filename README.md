@@ -69,6 +69,18 @@ docker run -p 8000:8000 \
            --rm kuzudb/explorer:latest
 ```
 
+#### Resource guardrails (public deployments)
+
+The production Docker image ships with default resource bounds so an unauthenticated user cannot run unbounded queries (DoS) or bulk-exfiltrate the graph. All are operator-overridable via environment variables:
+
+| Guardrail | Env var | Default | Effect |
+| --- | --- | --- | --- |
+| Query timeout | `KUZU_QUERY_TIMEOUT` | `30000` (30s) | Per-query wall-clock bound applied to every pooled connection; no single query runs indefinitely. |
+| Result-size cap | `KUZU_QUERY_SIZE_LIMIT` | `10000` | Max result rows returned per `/api/cypher` query; a broad `MATCH ... RETURN` cannot stream the whole graph. |
+| Request-body limit | `JSON_BODY_LIMIT` | `1mb` | Max JSON request-body size. CSV/Parquet import uploads use multipart streaming and are **not** limited by this. |
+
+The interactive query response is hard-bounded to `KUZU_QUERY_SIZE_LIMIT` rows; there is no separate bulk-export endpoint in the read-only image. Operators needing larger exports should run Kuzu tooling directly against the database file rather than raising the UI cap.
+
 #### Buffer pool size
 
 By default, Kuzu Explorer is launched with a maximum buffer pool size of 80% of the available memory. If you want to launch Kuzu Explorer with a different buffer pool size, you can do so by setting the `KUZU_BUFFER_POOL_SIZE` environment variable to the desired value in bytes as follows.

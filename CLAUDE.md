@@ -56,8 +56,13 @@ export KUZU_FILE=horkos_dev_pl_graph.kuzu                    # Database filename
 export DUCKDB_FILE=/home/domvwt/projects/horkos/data/horkos_dev_sl.duckdb  # DuckDB file with search.* tables - enables /api/suggest
                                           # autocomplete (ranked FTS + LIKE hybrid; omit to disable). DUCKDB_PATH is a legacy alias.
 export KUZU_BUFFER_POOL_SIZE=1073741824  # 1GB buffer (default: 80% of RAM)
-export KUZU_QUERY_TIMEOUT=30000          # Query timeout in ms
+export KUZU_QUERY_TIMEOUT=30000          # Per-query wall-clock timeout in ms (production image default: 30000).
+                                          # Applied to every pooled connection; unbounded if unset.
+export KUZU_QUERY_SIZE_LIMIT=10000       # Max result rows returned per /api/cypher query (production image default: 10000).
+                                          # Bounds response size so a broad MATCH...RETURN cannot stream the whole graph; unbounded if unset.
 export KUZU_NUM_CONNECTIONS=4            # Connection pool size
+export JSON_BODY_LIMIT=1mb               # Max JSON request-body size (default: 1mb). CSV/Parquet import uploads use
+                                          # multipart/multer and are NOT limited by this; only JSON bodies (queries, import config) are.
 
 # Security configuration for public deployments
 export DISABLE_SESSION_DB=true           # Disable server-side session storage (recommended for public deployments)
@@ -252,6 +257,11 @@ The access mode (`READ_ONLY`, `READ_WRITE`, etc.) is determined at server startu
 3. **Schema Editor**: Must be hidden in READ_ONLY mode (check `MainLayout.vue`)
 4. **Rate Limiting**: Add Express rate limiting middleware for public deployments
 5. **CORS**: Configure `ALLOWED_ORIGINS` environment variable for production
+6. **Resource guardrails (DoS / exfiltration)**: The production Docker image ships with default resource bounds so an unauthenticated user cannot run unbounded queries or bulk-exfiltrate the graph:
+   - **Query timeout**: `KUZU_QUERY_TIMEOUT=30000` (30s). Applied to every pooled connection at init (`Database.js`), so no single query runs indefinitely.
+   - **Result-size cap**: `KUZU_QUERY_SIZE_LIMIT=10000` rows. Enforced in `Cypher.js` (`processSingleResult`): when a result exceeds the cap, only the first N rows are read back, bounding response size. 10000 rows is a generous ceiling for interactive graph exploration while still preventing whole-graph streaming; operators handling larger legitimate exports should raise it deliberately.
+   - **Request-body limit**: JSON bodies are capped at `1mb` (`JSON_BODY_LIMIT`, `index.js`). The largest legitimate JSON body is a Cypher query (already capped at 50KB by `QueryValidator`) or a small import-plan config. Bulk CSV/Parquet import uploads use multipart/multer streaming to disk and are **not** affected by this limit.
+   - **Max result / export size decision**: interactive `/api/cypher` responses are hard-bounded to `KUZU_QUERY_SIZE_LIMIT` rows. There is no separate bulk-export endpoint in the public read-only image; operators needing large exports should run Kuzu tooling directly against the database file rather than raising the UI cap. All three bounds are operator-overridable via the env vars above.
 
 ## Horkos Graph Schema
 

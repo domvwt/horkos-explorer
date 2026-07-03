@@ -55,6 +55,14 @@ ENV PORT=8000
 ENV KUZU_DIR=/database
 ENV MODE=READ_ONLY
 ENV DISABLE_SESSION_DB=true
+# Default DoS guardrails for the public /api/cypher endpoint. Both are
+# operator-overridable at runtime (e.g. `-e KUZU_QUERY_TIMEOUT=60000`).
+# KUZU_QUERY_TIMEOUT: per-query wall-clock bound (ms) applied to every pooled
+#   connection, so a single expensive query cannot run indefinitely.
+# KUZU_QUERY_SIZE_LIMIT: max result rows returned per query, so a broad
+#   MATCH...RETURN cannot stream the entire graph in one response.
+ENV KUZU_QUERY_TIMEOUT=30000
+ENV KUZU_QUERY_SIZE_LIMIT=10000
 
 # Run app
 ENTRYPOINT ["node", "src/server/index.js"]
