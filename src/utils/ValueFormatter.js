@@ -1,5 +1,6 @@
 import Moment from "moment";
 import { DATA_TYPES } from "./Constants";
+import { nodeTypeDisplayName, relTypeDisplayName } from "./DisplayLabels";
 
 class ValueFormatter {
   constructor() {
@@ -15,7 +16,9 @@ class ValueFormatter {
     properties.push({
       name: isRelationship ? "Relationship Type" : "Entity Type",
       isPrimaryKey: false,
-      value: rawValue._label,
+      value: isRelationship
+        ? relTypeDisplayName(rawValue._label)
+        : nodeTypeDisplayName(rawValue._label),
       isLabel: true, // Mark this as a label property for potential special styling
     });
 

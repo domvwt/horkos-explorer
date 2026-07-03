@@ -2,8 +2,11 @@
   <div
     v-if="sourceRecords.length > 0"
     class="source-provenance"
+    :class="{ 'source-provenance--embedded': embedded }"
   >
-    <h6>Data Sources</h6>
+    <h6 v-if="!embedded">
+      Data Sources
+    </h6>
     <div class="source-badges">
       <span
         v-for="source in sourceRecords"
@@ -26,6 +29,12 @@ export default {
     properties: {
       type: Array,
       required: true,
+    },
+    // Render badges only, without the section chrome, for embedding
+    // inside a host section (e.g. "Sources & Matching").
+    embedded: {
+      type: Boolean,
+      default: false,
     },
   },
   computed: {
@@ -112,6 +121,12 @@ export default {
   margin-top: 1rem;
   padding-top: 1rem;
   border-top: 1px solid var(--bs-body-inactive);
+
+  &--embedded {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+  }
 
   h6 {
     font-size: 0.9rem;

@@ -1,34 +1,48 @@
 <template>
-  <div class="confidence-indicator">
-    <h6>Confidence indicator</h6>
-
-    <span
-      class="badge confidence-badge"
-      :style="{ '--badge-bg-color': state.color }"
+  <div
+    class="confidence-indicator"
+    :style="{ '--chip-color': state.color }"
+  >
+    <button
+      class="confidence-chip"
+      :class="{ 'confidence-chip--quiet': !band }"
+      :aria-expanded="expanded ? 'true' : 'false'"
+      :title="state.summary"
+      @click="expanded = !expanded"
     >
-      {{ state.label }}
-    </span>
+      <span class="confidence-chip__dot" />
+      <span class="confidence-chip__text">Confidence: {{ state.label }}</span>
+      <i
+        class="fa-solid confidence-chip__chevron"
+        :class="expanded ? 'fa-chevron-up' : 'fa-chevron-down'"
+      />
+    </button>
 
-    <p class="confidence-indicator__summary">
-      {{ state.summary }}
-    </p>
-
-    <ul
-      v-if="concerns.length > 0"
-      class="confidence-indicator__concerns"
+    <div
+      v-show="expanded"
+      class="confidence-indicator__details"
     >
-      <li
-        v-for="(concern, index) in concerns"
-        :key="index"
+      <p class="confidence-indicator__summary">
+        {{ state.summary }}
+      </p>
+
+      <ul
+        v-if="concerns.length > 0"
+        class="confidence-indicator__concerns"
       >
-        {{ concern }}
-      </li>
-    </ul>
+        <li
+          v-for="(concern, index) in concerns"
+          :key="index"
+        >
+          {{ concern }}
+        </li>
+      </ul>
 
-    <p class="confidence-indicator__nudge">
-      Always confirm an identity against the underlying source filing, registered address,
-      or other identifiers before relying on it.
-    </p>
+      <p class="confidence-indicator__nudge">
+        Always confirm an identity against the underlying source filing, registered address,
+        or other identifiers before relying on it.
+      </p>
+    </div>
   </div>
 </template>
 
@@ -41,6 +55,11 @@ export default {
       type: Array,
       required: true,
     },
+  },
+  data() {
+    return {
+      expanded: false,
+    };
   },
   computed: {
     // The raw quality_level band written onto the node by the resolver. Kept in
@@ -125,31 +144,58 @@ export default {
 
 <style lang="scss" scoped>
 .confidence-indicator {
-  margin-top: 1rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--bs-body-inactive);
+  margin-top: 0.5rem;
 
-  h6 {
-    font-size: 0.9rem;
-    font-weight: 600;
-    margin-bottom: 0.75rem;
-    color: var(--bs-body-text);
-  }
-
-  .badge {
-    padding: 0.375rem 0.75rem;
-    font-size: 0.8rem;
+  .confidence-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.2rem 0.6rem;
+    background: none;
+    border: 1px solid var(--bs-body-inactive);
+    border-radius: 1rem;
+    font-size: 0.75rem;
     font-weight: 500;
-    border-radius: 0.375rem;
+    color: var(--bs-body-text);
+    cursor: pointer;
+
+    &:hover {
+      border-color: var(--chip-color);
+    }
+
+    &__dot {
+      width: 0.55rem;
+      height: 0.55rem;
+      border-radius: 50%;
+      background-color: var(--chip-color);
+      flex-shrink: 0;
+    }
+
+    &__chevron {
+      font-size: 0.6rem;
+      color: var(--bs-body-text-secondary);
+    }
+
+    // Absent band — keep it visible (never implied-HIGH) but quiet.
+    &--quiet {
+      color: var(--bs-body-text-secondary);
+      font-weight: 400;
+
+      .confidence-chip__dot {
+        opacity: 0.5;
+      }
+    }
   }
 
-  .confidence-badge {
-    background-color: var(--badge-bg-color) !important;
-    color: white !important;
+  &__details {
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border-left: 3px solid var(--chip-color, var(--bs-body-inactive));
+    background-color: var(--bs-body-bg);
+    border-radius: 0 0.375rem 0.375rem 0;
   }
 
   &__summary {
-    margin-top: 0.5rem;
     margin-bottom: 0.5rem;
     font-size: 0.8rem;
     line-height: 1.4;

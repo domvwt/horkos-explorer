@@ -122,15 +122,46 @@
         </div>
 
         <div v-if="displayLabel">
-          <ConfidenceIndicator
-            v-if="clickedIsNode"
-            :properties="clickedProperties"
-          />
-
-          <div class="result-graph__summary-section">
-            <h5>{{ sidePanelPropertyTitlePrefix }} Properties</h5>
+          <!-- Entity header: name, type badge, confidence chip -->
+          <div class="result-graph__entity-header">
+            <div class="entity-header-title-row">
+              <h5 class="entity-header-name">
+                {{ entityDisplayName }}
+              </h5>
+              <span
+                v-if="clickedTypeDisplayName !== entityDisplayName"
+                class="badge entity-header-type-badge"
+                :style="{
+                  backgroundColor: `${getColor(clickedLabel)} !important`,
+                  color: 'white !important',
+                  textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
+                }"
+              >{{ clickedTypeDisplayName }}</span>
+            </div>
+            <p
+              v-if="isVirtualHubSelected"
+              class="entity-header-hint"
+            >
+              A virtual hub groups alternative candidate matches for one entity that
+              could not be confidently merged — each linked node is a possible identity.
+            </p>
           </div>
-          <div class="result-graph__properties-list">
+
+          <!-- Properties (collapsible, expanded by default) -->
+          <div
+            class="result-graph__properties-header"
+            @click="propertiesExpanded = !propertiesExpanded"
+          >
+            <i
+              class="fa-solid"
+              :class="propertiesExpanded ? 'fa-chevron-down' : 'fa-chevron-right'"
+            />
+            <h6>Properties</h6>
+          </div>
+          <div
+            v-show="propertiesExpanded"
+            class="result-graph__properties-list"
+          >
             <div
               v-for="(property, index) in displayProperties"
               :key="property.name"
@@ -179,18 +210,25 @@
             @add-node="handleAddConnectedNode"
           />
 
-          <!-- Source Provenance -->
-          <SourceProvenancePanel
-            v-if="clickedIsNode"
-            :properties="clickedProperties"
-          />
-
           <!-- External Resource Links -->
           <ExternalLinksPanel
             v-if="clickedIsNode"
             :entity-type="clickedLabel"
             :properties="clickedProperties"
           />
+
+          <!-- Sources & Matching: provenance and merge confidence, grouped -->
+          <div
+            v-if="clickedIsNode"
+            class="result-graph__provenance-section"
+          >
+            <h6>Sources &amp; Matching</h6>
+            <SourceProvenancePanel
+              :properties="clickedProperties"
+              embedded
+            />
+            <ConfidenceIndicator :properties="clickedProperties" />
+          </div>
 
           <!-- Data-quality / provenance disclaimer for this specific entity -->
           <ResultDisclaimer
@@ -247,14 +285,14 @@
             <table class="table table-sm table-borderless result-graph__overview-table">
               <tbody>
                 <tr
-                  v-for="label in Object.keys(counters.node)"
+                  v-for="label in orderedNodeCountLabels"
                   :key="label"
                 >
                   <th scope="row">
                     <span
                       class="badge bg-primary"
                       :style="{ backgroundColor: `${getColor(label)} !important`, textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000', color: 'white !important' }"
-                    >{{ label }}</span>
+                    >{{ displayNodeType(label) }}</span>
                   </th>
                   <td>{{ counters.node[label] }}</td>
                 </tr>
@@ -284,7 +322,7 @@
                         color: 'white !important',
                         textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
                       }"
-                    >{{ label }}</span>
+                    >{{ displayRelType(label) }}</span>
                   </th>
                   <td>{{ counters.rel[label] }}</td>
                 </tr>
@@ -349,6 +387,7 @@ import ConnectedEntitiesPanel from "./ConnectedEntitiesPanel.vue";
 import ConfidenceIndicator from "./ConfidenceIndicator.vue";
 import ResultDisclaimer from "./ResultDisclaimer.vue";
 import g6Utils from '../../utils/G6Utils';
+import { nodeTypeDisplayName, relTypeDisplayName } from "../../utils/DisplayLabels";
 import Axios from "@/utils/AxiosWrapper";
 import { createGraphConfig, getLayoutConfig } from "./graphConfig";
 import { parseStableKey } from "@/utils/InvestigationState";
@@ -437,6 +476,7 @@ export default {
     isInitialRender: true,
     drawPromise: null,
     expandedProperties: {},
+    propertiesExpanded: true,
     neighborCounts: {},
     profligateNodes: new Set(),
     neighborCountsLoading: new Set(),
@@ -468,10 +508,6 @@ export default {
     sidePanelButtonTitle() {
       return this.isSidePanelOpen ? "Close Side Panel" : "Open Side Panel";
     },
-    sidePanelPropertyTitlePrefix() {
-      const isNode = this.clickedIsNode;
-      return isNode ? "Node" : "Rel";
-    },
     isNodeSelectedOrHovered() {
       return this.clickedLabel !== "";
     },
@@ -481,8 +517,45 @@ export default {
     displayProperties() {
       // quality_level / quality_concerns stay in clickedProperties for the
       // confidence indicator to read, but are shown there rather than as raw rows.
+      // The entity/relationship type row is shown as the header badge instead.
       return this.clickedProperties.filter(
-        p => p.name !== 'quality_level' && p.name !== 'quality_concerns'
+        p => p.name !== 'quality_level' && p.name !== 'quality_concerns' && !p.isLabel
+      );
+    },
+    clickedTypeDisplayName() {
+      if (!this.clickedLabel) {
+        return "";
+      }
+      return this.clickedIsNode
+        ? nodeTypeDisplayName(this.clickedLabel)
+        : relTypeDisplayName(this.clickedLabel);
+    },
+    entityDisplayName() {
+      if (!this.clickedLabel) {
+        return "";
+      }
+      if (!this.clickedIsNode) {
+        return relTypeDisplayName(this.clickedLabel);
+      }
+      // Internal node tables (VirtualHub) have no human-readable property
+      if (nodeTypeDisplayName(this.clickedLabel) !== this.clickedLabel) {
+        return nodeTypeDisplayName(this.clickedLabel);
+      }
+      const labelProp = this.settingsStore.settingsForLabel(this.clickedLabel).label;
+      const named = this.clickedProperties.find(p => p.name === labelProp);
+      if (named && named.value && named.value !== 'NULL') {
+        return named.value;
+      }
+      const pk = this.clickedProperties.find(p => p.isPrimaryKey);
+      return pk ? pk.value : nodeTypeDisplayName(this.clickedLabel);
+    },
+    isVirtualHubSelected() {
+      return this.clickedIsNode && this.clickedLabel === 'VirtualHub';
+    },
+    orderedNodeCountLabels() {
+      // Virtual hubs are an internal construct — list them after real entity types
+      return Object.keys(this.counters.node).sort(
+        (a, b) => Number(a === 'VirtualHub') - Number(b === 'VirtualHub')
       );
     },
     ...mapStores(useSettingsStore, useModeStore),
@@ -754,6 +827,12 @@ export default {
     },
     getColor(label) {
       return this.settingsStore.colorForLabel(label);
+    },
+    displayNodeType(label) {
+      return nodeTypeDisplayName(label);
+    },
+    displayRelType(label) {
+      return relTypeDisplayName(label);
     },
     /**
      * Initialize an empty G6 graph instance without processing query results.
@@ -3166,10 +3245,82 @@ export default {
       scrollbar-color: transparent transparent;
     }
 
+    .result-graph__entity-header {
+      .entity-header-title-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.5rem;
+
+        .entity-header-name {
+          margin: 0;
+          font-size: 1.05rem;
+          font-weight: 600;
+          color: var(--bs-body-text);
+          word-break: break-word;
+        }
+
+        .entity-header-type-badge {
+          flex-shrink: 0;
+          font-size: 0.75rem;
+          padding: 0.3rem 0.6rem;
+        }
+      }
+
+      .entity-header-hint {
+        margin: 0.5rem 0 0;
+        font-size: 0.8rem;
+        line-height: 1.4;
+        color: var(--bs-body-text-secondary);
+      }
+    }
+
+    .result-graph__provenance-section {
+      margin-top: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--bs-body-inactive);
+
+      h6 {
+        font-size: 0.9rem;
+        font-weight: 600;
+        margin-bottom: 0.75rem;
+        color: var(--bs-body-text);
+      }
+    }
+
+    .result-graph__properties-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 1rem;
+      padding: 1rem 0 0.25rem;
+      border-top: 1px solid var(--bs-body-inactive);
+      cursor: pointer;
+
+      &:hover {
+        opacity: 0.8;
+      }
+
+      > i {
+        font-size: 0.7rem;
+        width: 12px;
+        text-align: center;
+        color: var(--bs-body-inactive);
+      }
+
+      h6 {
+        font-size: 0.9rem;
+        font-weight: 600;
+        margin: 0;
+        color: var(--bs-body-text);
+      }
+    }
+
     .result-graph__properties-list {
       display: flex;
       flex-direction: column;
       gap: 0.25rem;
+      margin-top: 0.5rem;
       margin-bottom: 1rem;
 
       .property-item {

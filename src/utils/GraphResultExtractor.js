@@ -16,6 +16,7 @@
 import G6Utils from "./G6Utils";
 import ValueFormatter from "./ValueFormatter";
 import { DATA_TYPES, LOOP_POSITIONS, ARC_CURVE_OFFSETS } from "./Constants";
+import { NODE_TYPE_DISPLAY_NAMES, relTypeDisplayName } from "./DisplayLabels";
 
 /**
  * Encode a Kuzu internal ID to a string suitable for G6 node/edge IDs
@@ -50,6 +51,12 @@ export function getNodeIcon(nodeLabel) {
 export function formatNodeLabel(rawNode, schema, settingsStore) {
   if (!rawNode || !rawNode._label) {
     return "";
+  }
+
+  // Internal node tables (VirtualHub) carry no human-readable property —
+  // label them with their plain-English type name instead of the cluster id.
+  if (NODE_TYPE_DISPLAY_NAMES[rawNode._label]) {
+    return NODE_TYPE_DISPLAY_NAMES[rawNode._label];
   }
 
   const nodeSettings = settingsStore.settingsForLabel(rawNode._label);
@@ -181,6 +188,9 @@ export function buildG6Edge(edgeId, sourceId, targetId, rawRel, settingsStore, s
     const relTable = schema?.relTables?.find((table) => table.name === rawRel._label);
     if (relLabelProp === '_label' && relTable && relTable.group) {
       relLabel = relTable.group;
+    } else if (relLabelProp === '_label') {
+      // Re-order actor-first table names relationship-first for display
+      relLabel = relTypeDisplayName(relLabel);
     }
 
     // Format value based on property type if available
@@ -196,8 +206,8 @@ export function buildG6Edge(edgeId, sourceId, targetId, rawRel, settingsStore, s
 
     relLabel = String(relLabel);
     const fontSize = relSettings.g6Settings.labelCfg.style.fontSize;
-    // Truncate edge label to max width 80px
-    relLabel = G6Utils.fittingString(relLabel, 80, fontSize);
+    // Truncate very long edge labels; wide enough that no schema rel type name truncates
+    relLabel = G6Utils.fittingString(relLabel, 170, fontSize);
   }
 
   const g6Rel = {
