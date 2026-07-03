@@ -257,6 +257,109 @@ print_summary() {
     fi
 }
 
+# --- TASK-102: trust proxy / XFF spoofing ---
+# Regression test for X-Forwarded-For (XFF) spoofing bypassing rate limits.
+#
+# This test assumes the server is started with the DEFAULT trust-proxy setting
+# (TRUST_PROXY=1, i.e. Express trusts exactly one reverse-proxy hop). In that
+# configuration this test harness IS the single trusted hop: whatever XFF value
+# curl sends becomes the right-most entry Express reads as req.ip. To simulate a
+# malicious client sitting BEHIND that trusted proxy we prepend a rotating fake
+# client IP to XFF (e.g. "203.0.113.<i>, 10.0.0.1"). With trust proxy = 1 Express
+# ignores the spoofed left-most entry and keys the rate limiter on the stable
+# right-most value (10.0.0.1), so rotation must NOT grant unlimited requests --
+# the limiter still trips (429). Without the fix (trust proxy = true, trusting
+# the whole chain) Express would take the rotating left-most entry and keep
+# returning 200.
+#
+# This test establishes its OWN fresh per-IP rate-limit bucket: because every
+# request carries "X-Forwarded-For: <spoofed>, 10.0.0.1", with 1 trusted hop the
+# limiter keys on the right-most 10.0.0.1 -- a DIFFERENT key from test_rate_limiting
+# (which sends no XFF and keys on the socket IP 127.0.0.1). It therefore does NOT
+# share or depend on any prior test's budget and must send enough requests to
+# exceed the limit on the 10.0.0.1 key on its own. Do not shrink the loop below
+# the effective limit or the test will never trip.
+#
+# The loop bound is derived from the server's own `RateLimit-Limit` response
+# header (express-rate-limit sets standardHeaders: true) so the test is correct
+# regardless of the ambient limit (dev default 500 vs prod/READ_ONLY default 30).
+# For a deterministic, fast run, start the server with
+# QUERY_RATE_LIMIT_MAX_REQUESTS=30. If the limit cannot be read, or is larger
+# than MAX_XFF_PROBE, the test SKIPs with a warning rather than falsely failing.
+test_xff_spoofing() {
+    print_header "Testing X-Forwarded-For Spoofing Resistance"
+
+    # Local skip helper (counts as neither pass nor fail) to avoid a false alarm
+    # when the effective limit is unknown or impractically large for a probe.
+    print_skip() { echo -e "${YELLOW}⚠ SKIP:${NC} $1"; }
+
+    # Upper bound on how many requests we are willing to send to trip the limit.
+    # A dev server defaults to 500 queries/min which is impractical to exhaust
+    # here; such a run should be skipped and re-run with QUERY_RATE_LIMIT_MAX_REQUESTS=30.
+    local MAX_XFF_PROBE=60
+
+    print_test "Rotating spoofed X-Forwarded-For must NOT bypass the query rate limit"
+
+    # Discover the effective query rate limit from the RateLimit-Limit header.
+    # -D - dumps response headers to stdout; the body is discarded (-o /dev/null).
+    local headers effective_limit
+    headers=$(curl -s -o /dev/null -D - -X POST "$SERVER_URL/api/cypher" \
+        -H "Content-Type: application/json" \
+        -H "X-Forwarded-For: 203.0.113.1, 10.0.0.1" \
+        -d '{"query": "MATCH (n:Person) RETURN count(n)"}')
+    # Header name is case-insensitive; value may be a plain number or a structured
+    # "limit=N" form depending on express-rate-limit version -- grab the digits.
+    effective_limit=$(echo "$headers" | grep -i '^RateLimit-Limit:' | grep -oE '[0-9]+' | head -1)
+
+    if [ -z "$effective_limit" ]; then
+        print_skip "Could not read RateLimit-Limit header; cannot bound the probe. Ensure the server is running with rate limiting enabled (standardHeaders)."
+        unset -f print_skip
+        return
+    fi
+
+    if [ "$effective_limit" -gt "$MAX_XFF_PROBE" ]; then
+        print_skip "Effective query limit is $effective_limit (> probe cap $MAX_XFF_PROBE); this looks like a dev server (NODE_ENV=development => 500/min). Re-run with QUERY_RATE_LIMIT_MAX_REQUESTS=30 for a deterministic check."
+        unset -f print_skip
+        return
+    fi
+
+    # Send limit + a small margin so the limiter is guaranteed to trip on the
+    # stable 10.0.0.1 key if (and only if) spoofing does NOT rotate req.ip.
+    local probe_count=$((effective_limit + 5))
+    print_info "Effective query limit is $effective_limit; sending $probe_count requests, each with a different fake client IP prepended to XFF..."
+
+    local limit_hit=false
+    local requests_sent=0
+
+    for ((i=1; i<=probe_count; i++)); do
+        # 203.0.113.0/24 is TEST-NET-3 (reserved for documentation) -> safe fakes.
+        spoofed_ip="203.0.113.$((i % 250 + 1))"
+        response=$(curl -s -X POST "$SERVER_URL/api/cypher" \
+            -H "Content-Type: application/json" \
+            -H "X-Forwarded-For: ${spoofed_ip}, 10.0.0.1" \
+            -d '{"query": "MATCH (n:Person) RETURN count(n)"}')
+
+        requests_sent=$i
+
+        if echo "$response" | grep -q "RATE_LIMIT_EXCEEDED"; then
+            limit_hit=true
+            print_pass "Rate limit still triggered after $requests_sent spoofed-XFF requests (limit=$effective_limit; spoofing did NOT grant unlimited access)"
+            break
+        fi
+
+        if [ $((i % 10)) -eq 0 ]; then
+            print_info "  $i spoofed requests sent..."
+        fi
+    done
+
+    unset -f print_skip
+
+    if [ "$limit_hit" = false ]; then
+        print_fail "Rate limit was NOT triggered after $requests_sent rotating-XFF requests (limit=$effective_limit) -- trust proxy is too permissive (XFF spoofing bypasses rate limits)"
+    fi
+}
+# --- end TASK-102 ---
+
 # Main execution
 main() {
     echo -e "${BLUE}╔════════════════════════════════════════════╗${NC}"
@@ -275,6 +378,7 @@ main() {
     test_gpt_endpoint_disabled
     test_query_validation
     test_rate_limiting
+    test_xff_spoofing  # TASK-102: uses its own fresh per-IP bucket (right-most XFF 10.0.0.1); independent of test_rate_limiting's budget
     test_session_storage
     print_summary
 }

@@ -276,10 +276,27 @@ This tests:
   ```bash
   export MODE=READ_ONLY
   export DISABLE_SESSION_DB=true
-  export TRUST_PROXY=true
+  export TRUST_PROXY=1                     # trust exactly one reverse-proxy hop (default)
+  export QUERY_RATE_LIMIT_MAX_REQUESTS=30  # deterministic limit for the XFF-spoofing test
   npm run serve
   ```
+  Note: `npm run serve` sets `NODE_ENV=development`, which relaxes the query rate
+  limit to 500/min. The XFF-spoofing test reads the effective limit from the
+  `RateLimit-Limit` header and will SKIP (not fail) if the limit is impractically
+  large, so setting `QUERY_RATE_LIMIT_MAX_REQUESTS=30` keeps that test fast and
+  deterministic.
 - `jq` must be installed: `sudo apt install jq`
+
+> **Security note on `TRUST_PROXY`.** This app derives the client IP for
+> per-IP rate limiting from the `X-Forwarded-For` (XFF) header. `TRUST_PROXY`
+> is the number of reverse-proxy hops to trust and is **always normalised to a
+> finite hop count** (never "trust the whole chain"). The default of `1` trusts
+> exactly one hop — the nginx directly in front — so Express uses the
+> right-most XFF entry set by that trusted proxy and a client cannot rotate a
+> spoofed left-most XFF value to bypass rate limits. Use `TRUST_PROXY=false` to
+> disable trust entirely (`req.ip` becomes the raw socket address). **The app
+> must sit behind exactly the trusted proxy and must not be exposed directly to
+> the internet.**
 
 ## Troubleshooting
 

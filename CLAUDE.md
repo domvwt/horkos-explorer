@@ -68,8 +68,17 @@ export JSON_BODY_LIMIT=1mb               # Max JSON request-body size (default: 
 # Security configuration for public deployments
 export DISABLE_SESSION_DB=true           # Disable server-side session storage (recommended for public deployments)
                                           # When enabled, query history and settings are stored only in browser localStorage
-export TRUST_PROXY=true                  # Trust X-Forwarded-For header when behind nginx/reverse proxy (default: true)
-                                          # Required for rate limiting to work correctly with real client IPs
+export TRUST_PROXY=1                      # How many reverse-proxy hops to trust for X-Forwarded-For (default: 1).
+                                          # SECURITY: the value is always normalised to a finite hop COUNT, never boolean
+                                          # "trust the whole chain". Trusting exactly 1 hop makes Express use the
+                                          # RIGHT-MOST XFF entry (written by the trusted nginx), so a client cannot rotate
+                                          # a spoofed left-most XFF to bypass the per-IP rate limits.
+                                          #   - unset / true / on -> trust TRUST_PROXY_HOPS hops (default 1)
+                                          #   - <n> (numeric)     -> trust exactly N hops (TRUST_PROXY_HOPS ignored)
+                                          #   - false / 0 / off   -> disable; req.ip is the raw socket address
+                                          # A hop count above 10 is clamped to 10 (a huge count would let a client spoof req.ip).
+                                          # The app MUST sit behind exactly the trusted proxy and MUST NOT be exposed directly.
+export TRUST_PROXY_HOPS=1                 # Explicit hop count used when TRUST_PROXY is unset/true (default: 1)
 
 # Rate limiting configuration (optional, defaults shown)
 export RATE_LIMIT_WINDOW_MS=60000        # Time window in ms (default: 60000 = 1 minute)
