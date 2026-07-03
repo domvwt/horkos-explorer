@@ -18,6 +18,7 @@ See [`research-notes/README.md`](research-notes/README.md) for detailed architec
 ### Prerequisites
 
 - **Node.js v20**: Use nvm to switch to the correct version
+- **pnpm**: This repo uses pnpm as its package manager (`npm install -g pnpm`)
 - **JDK 11+**: Required for ANTLR grammar generation
 - **Git**: For submodule management
 
@@ -25,7 +26,7 @@ See [`research-notes/README.md`](research-notes/README.md) for detailed architec
 
 ```bash
 # Install Node.js dependencies
-npm i
+pnpm install
 
 # Download and compile Kuzu from source (required, ~10 minute build)
 git submodule update --init --recursive

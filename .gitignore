@@ -7,6 +7,10 @@ yarn-error.log*
 lerna-debug.log*
 .pnpm-debug.log*
 
+# This repo uses pnpm (pnpm-lock.yaml is the committed source of truth).
+# Ignore the npm lockfile so an accidental `npm install` can't reintroduce it.
+package-lock.json
+
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 

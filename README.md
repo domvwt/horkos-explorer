@@ -188,6 +188,7 @@ For more information regarding launching and using Kuzu Explorer, please refer t
 ### Prerequisite
 
 - [Node.js v20](https://nodejs.org/dist/latest-v20.x/)
+- [pnpm](https://pnpm.io/) (this repo uses pnpm as its package manager: `npm install -g pnpm`)
 - [JDK 11+](https://jdk.java.net/11/)
 - [Toolchain for building Kuzu](https://docs.kuzudb.com/developer-guide/)
 - [Git](https://git-scm.com/)
@@ -197,7 +198,7 @@ For more information regarding launching and using Kuzu Explorer, please refer t
 #### Install Node.js dependencies
 
 ```bash
-npm i
+pnpm install
 ```
 
 #### Download and compile Kuzu
@@ -300,7 +301,7 @@ git submodule update --init --depth 1
 **Solution:** The project pins `monaco-editor@0.39.0` in package.json. If you see font errors:
 
 ```bash
-npm install monaco-editor@0.39.0
+pnpm add monaco-editor@0.39.0
 ```
 
 **Note:** Do NOT upgrade monaco-editor to v0.41.0+ as it removes embedded fonts.
