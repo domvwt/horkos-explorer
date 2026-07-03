@@ -6,7 +6,7 @@ const MODES = require("./utils/Constants").MODES;
 router.post("/", async (_, res) => {
   try {
     const mode = database.getAccessModeString();
-    if (mode === MODES.DEMO_MODE) {
+    if (mode === MODES.DEMO) {
       return res.status(400).send({
         error: "Cannot reset Kuzu in live demo mode.",
       });
