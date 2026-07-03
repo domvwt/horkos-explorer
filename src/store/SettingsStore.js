@@ -5,8 +5,6 @@ import {
   SHOW_REL_LABELS_OPTIONS,
   PLACEHOLDER_NODE_TABLE,
   PLACEHOLDER_REL_TABLE,
-  GPT_MODELS,
-  LLM_PROVIDERS,
 } from "../utils/Constants";
 import G6Utils from "../utils/G6Utils";
 
@@ -98,12 +96,6 @@ export const useSettingsStore = defineStore("settings", {
       showRelLabels: SHOW_REL_LABELS_OPTIONS.ALWAYS,
     },
     colors: COLOR_PALETTE,
-    gpt: {
-      apiToken: null,
-      model: GPT_MODELS[0],
-      llmProvider: LLM_PROVIDERS.OPENAI.key,
-      url: "",
-    },
     graphLayout: 'd3-force',
   }),
 
@@ -155,7 +147,6 @@ export const useSettingsStore = defineStore("settings", {
         performance: state.performance,
         tableView: state.tableView,
         schemaView: state.schemaView,
-        gpt: state.gpt,
         graphLayout: state.graphLayout,
       };
     },
@@ -243,24 +234,6 @@ export const useSettingsStore = defineStore("settings", {
       if (storedSettingsCopy.schemaView) {
         this.schemaView = storedSettingsCopy.schemaView;
       }
-      if (storedSettingsCopy.gpt) {
-        // Migrate old settings
-        if (storedSettingsCopy.gpt.model === "gpt-3.5-turbo") {
-          storedSettingsCopy.gpt.model = "gpt-4o";
-        }
-        this.gpt.model = storedSettingsCopy.gpt.model;
-        // Migrate old settings
-        if (!storedSettingsCopy.gpt.llmProvider) {
-          storedSettingsCopy.gpt.llmProvider = LLM_PROVIDERS.OPENAI.key;
-        } else {
-          this.gpt.llmProvider = storedSettingsCopy.gpt.llmProvider;
-        }
-        if (!storedSettingsCopy.gpt.url) {
-          storedSettingsCopy.gpt.url = "";
-        } else {
-          this.gpt.url = storedSettingsCopy.gpt.url;
-        }
-      }
       if (storedSettingsCopy.colors) {
         this.colors = storedSettingsCopy.colors;
       }
@@ -322,7 +295,6 @@ export const useSettingsStore = defineStore("settings", {
         }
         this.graphViz.rels[rel.name].g6Settings.labelCfg.style.fontWeight = 300;
       });
-      this.loadGptApiTokenFromLocalStorage();
       this.uploadSettings();
     },
 
@@ -331,11 +303,9 @@ export const useSettingsStore = defineStore("settings", {
       this.performance = settings.performance;
       this.tableView = settings.tableView;
       this.schemaView = settings.schemaView;
-      this.gpt = settings.gpt;
       if (settings.graphLayout) {
         this.graphLayout = settings.graphLayout;
       }
-      this.saveGptApiTokenToLocalStorage();
       this.uploadSettings();
     },
 
@@ -455,27 +425,6 @@ export const useSettingsStore = defineStore("settings", {
       this.renameRelTable(PLACEHOLDER_REL_TABLE, originalLabel);
     },
 
-    loadGptApiTokenFromLocalStorage() {
-      const token = localStorage.getItem("gptApiToken");
-      if (token) {
-        this.gpt.apiToken = token;
-      } else {
-        this.gpt.apiToken = null;
-      }
-    },
-
-    saveGptApiTokenToLocalStorage() {
-      if (!this.gpt.apiToken) {
-        localStorage.removeItem("gptApiToken");
-      } else {
-        localStorage.setItem("gptApiToken", this.gpt.apiToken);
-      }
-    },
-
-    clearGptApiToken() {
-      localStorage.removeItem("gptApiToken");
-    },
-
     loadSettingsFromLocalStorage() {
       const settings = localStorage.getItem("settings");
       if (settings) {
@@ -487,7 +436,6 @@ export const useSettingsStore = defineStore("settings", {
     async uploadSettings() {
       const settings = JSON.parse(JSON.stringify(this.allSettings));
       settings.colors = this.colors;
-      delete settings.gpt.apiToken;
       localStorage.setItem("settings", JSON.stringify(settings));
       try {
         const response = await Axios.post("/api/session/settings", settings)

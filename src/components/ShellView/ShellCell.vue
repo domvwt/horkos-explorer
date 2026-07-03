@@ -7,7 +7,6 @@
       :is-maximizable="isMaximizable"
       :is-loading="isLoading"
       @evaluate-cypher="evaluateCypher"
-      @generate-and-evaluate-query="generateAndEvaluateQuery"
       @remove="removeCell"
       @toggle-maximize="toggleMaximize"
       @editor-resize="handleEditorResize"
@@ -45,10 +44,9 @@ import CypherEditor from "./CypherEditor.vue";
 import ResultContainer from "./ResultContainer.vue";
 import Axios from "@/utils/AxiosWrapper";
 import { useModeStore } from "../../store/ModeStore";
-import { useSettingsStore } from "../../store/SettingsStore";
 import { mapStores } from "pinia";
 import Kuzu from "@/utils/KuzuWasm";
-import { LOADING_STATUS, LLM_PROVIDERS } from "@/utils/Constants";
+import { LOADING_STATUS } from "@/utils/Constants";
 
 // Constants for investigation restoration timing
 const RESTORATION_INITIAL_DELAY_MS = 100;
@@ -91,7 +89,7 @@ export default {
   }),
 
   computed: {
-    ...mapStores(useModeStore, useSettingsStore),
+    ...mapStores(useModeStore),
     isMaximizable() {
       return (
         (this.queryResults &&
@@ -150,7 +148,7 @@ export default {
             query,
             params,
             uuid: this.cellId,
-            isQueryGenerationMode: this.$refs.editor.isQueryGenerationMode,
+            isQueryGenerationMode: false,
             updateHistory: true,
             progress: true
           })
@@ -211,74 +209,6 @@ export default {
         this.$emit("reloadSchema");
       }
 
-    },
-    generateAndEvaluateQuery(question) {
-      this.queryResults = null;
-      this.errorMessage = "";
-      question = question.trim();
-      const isOpenAI = this.settingsStore.gpt.llmProvider === LLM_PROVIDERS.OPENAI.key;
-      let token = this.settingsStore.gpt.apiToken;
-      const model = this.settingsStore.gpt.model;
-      const baseUrl = this.settingsStore.gpt.url;
-      if (!token) {
-        if (isOpenAI) {
-          this.errorMessage = "OpenAI API token is not set. Please set the token in the settings and try again.";
-        } else {
-          token = "IGNORED";
-        }
-      }
-      else if (!question) {
-        this.errorMessage = "The question cannot be empty. Please type a question and try again.";
-      }
-      if (this.errorMessage) {
-        this.$nextTick(() => {
-          const errorContainer = this.$refs.resultErrorContainer;
-          errorContainer.handleDataChange(this.schema, null, this.errorMessage);
-        });
-        return;
-      }
-      this.isLoading = true;
-      this.loadingText = "Generating query from question...";
-      const url = "/api/gpt";
-      const data = {
-        question,
-        token,
-        model,
-        uuid: this.cellId,
-        isQueryGenerationMode: this.$refs.editor.isQueryGenerationMode
-      };
-      if (!isOpenAI) {
-        data.baseUrl = baseUrl;
-      }
-      data.llmProvider = this.settingsStore.gpt.llmProvider;
-      Axios.post(url, data)
-        .then((res) => {
-          const query = res.data.query;
-          this.$refs.editor.setEditorContent(query);
-          this.$refs.editor.evaluateCypher(query);
-        })
-        .catch((error) => {
-          this.isLoading = false;
-          if (!error.response) {
-            this.errorMessage = "The application is disconnected from the server. Please try to restart the server.";
-          }
-          else {
-            try {
-              this.errorMessage = error.response.data.error.trim();
-              console.error(error.response.data.error.trim());
-            } catch (e) {
-              const httpStatus = error.response.status;
-              this.errorMessage = `The request failed with HTTP status code ${httpStatus}.`;
-              console.error(this.errorMessage);
-            }
-          }
-          if (this.errorMessage) {
-            this.$nextTick(() => {
-              const errorContainer = this.$refs.resultErrorContainer;
-              errorContainer.handleDataChange(this.schema, null, this.errorMessage);
-            });
-          }
-        })
     },
     evaluateCell() {
       this.$refs.editor.evaluateCell();

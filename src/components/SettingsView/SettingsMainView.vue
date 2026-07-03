@@ -266,157 +266,6 @@
               >
             </div>
           </div>
-          <hr>
-
-          <!-- Query Generation Options -->
-          <div v-if="!modeStore.isWasm && enableAIQuery">
-            <h2> Query Generation Options </h2>
-
-            <div class="settings-row">
-              <h4> LLM provider </h4>
-              <select
-                v-model="currentSettings.gpt.llmProvider"
-                class="settings-input form-select"
-                @change="handleLlmProviderChange"
-              >
-                <option
-                  v-for="(value, key) in llmProviderOptions"
-                  :key="key"
-                  :value="key"
-                >
-                  {{ value.text }}
-                </option>
-              </select>
-            </div>
-
-            <div
-              v-if="isOpenAIApi"
-              class="settings-row"
-            >
-              <span v-if="currentSettings.gpt.llmProvider === llmProviderOptions.OPENAI.key">OpenAI model</span>
-              <span v-else-if="currentSettings.gpt.llmProvider === llmProviderOptions.GEMINI.key">Gemini model</span>
-              <select
-                v-if="currentSettings.gpt.llmProvider === llmProviderOptions.OPENAI.key"
-                v-model="currentSettings.gpt.model"
-                class="settings-input form-select"
-              >
-                <option
-                  v-for="option in gptModelOptions"
-                  :key="option"
-                  :value="option"
-                >
-                  {{ option }}
-                </option>
-              </select>
-              <input
-                v-else-if="currentSettings.gpt.llmProvider === llmProviderOptions.GEMINI.key"
-                v-model="currentSettings.gpt.model"
-                class="settings-input form-control"
-                type="text"
-                readonly
-              >
-            </div>
-            <div
-              v-else
-              class="settings-row"
-            >
-              <span>Model name</span>
-              <input
-                v-model="currentSettings.gpt.model"
-                type="text"
-                class="settings-input form-control"
-                title="Enter the custom model name"
-              >
-            </div>
-            <div
-              v-if="!isOpenAIApi"
-              class="settings-row"
-            >
-              <span>API endpoint</span>
-              <input
-                v-model="currentSettings.gpt.url"
-                type="text"
-                class="settings-input form-control"
-                :readonly="currentSettings.gpt.llmProvider === llmProviderOptions.GEMINI.key"
-                :title="currentSettings.gpt.llmProvider === llmProviderOptions.GEMINI.key ? 'Google Gemini OpenAI-compatible endpoint' : 'Enter the API endpoint'"
-              >
-            </div>
-            <div class="settings-row">
-              <span>
-
-                {{ isOpenAIApi ? 'OpenAI' : 'API' }} key
-              </span>
-              <input
-                v-model="currentSettings.gpt.apiToken"
-                :type="showPassword ? 'text' : 'password'"
-                class="settings-input form-control"
-                :title="isOpenAIApi ? 'Enter the OpenAI API key' : 'Enter API key'"
-              >
-              <button
-                type="button"
-                class="btn ml-3"
-                @click="togglePasswordVisibility"
-              >
-                <i :class="showPassword ? 'fa fa-eye-slash' : 'fa fa-eye'" />
-              </button>
-            </div>
-            <small
-              v-if="currentSettings.gpt.llmProvider === llmProviderOptions.OPENAI.key"
-              class="form-text text-muted"
-            >
-              The OpenAI API key is used to generate Cypher queries from natural language using the specified model.
-              It can be obtained from
-              <a
-                href="https://platform.openai.com/"
-                target="_blank"
-              >OpenAI</a>. We only
-              store the API key in your browser. Click
-              <a
-                href="#"
-                @click="clearGptToken()"
-              >here</a> to clear the API key from the
-              browser.
-            </small>
-            <small
-              v-else-if="currentSettings.gpt.llmProvider === llmProviderOptions.GEMINI.key"
-              class="form-text text-muted"
-            >
-              The Google Gemini API key is used to generate Cypher queries from natural language using the specified
-              model.
-              You can obtain a Gemini API key from
-              <a
-                href="https://aistudio.google.com/app/apikey"
-                target="_blank"
-              >Google AI Studio</a>
-              or from the <a
-                href="https://console.cloud.google.com/apis/credentials"
-                target="_blank"
-              >Google Cloud
-                Console</a> (ensure the Gemini API is enabled for your project).
-              We only store the API key in your browser. Click
-              <a
-                href="#"
-                @click="clearGptToken()"
-              >here</a> to clear the API key from the
-              browser.
-            </small>
-            <small
-              v-else
-              class="form-text text-muted"
-            >
-              The API key may not be required for some deployments, such as the locally hosted version of Ollama.
-              Please refer to the documentation for your model
-              provider.
-              If not required, leave this field empty and we automatically fill it with "IGNORED".
-              We only
-              store the API key in your browser. Click
-              <a
-                href="#"
-                @click="clearGptToken()"
-              >here</a> to clear the API key from the
-              browser.
-            </small>
-          </div>
         </div>
 
         <div class="modal-footer settings-footer d-flex justify-content-end">
@@ -447,8 +296,6 @@ import {
   SHOW_REL_LABELS_OPTIONS,
   PLACEHOLDER_NODE_TABLE,
   PLACEHOLDER_REL_TABLE,
-  GPT_MODELS,
-  LLM_PROVIDERS
 } from "../../utils/Constants";
 
 export default {
@@ -466,33 +313,12 @@ export default {
     showRelLabelsOptions: SHOW_REL_LABELS_OPTIONS,
     placeholderNodeTable: PLACEHOLDER_NODE_TABLE,
     placeholderRelTable: PLACEHOLDER_REL_TABLE,
-    llmProviderOptions: LLM_PROVIDERS,
     databaseResetStateText: "",
     databaseResetStateClass: "primary",
-    showPassword: false,
     wasSaved: false,
   }),
   computed: {
     ...mapStores(useSettingsStore, useModeStore),
-    enableAIQuery() {
-      // Feature flag for AI Query - set VUE_APP_ENABLE_AI_QUERY=true to enable
-      return process.env.VUE_APP_ENABLE_AI_QUERY === 'true';
-    },
-    isOpenAIApi() {
-      return this.currentSettings.gpt.llmProvider === LLM_PROVIDERS.OPENAI.key || this.currentSettings.gpt.llmProvider === LLM_PROVIDERS.GEMINI.key;
-    },
-    gptModelOptions() {
-      // Only show GPT models for OpenAI
-      if (this.currentSettings.gpt.llmProvider === LLM_PROVIDERS.OPENAI.key) {
-        return GPT_MODELS.filter(m => m.startsWith('gpt-'));
-      }
-      // Only show Gemini model for Gemini
-      if (this.currentSettings.gpt.llmProvider === LLM_PROVIDERS.GEMINI.key) {
-        return ["gemini-2.0-flash"];
-      }
-      // Allow all for others
-      return GPT_MODELS;
-    },
   },
   mounted() {
     this.modal = new Modal(this.$refs.modal);
@@ -503,9 +329,6 @@ export default {
     this.modal.dispose();
   },
   methods: {
-    togglePasswordVisibility() {
-      this.showPassword = !this.showPassword;
-    },
     toggleModal() {
       this.modal.toggle();
     },
@@ -529,18 +352,6 @@ export default {
       this.$nextTick(() => {
         this.modal.hide();
       });
-    },
-    handleLlmProviderChange() {
-      if (this.currentSettings.gpt.llmProvider === LLM_PROVIDERS.OPENAI.key) {
-        this.currentSettings.gpt.model = GPT_MODELS[0];
-        this.currentSettings.gpt.url = "";
-      } else if (this.currentSettings.gpt.llmProvider === LLM_PROVIDERS.GEMINI.key) {
-        this.currentSettings.gpt.model = "gemini-2.0-flash";
-        this.currentSettings.gpt.url = LLM_PROVIDERS.GEMINI.baseUrl;
-      } else {
-        this.currentSettings.gpt.model = "";
-        this.currentSettings.gpt.apiToken = "";
-      }
     },
     getCaptionOptions(entity, isNode) {
       const name = entity.name === this.placeholderNodeTable ? this.getPlaceholderNodeLabel() :
@@ -587,10 +398,6 @@ export default {
       // Bootstrap modal can also be closed by clicking outside of the modal.
       // This way ensures that we can get the event when the modal is closed.
       this.currentSettings = {};
-    },
-    clearGptToken() {
-      this.currentSettings.gpt.apiToken = "";
-      this.settingsStore.clearGptApiToken();
     },
     syncRelFill(rel) {
       if (!rel.g6Settings.style.endArrow) {

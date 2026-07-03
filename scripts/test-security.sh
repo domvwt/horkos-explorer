@@ -221,6 +221,24 @@ test_access_mode() {
     fi
 }
 
+# Test GPT / query-generation endpoint is not exposed
+test_gpt_endpoint_disabled() {
+    print_header "Testing GPT Endpoint Exposure"
+
+    # The text2cypher (/api/gpt) endpoint must not be mounted in READ_ONLY mode.
+    # It has been removed from the build, so it should return 404 Not Found.
+    print_test "POST /api/gpt returns 404 (endpoint not mounted)"
+    status=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$SERVER_URL/api/gpt" \
+        -H "Content-Type: application/json" \
+        -d '{"question": "count everything", "token": "x"}')
+
+    if [ "$status" = "404" ]; then
+        print_pass "/api/gpt is not exposed (HTTP 404)"
+    else
+        print_fail "/api/gpt returned HTTP $status (expected 404)"
+    fi
+}
+
 # Print summary
 print_summary() {
     print_header "Test Summary"
@@ -254,6 +272,7 @@ main() {
 
     check_server
     test_access_mode
+    test_gpt_endpoint_disabled
     test_query_validation
     test_rate_limiting
     test_session_storage

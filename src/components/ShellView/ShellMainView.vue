@@ -184,8 +184,6 @@ export default {
           cypherQuery: `// Query to retrieve 5 relationships from the graph.
 // ▶️ Run this query by clicking the play button or pressing Shift + Enter.
 MATCH (a)-[r]->(b) RETURN * LIMIT 5;`,
-          isQueryGenerationMode: false,
-          gptQuestion: "",
         });
       });
     },
@@ -268,8 +266,6 @@ MATCH (a)-[r]->(b) RETURN * LIMIT 5;`,
           const lastQuery = state.queries[state.queries.length - 1];
           cell.loadEditorFromHistory({
             cypherQuery: lastQuery.query,
-            isQueryGenerationMode: false,
-            gptQuestion: "",
           });
         }
 

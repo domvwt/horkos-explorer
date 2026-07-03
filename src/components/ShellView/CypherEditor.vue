@@ -32,16 +32,6 @@
                   @click.prevent="handleTabClick('cypher')"
                 >Cypher Query</a>
               </li>
-              <li v-if="!modeStore.isWasm && enableAIQuery" class="nav-item">
-                <a
-                  href="#"
-                  :class="[
-                    activeMode === 'ai' && !isPanelMinimized ? 'active-tab' : 'inactive-tab'
-                  ]"
-                  class="text-decoration-none"
-                  @click.prevent="handleTabClick('ai')"
-                >AI Query</a>
-              </li>
             </ul>
             <button
               class="collapse-toggle"
@@ -82,24 +72,6 @@
                 @click="toggleEditorExpanded"
               >
                 <i :class="isEditorExpanded ? 'fa-solid fa-compress' : 'fa-solid fa-expand'" />
-              </button>
-            </div>
-          </div>
-          <div
-            v-if="!modeStore.isWasm && enableAIQuery"
-            v-show="activeMode === 'ai'"
-            class="mode-content mode-content--with-actions"
-          >
-            <textarea
-              ref="gptQuestionTextArea"
-              v-model="gptQuestion"
-              class="editor-container"
-              placeholder="Type your question here..."
-            />
-            <div class="editor-actions">
-              <button class="run-button" @click="evaluateCell">
-                <i class="fa-solid fa-play" />
-                Generate & Run
               </button>
             </div>
           </div>
@@ -147,7 +119,7 @@ export default {
       default: false,
     },
   },
-  emits: ['remove', 'evaluateCypher', 'toggleMaximize', 'generateAndEvaluateQuery', 'editorResize'],
+  emits: ['remove', 'evaluateCypher', 'toggleMaximize', 'editorResize'],
   data: () => {
     return {
       name: "CypherEditor",
@@ -157,9 +129,8 @@ export default {
       editorHeight: 0,
       toolbarWidth: UI_SIZE.SHELL_TOOL_BAR_WIDTH,
       isMaximized: false,
-      activeMode: "search", // 'cypher', 'ai', or 'search'
+      activeMode: "search", // 'cypher' or 'search'
       isPanelMinimized: false,
-      gptQuestion: "",
       observer: null,
       editorResizeDebounce: null,
       isEditorExpanded: false,
@@ -168,25 +139,11 @@ export default {
 
   computed: {
     ...mapStores(useModeStore),
-    enableAIQuery() {
-      // Feature flag for AI Query - set VUE_APP_ENABLE_AI_QUERY=true to enable
-      return process.env.VUE_APP_ENABLE_AI_QUERY === 'true';
-    },
     maximizeButtonClass() {
       return (this.isMaximized ? "fa-minimize" : "fa-maximize") + "  fa-solid";
     },
     maximizeButtonTitle() {
       return this.isMaximized ? "Minimize" : "Maximize";
-    },
-    gptButtonClass() {
-      return (this.activeMode === 'ai' ? "fa-file-code" : "fa-robot") + " fa-lg fa-solid";
-    },
-    gptButtonTitle() {
-      return this.activeMode === 'ai' ? "Cypher Code Editor" : "Query Generation (Powered by GPT)";
-    },
-    // Maintain backward compatibility for components that might check this
-    isQueryGenerationMode() {
-      return this.activeMode === 'ai';
     },
   },
 
@@ -242,11 +199,6 @@ export default {
       });
     });
     this.observer.observe(this.$refs.wrapper);
-
-    // If AI Query is disabled and activeMode is 'ai', switch to 'search'
-    if (this.activeMode === 'ai' && !this.enableAIQuery) {
-      this.activeMode = 'search';
-    }
   },
 
   beforeUnmount() {
@@ -327,9 +279,6 @@ export default {
     toggleMaximize() {
       this.$emit("toggleMaximize");
     },
-    toggleQueryGeneration() {
-      this.isQueryGenerationMode = !this.isQueryGenerationMode;
-    },
     maximize() {
       this.isMaximized = true;
     },
@@ -340,13 +289,8 @@ export default {
       const cypher = this.editor.getValue();
       this.$emit("evaluateCypher", cypher, {});
     },
-    generateAndEvaluateQuery() {
-      this.$emit("generateAndEvaluateQuery", this.gptQuestion);
-    },
     evaluateCell() {
-      if (this.activeMode === 'ai') {
-        this.generateAndEvaluateQuery();
-      } else if (this.activeMode === 'cypher') {
+      if (this.activeMode === 'cypher') {
         this.evaluateCypher();
       }
       // Collapse editor on run so results are visible
@@ -375,13 +319,11 @@ export default {
       this.$emit("remove");
     },
     isActive() {
-      return (this.activeMode === 'ai' && this.$refs.gptQuestionTextArea === document.activeElement) ||
-        (this.activeMode === 'cypher' && this.editor && this.editor.hasTextFocus());
+      return this.activeMode === 'cypher' && this.editor && this.editor.hasTextFocus();
     },
     loadFromHistory(history) {
       // Note: activeMode is NOT restored from history - always defaults to 'search'
       // to ensure the search interface is the primary entry point for users
-      this.gptQuestion = history.gptQuestion || "";
       if (history.cypherQuery) {
         this.setEditorContent(history.cypherQuery);
       }

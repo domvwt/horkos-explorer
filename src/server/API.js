@@ -18,7 +18,6 @@ if (!isWasmMode) {
     const state = require("./State");
     const reset = require("./Reset");
     const importApi = require("./Import");
-    const gpt = require("./Gpt");
 
     router.use("/schema", apiLimiter, schema);
     router.use("/cypher", queryLimiter, cypher);
@@ -31,7 +30,6 @@ if (!isWasmMode) {
     }
 
     router.use("/", apiLimiter, state);
-    router.use("/gpt", queryLimiter, gpt);
     if (currentMode === MODES.READ_WRITE) {
         router.use("/reset", reset);
         router.use("/import", importApi);
