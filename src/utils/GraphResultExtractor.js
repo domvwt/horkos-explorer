@@ -206,8 +206,8 @@ export function buildG6Edge(edgeId, sourceId, targetId, rawRel, settingsStore, s
 
     relLabel = String(relLabel);
     const fontSize = relSettings.g6Settings.labelCfg.style.fontSize;
-    // Truncate very long edge labels; wide enough that no schema rel type name truncates
-    relLabel = G6Utils.fittingString(relLabel, 170, fontSize);
+    // Truncate very long edge labels; wide enough that no schema rel type display name truncates
+    relLabel = G6Utils.fittingString(relLabel, 200, fontSize);
   }
 
   const g6Rel = {

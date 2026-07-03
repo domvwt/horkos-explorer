@@ -9,10 +9,10 @@
  */
 
 export const REL_TYPE_DISPLAY_NAMES = {
-  PersonOwnership: "OwnershipPerson",
-  CorporateOwnership: "OwnershipCorporate",
-  PersonInfluence: "InfluencePerson",
-  CorporateInfluence: "InfluenceCorporate",
+  PersonOwnership: "Ownership · Person",
+  CorporateOwnership: "Ownership · Corporate",
+  PersonInfluence: "Influence · Person",
+  CorporateInfluence: "Influence · Corporate",
 };
 
 export const NODE_TYPE_DISPLAY_NAMES = {
