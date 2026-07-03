@@ -73,7 +73,7 @@
           >
             <div
               v-for="entity in group.entities"
-              :key="entity.id"
+              :key="entity.id + '::' + entity.edgeLabel"
               class="entity-row"
               :class="{ 'entity-row--in-graph': entity.inGraph }"
               @click.stop="handleEntityClick(entity)"
@@ -83,8 +83,8 @@
                 :title="entity.displayName"
               >{{ entity.displayName }}</span>
               <span class="entity-relationship">{{ entity.relationshipLabel }}<template
-                v-if="entity.percentage !== null && entity.percentage !== undefined"
-              > ({{ formatPercentage(entity.percentage) }})</template></span>
+                v-if="entity.ownershipShare"
+              > ({{ entity.ownershipShare }})</template></span>
               <button
                 v-if="!entity.inGraph"
                 class="add-button"
@@ -131,6 +131,36 @@ const ENTITY_DISPLAY_LABELS = {
   Address: 'Addresses',
   VirtualHub: 'Possible Matches',
 };
+
+// PSC nature-of-control bands arrive as strings like "25-to-50-percent";
+// render as "25–50%". Unrecognised values pass through verbatim.
+function formatShareValue(raw) {
+  const value = String(raw).trim();
+  const bandMatch = value.match(/^(\d+)-to-(\d+)-percent$/);
+  if (bandMatch) {
+    return `${bandMatch[1]}–${bandMatch[2]}%`;
+  }
+  if (/^\d+(\.\d+)?$/.test(value)) {
+    return `${value}%`;
+  }
+  return value;
+}
+
+// Ownership share lives inside the rel's `sources` STRUCT array (one entry
+// per contributing source record). An edge can carry several entries with
+// differing bands (multi-source convergence), so show the distinct set.
+function extractOwnershipShare(rel) {
+  if (!Array.isArray(rel.sources)) {
+    return null;
+  }
+  const values = rel.sources
+    .map(source => source && source.percentage)
+    .filter(value => value !== null && value !== undefined && value !== '');
+  if (values.length === 0) {
+    return null;
+  }
+  return [...new Set(values.map(formatShareValue))].join(', ');
+}
 
 export default {
   name: "ConnectedEntitiesPanel",
@@ -329,7 +359,7 @@ export default {
 
     parseNeighborResults(result) {
       const entities = [];
-      const seenIds = new Set();
+      const seenKeys = new Set();
 
       if (!result.rows) return entities;
 
@@ -344,13 +374,16 @@ export default {
 
         // Create a unique ID for the node
         const nodeId = `${node._id.table}_${node._id.offset}`;
+        const edgeLabel = rel._label || 'Connected';
 
-        // Skip if we've already seen this node
-        if (seenIds.has(nodeId)) return;
-        seenIds.add(nodeId);
+        // Skip duplicates per (node, relationship type) — a neighbor connected
+        // by several relationship types (e.g. ownership AND influence) gets one
+        // row per type, so type-specific detail like ownership share isn't lost
+        const seenKey = `${nodeId}::${edgeLabel}`;
+        if (seenKeys.has(seenKey)) return;
+        seenKeys.add(seenKey);
 
         // Determine relationship direction and label
-        const edgeLabel = rel._label || 'Connected';
         const labelMapping = RELATIONSHIP_LABELS[edgeLabel] || { forward: edgeLabel, reverse: edgeLabel };
 
         // Check direction: _src/_id hold numeric {table, offset} internal ids,
@@ -374,10 +407,11 @@ export default {
 
         entities.push({
           id: nodeId,
+          edgeLabel,
           displayName: this.getEntityDisplayName(node),
           label: node._label || 'Unknown',
           relationshipLabel,
-          percentage: rel.percentage,
+          ownershipShare: extractOwnershipShare(rel),
           inGraph,
           // Store raw data for adding to graph
           rawNode: node,
@@ -449,14 +483,6 @@ export default {
           entity.inGraph = false;
         }
       });
-    },
-
-    formatPercentage(value) {
-      if (value === null || value === undefined) {
-        return '';
-      }
-      const pct = value > 1 ? value : value * 100;
-      return `${pct.toFixed(1)}%`;
     },
   },
 };
