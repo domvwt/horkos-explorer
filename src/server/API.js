@@ -39,9 +39,7 @@ if (!isWasmMode) {
 }
 
 // APIs that are available in both backend and wasm mode
-const datasets = require("./Datasets");
 const mode = require("./Mode");
-router.use("/datasets", apiLimiter, datasets);
 router.use("/mode", apiLimiter, mode);
 
 // Autocomplete endpoint (available if DUCKDB_FILE is configured)

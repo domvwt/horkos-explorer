@@ -82,19 +82,10 @@
             :schema="schema"
             @settingsSaved="handleSettingsSaved"
           />
-          <DatasetMainView
-            v-show="showLoader"
-            :schema="schema"
-            :navbar-height="0"
-            @reload-schema="reloadSchema"
-            @back="toggleImporter(true)"
-            @jump-to-shell-view="toggleShell(true)"
-          />
           <ImporterMainView
             v-show="showImporter"
             :schema="schema"
             @reload-schema="reloadSchema"
-            @load-bundled-dataset="toggleLoader"
           />
           <PrivacyView v-show="showPrivacy" />
         </div>
@@ -197,7 +188,6 @@
 import SchemaViewMain from "./SchemaView/SchemaViewMain.vue";
 import ShellMainView from "./ShellView/ShellMainView.vue";
 import SettingsMainView from "./SettingsView/SettingsMainView.vue"
-import DatasetMainView from "./DatasetView/DatasetMainView.vue"
 import ImporterMainView from "./ImporterView/ImporterMainView.vue";
 import PrivacyView from "./PrivacyView/PrivacyView.vue";
 import ImportModal from "./ShellView/ImportModal.vue";
@@ -218,7 +208,6 @@ export default {
     SchemaViewMain,
     ShellMainView,
     SettingsMainView,
-    DatasetMainView,
     ImporterMainView,
     PrivacyView,
     ImportModal,
@@ -229,7 +218,6 @@ export default {
     showSchema: false,
     showImporter: false,
     showShell: true,
-    showLoader: false,
     showSettings: false,
     showPrivacy: false,
     showImportInvestigationModal: false,
@@ -307,9 +295,6 @@ export default {
         case 'schema':
           this.toggleSchema();
           break;
-        case 'datasets':
-          this.toggleLoader();
-          break;
         case 'importer':
           this.toggleImporter(true);
           break;
@@ -322,7 +307,7 @@ export default {
         //   break;
         default:
           // If no valid hash, default to shell view
-          if (!this.showSchema && !this.showImporter && !this.showLoader && !this.showSettings && !this.showPrivacy) {
+          if (!this.showSchema && !this.showImporter && !this.showSettings && !this.showPrivacy) {
             this.toggleShell();
           }
           break;
@@ -446,7 +431,6 @@ export default {
     hideAll() {
       this.showSchema = false;
       this.showShell = false;
-      this.showLoader = false;
       this.showImporter = false;
       this.showPrivacy = false;
     },
@@ -465,12 +449,8 @@ export default {
       this.hideAll();
       this.showShell = true;
     },
-    toggleLoader() {
-      this.hideAll();
-      this.showLoader = true;
-    },
     toggleImporter(force = false) {
-      if (force || !this.showLoader) {
+      if (force || !this.showImporter) {
         this.hideAll();
         this.showImporter = true;
       }

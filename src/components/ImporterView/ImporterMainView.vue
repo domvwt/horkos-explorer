@@ -11,7 +11,6 @@
       <importer-view-drop-zone
         ref="dropzone"
         @files-selected="handleFilesSelected"
-        @load-bundled-dataset="loadBundledDataset"
       />
     </div>
     <div
@@ -143,7 +142,7 @@ export default {
       default: 0,
     },
   },
-  emits: ["reloadSchema", "loadBundledDataset"],
+  emits: ["reloadSchema"],
   data: () => ({
     files: {},
     processingFiles: [],
@@ -844,10 +843,6 @@ export default {
       if (isAllSuccess) {
         this.files = {};
       }
-    },
-
-    loadBundledDataset() {
-      this.$emit('loadBundledDataset');
     },
   },
 }

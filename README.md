@@ -38,20 +38,15 @@ By mounting local database files to Docker via `-v {path to the directory contai
 
 The `--rm` flag tells docker that the container should automatically be removed after we close docker.
 
-### Option 2: Start with an empty database with example data
+### Option 2: Start with an empty database
 
-You can also launch Kuzu Explorer without specifying an existing database. Kuzu Explorer comes with
-bundled datasets that you can use to explore the basic functionalities of Kuzu.
+You can also launch Horkos Explorer without specifying an existing database.
 This is simply done by removing the `-v` flag in the example above. If no database path is specified
 with `-v`, the server will be started with an empty database.
 
 ```bash
 docker run -p 8000:8000 --rm kuzudb/explorer:latest
 ```
-
-Click on the `Datasets` tab on the top right corner and then: (i) you can select one of the bundled dataset
-of your choice from the drow-down menu; (ii) load it into Kuzu by clicking the "Load Dataset" button; and (iii)
-finally use Kuzu Explorer to explore it.
 
 ### Additional launch configurations
 
@@ -245,12 +240,6 @@ npm run build-kuzu
 
 ```bash
 npm run generate-grammar
-```
-
-#### Fetch datasets
-
-```bash
-npm run fetch-datasets
 ```
 
 ### Run development server (with hot-reloading)

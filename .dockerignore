@@ -47,12 +47,6 @@ package-lock.json
 *.sqlite
 *.sqlite3
 
-# Local dataset checkout — regenerated inside the image by
-# `npm run fetch-datasets` (FetchDatasets.js), so a locally-fetched copy
-# is redundant and safe to exclude. NOTE: datasets.json (the fetch config)
-# is NOT excluded — FetchDatasets.js reads it at build time.
-datasets
-
 # Uninitialized/dev-only kuzu submodule checkout. The Dockerfile builds
 # against the "kuzu" npm package (installed via pnpm into node_modules/kuzu)
 # and reads grammar sources from node_modules/kuzu/kuzu-source — it never

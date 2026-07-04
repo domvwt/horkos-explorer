@@ -34,9 +34,6 @@ npm run build-kuzu
 
 # Generate Cypher grammar files (requires Java)
 npm run generate-grammar
-
-# Fetch example datasets
-npm run fetch-datasets
 ```
 
 ### Environment Variables

@@ -528,11 +528,10 @@ test_security_headers() {
 }
 # --- end TASK-100 ---
 
-# --- TASK-105: resource guards (DoS) + datasets route robustness ---
+# --- TASK-105: resource guards (DoS) ---
 # Confirmed live against the shipping READ_ONLY server during the TASK-105
 # adversarial sweep. These lock in the guardrails that bound a single
-# unauthenticated request's CPU/memory/response cost, plus the datasets
-# /files route crash discovered by the sweep.
+# unauthenticated request's CPU/memory/response cost.
 test_resource_guards() {
     print_header "Testing Resource Guards (DoS bounds — TASK-105)"
 
@@ -582,36 +581,47 @@ test_resource_guards() {
     fi
 }
 
-# Datasets /files/:file must not crash the process when the datasets directory
-# is absent (e.g. a SKIP_DATASETS=true slim image build). The sweep found that
-# an unguarded `await fs.readdir` on a KNOWN dataset name with a missing dir
-# throws an unhandled rejection that terminates the whole server (unauth DoS).
-# NOTE: run this LAST — on an unpatched server it kills the process, so any
-# test after it would spuriously fail against a dead server.
-test_datasets_route_robustness() {
-    print_header "Testing Datasets Route Robustness (unauth crash — TASK-105)"
+# The upstream "datasets" browser feature (Datasets.js + /api/datasets/*) was
+# pruned from the Horkos fork (TASK-123) — it was inert in the public READ_ONLY
+# deployment and carried two attack-surface routes: /:dataset/copy (unvalidated
+# Cypher exec) and /:dataset/files/:file (an unguarded readdir that crashed the
+# whole process — the TASK-105/131 finding). These assertions lock in that the
+# routes are gone (404) while the retained API surface still responds.
+test_pruned_routes() {
+    print_header "Testing Pruned Upstream Routes Return 404 (TASK-123)"
 
-    local known probe_code alive_code
-    known=$(curl -s "$SERVER_URL/api/datasets" | jq -r '.[0] // empty' 2>/dev/null)
-    if [ -z "$known" ]; then
-        print_info "No datasets advertised (datasets feature absent) — skipping crash probe"
-        return
-    fi
+    # Removed datasets routes must 404 (router unmounted).
+    local removed=(
+        "/api/datasets"
+        "/api/datasets/x/files/probe"
+        "/api/datasets/x/copy"
+    )
+    local path code
+    for path in "${removed[@]}"; do
+        print_test "GET $path returns 404 (route pruned)"
+        code=$(curl -s -o /dev/null -w "%{http_code}" "$SERVER_URL$path")
+        if [ "$code" = "404" ]; then
+            print_pass "$path -> 404"
+        else
+            print_fail "$path returned $code (expected 404 — datasets router should be gone)"
+        fi
+    done
 
-    print_test "GET /api/datasets/<known>/files/x does not crash the server"
-    # Fire the probe at a known dataset name; a missing datasets dir on disk is
-    # what triggers the unguarded readdir. Then confirm the server is STILL up.
-    probe_code=$(curl -s -o /dev/null -w "%{http_code}" \
-        "$SERVER_URL/api/datasets/$(jq -rn --arg s "$known" '$s|@uri')/files/probe")
-    sleep 1
-    alive_code=$(curl -s -o /dev/null -w "%{http_code}" "$SERVER_URL/api/mode")
-    if [ "$alive_code" = "200" ]; then
-        print_pass "Server survived the datasets /files probe (route returned $probe_code, /api/mode still 200)"
-    else
-        print_fail "Server CRASHED after datasets /files probe (/api/mode now $alive_code) — unguarded readdir DoS"
-    fi
+    # Retained public routes must still respond.
+    print_test "GET /api/mode still 200 (retained)"
+    code=$(curl -s -o /dev/null -w "%{http_code}" "$SERVER_URL/api/mode")
+    [ "$code" = "200" ] && print_pass "/api/mode -> 200" || print_fail "/api/mode returned $code (expected 200)"
+
+    print_test "GET /api/schema still 200 (retained)"
+    code=$(curl -s -o /dev/null -w "%{http_code}" "$SERVER_URL/api/schema")
+    [ "$code" = "200" ] && print_pass "/api/schema -> 200" || print_fail "/api/schema returned $code (expected 200)"
+
+    # In READ_ONLY, the RW-only routes must not be mounted (404).
+    print_test "POST /api/reset returns 404 in READ_ONLY (RW-gated)"
+    code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$SERVER_URL/api/reset")
+    [ "$code" = "404" ] && print_pass "/api/reset -> 404 in READ_ONLY" || print_fail "/api/reset returned $code (expected 404 in READ_ONLY)"
 }
-# --- end TASK-105 ---
+# --- end TASK-105 / TASK-123 ---
 
 # Main execution
 main() {
@@ -635,9 +645,7 @@ main() {
     test_security_headers  # TASK-100: security-headers presence check
     test_session_storage
     test_resource_guards  # TASK-105: nesting-depth DoS cap, result-size cap, body-size 413
-    # MUST be last: on an unpatched server the datasets /files probe crashes the
-    # process, so any test after it would fail against a dead server.
-    test_datasets_route_robustness  # TASK-105: unauthenticated datasets /files readdir crash
+    test_pruned_routes  # TASK-123: removed datasets routes 404; retained routes still respond
     print_summary
 }
 
