@@ -1,13 +1,17 @@
 const sessionDb = require("./utils/SessionDatabase");
 const express = require("express");
 const router = express.Router();
+const { sendErrorResponse } = require("./utils/errorResponse");
 
 router.get("/settings", async (_, res) => {
   try {
     const settings = await sessionDb.getSetting();
     res.send(settings);
   } catch (err) {
-    return res.status(400).send({ error: err.message });
+    return sendErrorResponse(res, err, {
+      clientMessage: "Failed to load settings",
+      logContext: "Session getSetting failed",
+    });
   }
 });
 
@@ -16,8 +20,10 @@ router.post("/settings", async (req, res) => {
     await sessionDb.setSetting(req.body);
     res.send({ success: true });
   } catch (err) {
-    console.error(err);
-    return res.status(400).send({ error: err.message });
+    return sendErrorResponse(res, err, {
+      clientMessage: "Failed to save settings",
+      logContext: "Session setSetting failed",
+    });
   }
 });
 
@@ -26,7 +32,10 @@ router.get("/history", async (_, res) => {
     const history = await sessionDb.getHistoryItems();
     res.send(history);
   } catch (err) {
-    return res.status(400).send({ error: err.message });
+    return sendErrorResponse(res, err, {
+      clientMessage: "Failed to load history",
+      logContext: "Session getHistoryItems failed",
+    });
   }
 });
 
@@ -35,7 +44,10 @@ router.delete("/history/:uuid", async (req, res) => {
     await sessionDb.deleteHistoryItem(req.params.uuid);
     res.send({ success: true });
   } catch (err) {
-    return res.status(400).send({ error: err.message });
+    return sendErrorResponse(res, err, {
+      clientMessage: "Failed to delete history item",
+      logContext: "Session deleteHistoryItem failed",
+    });
   }
 });
 

@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const database = require("./utils/Database");
 const MODES = require("./utils/Constants").MODES;
+const { sendErrorResponse } = require("./utils/errorResponse");
 
 const isWasmMode = process.env.KUZU_WASM &&
   process.env.KUZU_WASM.toLowerCase() === "true";
@@ -21,7 +22,10 @@ router.get("/", async (_, res) => {
       isProduction,
     });
   } catch (err) {
-    return res.status(400).send({ error: err.message });
+    return sendErrorResponse(res, err, {
+      clientMessage: "Failed to determine access mode",
+      logContext: "Mode fetch failed",
+    });
   }
 });
 

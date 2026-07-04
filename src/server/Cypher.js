@@ -4,6 +4,7 @@ const logger = require("./utils/Logger");
 const MODES = require("./utils/Constants").MODES;
 const database = require("./utils/Database");
 const QueryValidator = require("./middleware/QueryValidator");
+const { sendErrorResponse } = require("./utils/errorResponse");
 let sessionDb;
 const queryMap = new Map();
 try {
@@ -63,7 +64,10 @@ router.post("/", QueryValidator.middleware(database), async (req, res) => {
     try {
       schema = await database.getSchema();
     } catch (err) {
-      return res.status(400).send({ error: err.message });
+      return sendErrorResponse(res, err, {
+        clientMessage: "Failed to load schema",
+        logContext: "Cypher schema fetch failed",
+      });
     }
   }
   const conn = database.getConnection();
@@ -140,7 +144,12 @@ router.post("/", QueryValidator.middleware(database), async (req, res) => {
     responseBody = JSON.stringify(responseBody, int128Replacer);
     return res.send(responseBody);
   } catch (err) {
-    return res.status(400).send({ error: err.message });
+    // Do not echo raw Kuzu/binder error text to public clients; log the full
+    // detail server-side and return a generic message (info-disclosure policy).
+    return sendErrorResponse(res, err, {
+      clientMessage: "Query execution failed",
+      logContext: "Cypher query execution failed",
+    });
   } finally {
     database.releaseConnection(conn);
   }
