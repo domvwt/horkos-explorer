@@ -45,6 +45,14 @@ jobs:
       - name: Audit production dependencies
         run: pnpm audit --prod --audit-level=high
 
+      # Fail the build if the security-critical server-side Cypher parser twins
+      # (src/server/middleware/cypher-parser/*.js) have drifted from the
+      # committed grammar (src/utils/CypherParser/*.ts). This catches a grammar
+      # bump that forgot to regenerate the CJS twins the read-only
+      # QueryValidator depends on.
+      - name: Check Cypher parser twins are in sync
+        run: npm run check-cypher-parser-sync
+
       - name: Run linters without auto-fix (on master)
         if: github.ref == 'refs/heads/master'
         run: npm run eslint

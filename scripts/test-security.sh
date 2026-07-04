@@ -140,6 +140,116 @@ test_query_validation() {
         print_fail "Legitimate MATCH query was blocked"
         echo "Response: $response"
     fi
+
+    # --- TASK-101: LOAD FROM / allowlist ---
+    # Regression tests for the parse-tree allowlist QueryValidator. These assert
+    # that Kuzu LOAD FROM (arbitrary local-file / URL read), database-management
+    # statements, and standalone CALL are BLOCKED, while legitimate read queries
+    # (UNWIND / UNION / ORDER BY ... SKIP ... LIMIT, etc.) are still ALLOWED.
+    # BLOCKED = validator returns code QUERY_VALIDATION_FAILED (query not executed).
+    # ALLOWED = query executes and the response contains rows.
+
+    # Helper: assert a query is BLOCKED by the validator.
+    assert_blocked() {
+        local label="$1"
+        local query="$2"
+        print_test "Block $label"
+        local response
+        response=$(curl -s -X POST "$SERVER_URL/api/cypher" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg q "$query" '{query: $q}')")
+        if echo "$response" | jq -e '.code == "QUERY_VALIDATION_FAILED"' > /dev/null 2>&1; then
+            print_pass "$label blocked"
+        else
+            print_fail "$label was NOT blocked"
+            echo "Response: $response"
+        fi
+    }
+
+    # Helper: assert a query is ALLOWED (executes, returns rows).
+    assert_allowed() {
+        local label="$1"
+        local query="$2"
+        print_test "Allow $label"
+        local response
+        response=$(curl -s -X POST "$SERVER_URL/api/cypher" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg q "$query" '{query: $q}')")
+        if echo "$response" | jq -e '.rows' > /dev/null 2>&1; then
+            print_pass "$label allowed"
+        else
+            print_fail "$label was blocked or errored"
+            echo "Response: $response"
+        fi
+    }
+
+    # BLOCKED: LOAD FROM local-file read (the proven exploit) in all forms.
+    assert_blocked "LOAD FROM (extension-inferred)" \
+        "LOAD FROM '/etc/passwd' RETURN *"
+    assert_blocked "LOAD FROM (forced csv format - proven exploit)" \
+        "LOAD FROM '/etc/passwd' (file_format='csv', header=false, delim=':') RETURN * LIMIT 5"
+    assert_blocked "LOAD FROM (URL / SSRF form)" \
+        "LOAD FROM 'http://169.254.169.254/latest/meta-data/' RETURN *"
+    assert_blocked "LOAD FROM smuggled behind block comment" \
+        "/* MATCH */ LOAD FROM '/etc/passwd' RETURN *"
+
+    # BLOCKED: database-management / DDL statements and standalone CALL.
+    assert_blocked "ATTACH database" \
+        "ATTACH '/etc/passwd' AS x (dbtype csv)"
+    assert_blocked "INSTALL extension" \
+        "INSTALL httpfs"
+    assert_blocked "USE database" \
+        "USE x"
+    assert_blocked "standalone CALL" \
+        "CALL show_tables() RETURN *"
+
+    # BLOCKED: a benign MATCH followed by LOAD FROM must reject the whole batch.
+    assert_blocked "multi-statement MATCH then LOAD FROM" \
+        "MATCH (n) RETURN n LIMIT 1; LOAD FROM '/etc/passwd' RETURN *"
+
+    # ALLOWED: legitimate read queries must still execute (no over-blocking).
+    assert_allowed "count(n)" \
+        "MATCH (n) RETURN count(n)"
+    assert_allowed "OPTIONAL MATCH" \
+        "OPTIONAL MATCH (n)-[r]->(m) RETURN n LIMIT 1"
+    assert_allowed "WITH ... UNWIND ... RETURN" \
+        "WITH [1,2,3] AS xs UNWIND xs AS x RETURN x"
+    assert_allowed "UNION" \
+        "MATCH (n) RETURN n LIMIT 1 UNION MATCH (m) RETURN m LIMIT 1"
+    assert_allowed "ORDER BY ... SKIP ... LIMIT" \
+        "MATCH (n) RETURN n ORDER BY n.id SKIP 1 LIMIT 5"
+    # String literal containing 'LOAD FROM' must NOT be false-blocked.
+    assert_allowed "string literal containing LOAD FROM" \
+        "MATCH (n) WHERE n.name = 'LOAD FROM' RETURN n LIMIT 1"
+
+    # Parse-DoS guard: a deeply nested-parenthesis payload (~1KB) must be
+    # REJECTED QUICKLY by the O(n) nesting-depth guard, so the expensive ANTLR
+    # parse never runs. Without the guard this ~1KB request pinned the Node
+    # event loop for >30s (measured); with it, it is rejected in <50ms.
+    print_test "Block + fast-reject deeply nested parse-DoS payload"
+    DEPTH=500
+    OPENS=$(printf '(%.0s' $(seq 1 $DEPTH))
+    CLOSES=$(printf ')%.0s' $(seq 1 $DEPTH))
+    DOS_QUERY="MATCH (n) RETURN ${OPENS}1${CLOSES}"
+    dos_payload=$(jq -n --arg q "$DOS_QUERY" '{query: $q}')
+    start_ms=$(date +%s%3N)
+    dos_response=$(curl -s -X POST "$SERVER_URL/api/cypher" \
+        -H "Content-Type: application/json" \
+        -d "$dos_payload")
+    end_ms=$(date +%s%3N)
+    elapsed_ms=$((end_ms - start_ms))
+    if echo "$dos_response" | jq -e '.code == "QUERY_VALIDATION_FAILED"' > /dev/null 2>&1; then
+        if [ "$elapsed_ms" -lt 1000 ]; then
+            print_pass "Nested parse-DoS payload rejected quickly (${elapsed_ms}ms)"
+        else
+            # Rejected but slowly -> guard may not be firing before the parser.
+            print_fail "Nested payload rejected but SLOW (${elapsed_ms}ms) - guard may run after parse"
+        fi
+    else
+        print_fail "Nested parse-DoS payload was NOT rejected (${elapsed_ms}ms)"
+        echo "Response: $dos_response"
+    fi
+    # --- end TASK-101 ---
 }
 
 # Test Rate Limiting

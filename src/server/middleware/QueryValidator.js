@@ -1,18 +1,107 @@
+const antlr = require("antlr4ng");
 const logger = require("../utils/Logger");
 const MODES = require("../utils/Constants").MODES;
+const { CypherLexer } = require("./cypher-parser/CypherLexer");
+const { CypherParser } = require("./cypher-parser/CypherParser");
 
 /**
  * Query Validator Middleware
  *
- * Validates Cypher queries in READ_ONLY mode to prevent write operations.
- * Provides defense-in-depth by checking queries before execution.
+ * Validates Cypher queries in READ_ONLY mode using a FAIL-CLOSED ALLOWLIST
+ * built on the ANTLR Cypher parse tree (not a keyword blocklist).
+ *
+ * Rationale: a leading-keyword regex blocklist is bypassable and requires
+ * enumerating every dangerous verb forever. It also missed Kuzu's
+ * `LOAD FROM '<path>'` construct entirely, which reads arbitrary local files
+ * (and URLs) through the public read-only endpoint. `LOAD FROM` is
+ * *grammatically* a reading clause, so neither Kuzu's read-only DB mode nor a
+ * "block writes" check catches it.
+ *
+ * Policy (READ_ONLY mode only): a query is allowed ONLY if every statement
+ * parses cleanly AND is provably composed of read-only structure:
+ *   - The top-level statement must be an `oC_Query` (a MATCH/RETURN-style
+ *     query). Every DDL / database-management statement in this grammar
+ *     (CREATE TABLE, DROP, ALTER, ATTACH, USE, INSTALL/LOAD EXTENSION,
+ *     IMPORT, EXPORT, COPY, standalone CALL, transactions, ...) parses to a
+ *     distinct `kU_*` statement node instead and is therefore rejected by
+ *     default — we never have to enumerate them.
+ *   - Within the query, the two grammatically-"read" constructs that are
+ *     nonetheless dangerous are denied explicitly: `kU_LoadFrom`
+ *     (LOAD FROM / LOAD WITH HEADERS FROM) and `kU_InQueryCall` (in-query
+ *     CALL). There is no legitimate need for either on /api/cypher.
+ *   - Updating clauses (CREATE / MERGE / SET / DELETE) are denied explicitly
+ *     as defense-in-depth; only MATCH / OPTIONAL MATCH / UNWIND reading
+ *     clauses and read projection (WITH / RETURN / UNION / ORDER BY / SKIP /
+ *     LIMIT / WHERE) remain reachable.
+ *   - EXPLAIN / PROFILE wrappers are permitted: the grammar models them as an
+ *     `oC_AnyCypherOption` prefix over an otherwise-allowed `oC_Query`, so they
+ *     ride the same allowlist and cannot smuggle anything past it.
+ *
+ * Anything that fails to parse, or contains any construct not on the allow
+ * list, is REJECTED (fail closed). Parser internals are never echoed to the
+ * client.
  */
 
-// Write operations that should be blocked in READ_ONLY mode
-const WRITE_OPERATIONS = /^\s*(CREATE|DROP|ALTER|DELETE|SET|MERGE|COPY|DETACH|INSERT|REMOVE)/im;
+/**
+ * Rule names (from CypherParser.ruleNames) that must NOT appear anywhere in an
+ * allowed query's parse tree. These are constructs that are reachable from
+ * within an `oC_Query` but are not read-only.
+ */
+const FORBIDDEN_RULE_NAMES = new Set([
+  // Grammatically "reading" clauses that are actually dangerous:
+  "kU_LoadFrom",     // LOAD FROM '<file|url>' ... — local-file / SSRF read
+  "kU_InQueryCall",  // CALL <fn>(...) inside a query
+  // Updating clauses (belt-and-braces; also covered by the read-only DB mode):
+  "oC_Create",
+  "oC_Merge",
+  "oC_Set",
+  "oC_Delete",
+]);
 
-// Additional dangerous operations
-const DDL_OPERATIONS = /^\s*(DROP|ALTER|CREATE\s+INDEX|CREATE\s+CONSTRAINT)/im;
+/**
+ * Rule name that the top-level statement MUST be. Anything else (all the
+ * `kU_*` DDL / database-management statements) is rejected by default.
+ */
+const ALLOWED_STATEMENT_RULE = "oC_Query";
+const STATEMENT_RULE = "oC_Statement";
+
+/**
+ * Maximum allowed bracket-nesting depth for a single statement.
+ *
+ * PARSE-DoS GUARD: the ANTLR ALL(*) parser runs SYNCHRONOUSLY on the Express
+ * event loop before the DB is ever reached, and deeply nested parentheses make
+ * parse time grow super-linearly. Measured against this validator, a ~1KB
+ * payload of ~500 nested parens pins the single Node thread for >30s — an
+ * unauthenticated whole-server freeze that the 50KB length cap (which permits
+ * nesting ~12000 deep), the Kuzu query timeout (the request never reaches
+ * Kuzu), and the request rate limit (a handful of payloads freeze the loop for
+ * minutes) all fail to bound. So we reject over-nested input with a cheap O(n)
+ * scan BEFORE parsing, ensuring the expensive parse never runs on hostile
+ * input. A depth of 100 is far beyond anything legitimate Cypher needs.
+ */
+const MAX_NESTING_DEPTH = 100;
+
+// Cache the rule-name lookup table once; it is a static on the generated parser.
+const RULE_NAMES = CypherParser.ruleNames;
+const STATEMENT_RULE_INDEX = RULE_NAMES.indexOf(STATEMENT_RULE);
+const ALLOWED_STATEMENT_RULE_INDEX = RULE_NAMES.indexOf(ALLOWED_STATEMENT_RULE);
+const FORBIDDEN_RULE_INDICES = new Set(
+  [...FORBIDDEN_RULE_NAMES].map((name) => RULE_NAMES.indexOf(name))
+);
+
+/**
+ * An ANTLR error listener that records whether any syntax error occurred,
+ * without printing to the console or surfacing parser internals.
+ */
+class RecordingErrorListener extends antlr.BaseErrorListener {
+  constructor() {
+    super();
+    this.hadError = false;
+  }
+  syntaxError() {
+    this.hadError = true;
+  }
+}
 
 class QueryValidator {
   /**
@@ -74,13 +163,20 @@ class QueryValidator {
   }
 
   /**
-   * Strips comments from a Cypher statement
-   * Removes both line comments and block comments
-   * @param {string} statement - A Cypher statement
-   * @returns {string} Statement with comments removed
+   * Cheap O(n) parse-DoS guard: rejects a statement whose bracket-nesting depth
+   * exceeds MAX_NESTING_DEPTH, WITHOUT invoking the expensive ANTLR parser.
+   *
+   * Brackets inside string literals and comments are ignored, using the same
+   * string-aware scanning (single/double quotes, backslash escapes) and
+   * comment handling (line comments and block comments) as the rest of this
+   * validator, so brackets that appear inside a quoted string literal or inside
+   * a comment are NOT counted and do NOT cause a false rejection.
+   *
+   * @param {string} statement - A single Cypher statement
+   * @throws {Error} If nesting depth exceeds the bound.
    */
-  static stripComments(statement) {
-    let result = '';
+  static assertNestingWithinBounds(statement) {
+    let depth = 0;
     let inString = false;
     let stringChar = null;
     let escaped = false;
@@ -91,7 +187,6 @@ class QueryValidator {
       const nextChar = i + 1 < statement.length ? statement[i + 1] : null;
 
       if (escaped) {
-        result += char;
         escaped = false;
         i++;
         continue;
@@ -99,76 +194,180 @@ class QueryValidator {
 
       if (char === '\\' && inString) {
         escaped = true;
-        result += char;
         i++;
         continue;
       }
 
-      // Track string boundaries
+      // Track string boundaries (single or double quotes).
       if ((char === "'" || char === '"') && !inString) {
         inString = true;
         stringChar = char;
-        result += char;
         i++;
-      } else if (char === stringChar && inString) {
-        inString = false;
-        stringChar = null;
-        result += char;
+        continue;
+      }
+      if (inString) {
+        if (char === stringChar) {
+          inString = false;
+          stringChar = null;
+        }
         i++;
-      } else if (!inString && char === '/' && nextChar === '/') {
-        // Line comment - skip until end of line
+        continue;
+      }
+
+      // Outside strings: skip comments so brackets within them do not count.
+      if (char === '/' && nextChar === '/') {
         i += 2;
         while (i < statement.length && statement[i] !== '\n') {
           i++;
         }
-        if (i < statement.length) {
-          result += '\n'; // Preserve newline
-          i++;
-        }
-      } else if (!inString && char === '/' && nextChar === '*') {
-        // Block comment - skip until */
-        i += 2;
-        while (i < statement.length - 1) {
-          if (statement[i] === '*' && statement[i + 1] === '/') {
-            i += 2;
-            result += ' '; // Replace comment with space
-            break;
-          }
-          i++;
-        }
-      } else {
-        result += char;
-        i++;
+        continue;
       }
-    }
+      if (char === '/' && nextChar === '*') {
+        i += 2;
+        while (i < statement.length - 1 &&
+               !(statement[i] === '*' && statement[i + 1] === '/')) {
+          i++;
+        }
+        i += 2; // skip the closing */ (or run off the end if unterminated)
+        continue;
+      }
 
-    return result;
+      // Count bracket nesting outside strings/comments.
+      if (char === '(' || char === '[' || char === '{') {
+        depth++;
+        if (depth > MAX_NESTING_DEPTH) {
+          // Generic message: does not leak the exact bound in a way that helps
+          // an attacker tune payloads.
+          throw new Error(
+            'Query is too deeply nested and was rejected. Only read ' +
+            'operations of reasonable structure are permitted in read-only ' +
+            'mode.'
+          );
+        }
+      } else if (char === ')' || char === ']' || char === '}') {
+        if (depth > 0) {
+          depth--;
+        }
+      }
+      i++;
+    }
   }
 
   /**
-   * Validates a single Cypher statement
+   * Parses a single statement into an ANTLR parse tree.
    * @param {string} statement - A single Cypher statement
-   * @throws {Error} If statement contains forbidden operations
+   * @returns {{tree: object}|null} The parse tree, or null on any parse/lex error.
+   */
+  static parseStatement(statement) {
+    const errorListener = new RecordingErrorListener();
+
+    const charStream = antlr.CharStreams.fromString(statement);
+    const lexer = new CypherLexer(charStream);
+    lexer.removeErrorListeners();
+    lexer.addErrorListener(errorListener);
+
+    const tokenStream = new antlr.CommonTokenStream(lexer);
+    const parser = new CypherParser(tokenStream);
+    parser.removeErrorListeners();
+    parser.addErrorListener(errorListener);
+
+    let tree;
+    try {
+      tree = parser.oC_Cypher();
+    } catch (err) {
+      // Any parser exception is a parse failure -> fail closed.
+      return null;
+    }
+
+    if (errorListener.hadError) {
+      return null;
+    }
+
+    return { tree };
+  }
+
+  /**
+   * Validates a single Cypher statement against the read-only allowlist.
+   * @param {string} statement - A single Cypher statement
+   * @throws {Error} If the statement does not parse or is not read-only.
    */
   static validateStatement(statement) {
-    // Strip comments before validation to prevent comment-based bypass
-    const cleanedStatement = QueryValidator.stripComments(statement);
+    // Parse-DoS guard MUST run before the ANTLR parser: a cheap O(n) scan
+    // rejects pathologically nested input so the expensive parse never runs on
+    // it. See MAX_NESTING_DEPTH.
+    QueryValidator.assertNestingWithinBounds(statement);
 
-    // Check for write operations
-    if (WRITE_OPERATIONS.test(cleanedStatement)) {
-      const match = cleanedStatement.match(WRITE_OPERATIONS);
+    const parsed = QueryValidator.parseStatement(statement);
+
+    // Fail closed: anything that does not parse is rejected. Do NOT echo
+    // parser internals back to the client (info-disclosure hygiene).
+    if (!parsed) {
       throw new Error(
-        `Write operation '${match[1]}' is not allowed in read-only mode. ` +
-        `Only MATCH, RETURN, WITH, and read operations are permitted.`
+        'Query could not be parsed as a valid read-only Cypher query and was ' +
+        'rejected. Only read operations (MATCH, OPTIONAL MATCH, WHERE, WITH, ' +
+        'UNWIND, RETURN, UNION, ORDER BY, SKIP, LIMIT) are permitted in ' +
+        'read-only mode.'
       );
     }
 
-    // Check for DDL operations
-    if (DDL_OPERATIONS.test(cleanedStatement)) {
-      const match = cleanedStatement.match(DDL_OPERATIONS);
-      throw new Error(
-        `DDL operation '${match[1]}' is not allowed in read-only mode.`
-      );
+    QueryValidator.assertReadOnlyTree(parsed.tree);
+  }
+
+  /**
+   * Walks a parse tree and enforces the allowlist policy. Fail-closed:
+   *   1. every `oC_Statement` node's rule-child must be `oC_Query`; and
+   *   2. no forbidden rule (LOAD FROM, in-query CALL, updating clauses) may
+   *      appear anywhere.
+   * @param {object} tree - Root parse tree node (oC_Cypher context).
+   * @throws {Error} If any disallowed construct is found.
+   */
+  static assertReadOnlyTree(tree) {
+    // Iterative DFS to avoid recursion limits on deep trees.
+    const stack = [tree];
+    while (stack.length > 0) {
+      const node = stack.pop();
+      if (!node || typeof node.getChildCount !== "function") {
+        continue;
+      }
+
+      const ruleIndex = node.ruleIndex;
+
+      // Gate 1: the top-level statement must be an oC_Query. Every DDL /
+      // database-management statement produces a different rule-child here and
+      // is therefore rejected by default (no enumeration required).
+      if (ruleIndex === STATEMENT_RULE_INDEX) {
+        let hasAllowedQueryChild = false;
+        const childCount = node.getChildCount();
+        for (let i = 0; i < childCount; i++) {
+          const child = node.getChild(i);
+          if (child && child.ruleIndex === ALLOWED_STATEMENT_RULE_INDEX) {
+            hasAllowedQueryChild = true;
+            break;
+          }
+        }
+        if (!hasAllowedQueryChild) {
+          throw new Error(
+            'Only read queries (MATCH ... RETURN) are permitted in read-only ' +
+            'mode. Data-definition and database-management statements ' +
+            '(e.g. CREATE/DROP/ALTER TABLE, ATTACH, USE, INSTALL, IMPORT, ' +
+            'EXPORT, COPY) are not allowed.'
+          );
+        }
+      }
+
+      // Gate 2: no forbidden construct anywhere in the tree.
+      if (FORBIDDEN_RULE_INDICES.has(ruleIndex)) {
+        throw new Error(
+          'Query contains a construct that is not allowed in read-only mode ' +
+          '(such as LOAD FROM, CALL, or a write clause). Only read operations ' +
+          'are permitted.'
+        );
+      }
+
+      const childCount = node.getChildCount();
+      for (let i = 0; i < childCount; i++) {
+        stack.push(node.getChild(i));
+      }
     }
   }
 
@@ -177,6 +376,7 @@ class QueryValidator {
    * @param {string} query - The Cypher query to validate
    * @param {string} mode - The access mode (READ_ONLY, READ_WRITE, etc.)
    * @throws {Error} If query contains forbidden operations
+   * @returns {boolean} true if the query is allowed
    */
   static validateQuery(query, mode) {
     if (!query || typeof query !== 'string') {
@@ -197,8 +397,14 @@ class QueryValidator {
       );
     }
 
-    // Split into individual statements and validate each one
+    // Split into individual statements and validate each one. Each statement
+    // must independently pass; a benign MATCH followed by a LOAD FROM rejects
+    // the whole query.
     const statements = QueryValidator.splitStatements(query);
+
+    if (statements.length === 0) {
+      throw new Error('Query must contain at least one statement.');
+    }
 
     for (let i = 0; i < statements.length; i++) {
       try {
