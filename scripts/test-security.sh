@@ -222,6 +222,30 @@ test_query_validation() {
     assert_allowed "string literal containing LOAD FROM" \
         "MATCH (n) WHERE n.name = 'LOAD FROM' RETURN n LIMIT 1"
 
+    # BLOCKED: trailing tokens after a valid read-only prefix. The Cypher
+    # grammar's oC_Cypher rule accepts a valid PREFIX and stops; without the
+    # validator's EOF assertion the trailing garbage would be silently dropped
+    # by the validator while still reaching the engine.
+    assert_blocked "trailing garbage after a valid RETURN prefix" \
+        "MATCH (n) RETURN n GARBAGE TRAILING TOKENS"
+    assert_blocked "trailing write clause after a valid RETURN prefix" \
+        "MATCH (n) RETURN n CREATE (x)"
+
+    # BLOCKED: comment cannot hide a real second statement from the splitter.
+    assert_blocked "LOAD FROM after a comment-obscured semicolon" \
+        "MATCH (n) RETURN n /*c*/; LOAD FROM '/etc/passwd' RETURN *"
+
+    # ALLOWED: legitimate trailing/inline comments must not be over-blocked
+    # (comments are stripped before validation, string-literal-safe).
+    assert_allowed "legitimate trailing line comment" \
+        "MATCH (n) RETURN n LIMIT 1 // just a note"
+    assert_allowed "legitimate inline block comment between tokens" \
+        "MATCH (n) /* mid */ RETURN n LIMIT 1"
+    # A '//'/'*/' sequence INSIDE a string literal must be preserved, not
+    # treated as a comment.
+    assert_allowed "comment-like sequence inside a string literal" \
+        "MATCH (n) WHERE n.url = 'http://x/*y*/' RETURN n LIMIT 1"
+
     # Parse-DoS guard: a deeply nested-parenthesis payload (~1KB) must be
     # REJECTED QUICKLY by the O(n) nesting-depth guard, so the expensive ANTLR
     # parse never runs. Without the guard this ~1KB request pinned the Node

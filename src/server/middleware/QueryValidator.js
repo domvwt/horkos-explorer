@@ -105,12 +105,108 @@ class RecordingErrorListener extends antlr.BaseErrorListener {
 
 class QueryValidator {
   /**
+   * Strips `//...` line comments and `/* ... *​/` block comments from a query,
+   * replacing each comment with a single space so tokens that were separated
+   * only by a comment are not merged. STRING-LITERAL-SAFE: a `//` or `/*` that
+   * appears inside a single- or double-quoted string literal (honouring
+   * backslash escapes) is left untouched.
+   *
+   * This runs BEFORE splitStatements so a comment can never hide a statement
+   * separator or a forbidden construct from the validator's view (the ANTLR
+   * lexer folds trailing comments into whitespace tokens, so the raw parse
+   * tree does not reliably expose commented-out text). It uses the same
+   * single-pass, O(n) string+comment-aware scanning discipline as
+   * assertNestingWithinBounds, so it introduces no catastrophic-backtracking
+   * DoS vector.
+   *
+   * @param {string} query - The full query string
+   * @returns {string} The query with comments outside string literals removed.
+   */
+  static stripComments(query) {
+    let out = '';
+    let inString = false;
+    let stringChar = null;
+    let escaped = false;
+    let i = 0;
+
+    while (i < query.length) {
+      const char = query[i];
+      const nextChar = i + 1 < query.length ? query[i + 1] : null;
+
+      if (escaped) {
+        out += char;
+        escaped = false;
+        i++;
+        continue;
+      }
+
+      if (char === '\\' && inString) {
+        out += char;
+        escaped = true;
+        i++;
+        continue;
+      }
+
+      // Track string boundaries (single or double quotes).
+      if ((char === "'" || char === '"') && !inString) {
+        inString = true;
+        stringChar = char;
+        out += char;
+        i++;
+        continue;
+      }
+      if (inString) {
+        if (char === stringChar) {
+          inString = false;
+          stringChar = null;
+        }
+        out += char;
+        i++;
+        continue;
+      }
+
+      // Outside strings: replace comments with a single space so adjacent
+      // tokens are not merged.
+      if (char === '/' && nextChar === '/') {
+        i += 2;
+        while (i < query.length && query[i] !== '\n') {
+          i++;
+        }
+        out += ' ';
+        continue;
+      }
+      if (char === '/' && nextChar === '*') {
+        i += 2;
+        while (
+          i < query.length - 1 &&
+          !(query[i] === '*' && query[i + 1] === '/')
+        ) {
+          i++;
+        }
+        i += 2; // skip closing */ (or run off the end if unterminated)
+        out += ' ';
+        continue;
+      }
+
+      out += char;
+      i++;
+    }
+
+    return out;
+  }
+
+  /**
    * Splits a Cypher query into individual statements
    * Handles semicolons within strings properly
    * @param {string} query - The full query string
    * @returns {string[]} Array of individual statements
    */
   static splitStatements(query) {
+    // Strip comments BEFORE splitting so a `//` or `/* */` comment cannot hide
+    // a `;` separator (or any construct) from the validator. String-literal
+    // safe, so a `//`/`/*` inside a quoted value is preserved.
+    query = QueryValidator.stripComments(query);
+
     const statements = [];
     let currentStatement = '';
     let inString = false;
@@ -280,6 +376,24 @@ class QueryValidator {
     }
 
     if (errorListener.hadError) {
+      return null;
+    }
+
+    // EOF assertion (fail closed): the grammar's oC_Cypher rule accepts a
+    // valid PREFIX (an oC_Statement plus an optional trailing SP and ';') and
+    // stops — it does NOT itself match EOF. Trailing tokens after an accepted
+    // prefix would otherwise be silently dropped by the validator while still
+    // being forwarded to (a future) engine, letting the two parsers disagree.
+    // Require that the parser consumed the whole statement: after the accepted
+    // prefix only whitespace tokens (the CypherLexer folds trailing line/block
+    // comments into SP tokens too) may remain before EOF. Any other unconsumed
+    // token means the accepted parse was a partial prefix -> reject.
+    let next = parser.getCurrentToken();
+    while (next && next.type === CypherLexer.SP) {
+      tokenStream.consume();
+      next = parser.getCurrentToken();
+    }
+    if (!next || next.type !== antlr.Token.EOF) {
       return null;
     }
 
