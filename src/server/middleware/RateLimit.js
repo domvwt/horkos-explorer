@@ -11,10 +11,18 @@ const logger = require("../utils/Logger");
 // Use higher limits in development to avoid issues with hot-reloading
 const isDevelopment = process.env.NODE_ENV === 'development';
 
+// Compute effective config values up front so they can be both passed into
+// the middleware AND logged/validated below — express-rate-limit v8 does not
+// expose windowMs/max back on the returned middleware object.
+const apiWindowMs = parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 60 * 1000; // 1 minute window
+const apiMax = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || (isDevelopment ? 1000 : 60); // Relaxed in dev
+const queryWindowMs = parseInt(process.env.QUERY_RATE_LIMIT_WINDOW_MS) || 60 * 1000; // 1 minute window
+const queryMax = parseInt(process.env.QUERY_RATE_LIMIT_MAX_REQUESTS) || (isDevelopment ? 500 : 30); // Relaxed in dev
+
 // General API rate limiter (applies to most endpoints)
 const apiLimiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 60 * 1000, // 1 minute window
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || (isDevelopment ? 1000 : 60), // Relaxed in dev
+  windowMs: apiWindowMs,
+  max: apiMax,
   standardHeaders: true, // Return rate limit info in `RateLimit-*` headers
   legacyHeaders: false, // Disable `X-RateLimit-*` headers
   message: {
@@ -33,8 +41,8 @@ const apiLimiter = rateLimit({
 
 // Stricter rate limiter for query endpoints (more resource-intensive)
 const queryLimiter = rateLimit({
-  windowMs: parseInt(process.env.QUERY_RATE_LIMIT_WINDOW_MS) || 60 * 1000, // 1 minute window
-  max: parseInt(process.env.QUERY_RATE_LIMIT_MAX_REQUESTS) || (isDevelopment ? 500 : 30), // Relaxed in dev
+  windowMs: queryWindowMs,
+  max: queryMax,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -69,11 +77,25 @@ const authLimiter = rateLimit({
   skipSuccessfulRequests: true // Don't count successful authentications
 });
 
+// Warn if an env override has effectively disabled a rate limiter, so a
+// misconfiguration doesn't silently remove a security control.
+function checkLimiterBounds(name, windowMs, max) {
+  if (!Number.isFinite(max) || max <= 0) {
+    logger.warn(`${name} rate limit is misconfigured (max=${max}) — this disables the limit; requests will not be throttled.`);
+  }
+  if (!Number.isFinite(windowMs) || windowMs <= 0) {
+    logger.warn(`${name} rate limit window is misconfigured (windowMs=${windowMs}) — this disables the limit; requests will not be throttled.`);
+  }
+}
+
+checkLimiterBounds('API', apiWindowMs, apiMax);
+checkLimiterBounds('Query', queryWindowMs, queryMax);
+
 // Log rate limit configuration on startup
 if (process.env.NODE_ENV !== 'test') {
   logger.info('Rate limiting configuration:');
-  logger.info(`  API limit: ${apiLimiter.max} requests per ${apiLimiter.windowMs / 1000}s`);
-  logger.info(`  Query limit: ${queryLimiter.max} queries per ${queryLimiter.windowMs / 1000}s`);
+  logger.info(`  API limit: ${apiMax} requests per ${apiWindowMs / 1000}s`);
+  logger.info(`  Query limit: ${queryMax} queries per ${queryWindowMs / 1000}s`);
 }
 
 module.exports = {
