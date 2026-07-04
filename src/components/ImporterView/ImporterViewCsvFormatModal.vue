@@ -96,21 +96,7 @@
         </div>
         <div class="modal-footer">
           <div class="d-flex justify-content-between w-100">
-            <span>
-              <a
-                href="https://docs.kuzudb.com/import/csv/"
-                target="_blank"
-              >
-                <button
-                  type="button"
-                  class="btn btn-secondary"
-                >
-                  <i class="fa-solid fa-question-circle" />
-                  Help
-                </button>
-              </a>
-
-            </span>
+            <span />
             <span>
               <button
                 type="button"
