@@ -132,6 +132,39 @@ docker run -p 8000:8000 \
 
 The `dev` tag is updated daily, approximately two hours after the latest dev build of Kuzu is released.
 
+#### Security headers
+
+As defence-in-depth, the Express app mounts [`helmet`](https://helmetjs.github.io/) to emit HTTP security headers at the application layer, so hardening is present even if a reverse proxy (nginx) in front is bypassed or misconfigured. The following headers are set:
+
+- `X-Content-Type-Options: nosniff` — blocks MIME-sniffing.
+- `X-Frame-Options` and CSP `frame-ancestors 'none'` — anti-clickjacking.
+- `Referrer-Policy` — limits referrer leakage.
+- `Strict-Transport-Security` (HSTS) — safe behind nginx-terminated TLS even when the app is served over plain HTTP, because browsers only honour HSTS received over HTTPS.
+- `Content-Security-Policy` — restricts resource loading to what the frontend actually needs (same-origin scripts plus `wasm-unsafe-eval` for the DuckDB/Kuzu WASM modules, same-origin/blob Web Workers for Monaco/DuckDB, inline styles for Bootstrap/Monaco).
+
+The CSP defaults to **report-only** mode, controlled by the `CSP_REPORT_ONLY` environment variable:
+
+```bash
+# CSP report-only (default): browser reports violations but does NOT block,
+# so a mis-derived policy cannot break the query UI. Recommended until you have
+# validated the app in a browser under the real policy.
+docker run -p 8000:8000 \
+           -v {path to the directory containing the database file}:/database \
+           -e KUZU_FILE={database file name} \
+           --rm kuzudb/explorer:latest
+
+# Switch the CSP to enforcing mode AFTER validating the UI works
+# (Monaco editor + G6 graph + Bootstrap render correctly with no CSP
+# violations reported in the browser console):
+docker run -p 8000:8000 \
+           -v {path to the directory containing the database file}:/database \
+           -e KUZU_FILE={database file name} \
+           -e CSP_REPORT_ONLY=false \
+           --rm kuzudb/explorer:latest
+```
+
+All the other security headers (HSTS, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`) are always enforced regardless of `CSP_REPORT_ONLY`.
+
 ### Updating Kuzu Explorer
 
 When a new version of Kuzu Explorer is released after the initial launch, re-launching the container WILL NOT automatically update the local image to the latest version. To update the local image to the latest version, you can run the following command.
@@ -270,6 +303,7 @@ This tests:
 - Comment bypass prevention
 - Rate limiting (30 queries/min default)
 - Session storage isolation (when DISABLE_SESSION_DB=true)
+- Security headers presence (helmet: CSP, HSTS, X-Frame-Options/frame-ancestors, X-Content-Type-Options, Referrer-Policy)
 
 **Prerequisites:**
 - Server must be running with security configuration:

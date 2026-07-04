@@ -80,6 +80,15 @@ export TRUST_PROXY=1                      # How many reverse-proxy hops to trust
                                           # The app MUST sit behind exactly the trusted proxy and MUST NOT be exposed directly.
 export TRUST_PROXY_HOPS=1                 # Explicit hop count used when TRUST_PROXY is unset/true (default: 1)
 
+# Security headers (helmet)
+export CSP_REPORT_ONLY=true              # CSP enforce-vs-report mode (default: true). When true, the
+                                          # Content-Security-Policy is emitted as report-only (browser reports
+                                          # violations but does not block) so a mis-derived policy cannot break
+                                          # the query UI. Set to false to switch to the enforcing CSP header
+                                          # AFTER validating the app in a browser. All other helmet headers
+                                          # (HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy)
+                                          # are always enforced regardless of this flag.
+
 # Rate limiting configuration (optional, defaults shown)
 export RATE_LIMIT_WINDOW_MS=60000        # Time window in ms (default: 60000 = 1 minute)
 export RATE_LIMIT_MAX_REQUESTS=60        # Max requests per window for general API endpoints
@@ -272,6 +281,14 @@ The access mode (`READ_ONLY`, `READ_WRITE`, etc.) is determined at server startu
    - **Result-size cap**: `KUZU_QUERY_SIZE_LIMIT=10000` rows. Enforced in `Cypher.js` (`processSingleResult`): when a result exceeds the cap, only the first N rows are read back, bounding response size. 10000 rows is a generous ceiling for interactive graph exploration while still preventing whole-graph streaming; operators handling larger legitimate exports should raise it deliberately.
    - **Request-body limit**: JSON bodies are capped at `1mb` (`JSON_BODY_LIMIT`, `index.js`). The largest legitimate JSON body is a Cypher query (already capped at 50KB by `QueryValidator`) or a small import-plan config. Bulk CSV/Parquet import uploads use multipart/multer streaming to disk and are **not** affected by this limit.
    - **Max result / export size decision**: interactive `/api/cypher` responses are hard-bounded to `KUZU_QUERY_SIZE_LIMIT` rows. There is no separate bulk-export endpoint in the public read-only image; operators needing large exports should run Kuzu tooling directly against the database file rather than raising the UI cap. All three bounds are operator-overridable via the env vars above.
+7. **Security Headers (helmet)**: The Express app mounts [`helmet`](https://helmetjs.github.io/) early in the middleware chain (`src/server/index.js`) as **defence-in-depth**, so header hardening is present even if the nginx proxy is bypassed or misconfigured. Headers set:
+   - `X-Content-Type-Options: nosniff` (blocks MIME-sniffing) — enforced.
+   - `X-Frame-Options` + CSP `frame-ancestors 'none'` (anti-clickjacking) — enforced.
+   - `Referrer-Policy` — enforced.
+   - `Strict-Transport-Security` (HSTS) — enforced. Safe behind nginx-terminated TLS even when the app itself is served over plain HTTP, because browsers only honour HSTS received over HTTPS.
+   - **Content-Security-Policy** — see `CSP_REPORT_ONLY` below. The policy is derived from actual frontend usage: `script-src 'self' 'wasm-unsafe-eval'` (DuckDB/Kuzu WASM need `wasm-unsafe-eval`; no `unsafe-eval` — the app never calls `eval`/`new Function`), `worker-src 'self' blob:` (Monaco/DuckDB/Kuzu Web Workers), `style-src 'self' 'unsafe-inline'` (Bootstrap/Monaco inline styles), `img-src`/`font-src 'self' data:`, `connect-src 'self'`, `object-src 'none'`, `frame-ancestors 'none'`, `base-uri 'self'`, `form-action 'self'`.
+
+   **`CSP_REPORT_ONLY` env var** (default `true`): controls only the CSP header's enforce-vs-report mode. When `true` (default), the CSP is emitted as `Content-Security-Policy-Report-Only` — the browser reports violations but does **not** block, so a mis-derived policy cannot break the query UI (Monaco, G6 graph, Bootstrap, WASM). After validating the app in a browser under the real policy, an operator can set `CSP_REPORT_ONLY=false` to switch to the enforcing `Content-Security-Policy` header. All the other headers above are always enforced regardless of this flag.
 
 ## Horkos Graph Schema
 

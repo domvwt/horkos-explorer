@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
 const api = require("./API");
 const path = require("path");
 const process = require("process");
@@ -131,6 +132,95 @@ if (ALLOWED_ORIGINS && ALLOWED_ORIGINS.length > 0) {
   app.use(cors());
   logger.info("CORS enabled for all origins");
 }
+
+// Security headers (defence-in-depth via helmet).
+//
+// research-notes/README.md assumes these headers arrive "at the nginx level",
+// but that is an unenforced assumption: if the reverse proxy is misconfigured
+// or bypassed, the app would otherwise ship zero header hardening. Since this
+// is a PUBLIC, read-only deployment serving real personal data, we set the
+// headers at the APPLICATION layer too, so hardening is present regardless of
+// the proxy in front.
+//
+// CSP enforce-vs-report decision:
+//   A too-strict CSP silently breaks the query UI (Monaco editor Web Workers,
+//   G6 canvas, Bootstrap inline styles, DuckDB/Kuzu WASM). Because we cannot
+//   safely confirm the policy under enforcement without booting the full dev
+//   server and driving the browser, the CSP DEFAULTS TO Report-Only mode so
+//   the header is emitted (defence-in-depth / telemetry) without risking a
+//   broken UI in production. An operator who has validated the app can flip to
+//   enforcing mode by setting CSP_REPORT_ONLY=false. All OTHER headers (HSTS,
+//   X-Frame-Options, X-Content-Type-Options, Referrer-Policy) are low-risk and
+//   are always ENFORCED.
+const CSP_REPORT_ONLY = process.env.CSP_REPORT_ONLY
+  ? process.env.CSP_REPORT_ONLY.toLowerCase() !== "false"
+  : true; // Default: report-only, so a mis-derived CSP cannot break the UI.
+
+app.use(helmet({
+  contentSecurityPolicy: {
+    // When reportOnly is true, helmet emits Content-Security-Policy-Report-Only
+    // (browser reports violations but does NOT block). When false, it emits the
+    // enforcing Content-Security-Policy header.
+    reportOnly: CSP_REPORT_ONLY,
+    // useDefaults:false so we ship EXACTLY the directives below (helmet's
+    // defaults include e.g. block-all-mixed-content / upgrade-insecure-requests
+    // and a stricter script-src that would break WASM). Every directive beyond
+    // default-src is justified inline against actual frontend usage.
+    useDefaults: false,
+    directives: {
+      // Baseline: only same-origin resources unless a directive widens it.
+      defaultSrc: ["'self'"],
+      // Scripts are served same-origin (webpack bundles + lazily-loaded chunks,
+      // Monaco worker files under js/). 'wasm-unsafe-eval' is REQUIRED: browsers
+      // gate WebAssembly compilation (DuckDB WASM src/utils/DuckDB.js, Kuzu WASM
+      // src/utils/KuzuWasm.js) behind either 'wasm-unsafe-eval' or the far
+      // broader 'unsafe-eval'. We deliberately grant only 'wasm-unsafe-eval'
+      // and NOT 'unsafe-eval' — no application code calls eval()/new Function().
+      scriptSrc: ["'self'", "'wasm-unsafe-eval'"],
+      // Web Workers: Monaco editor and DuckDB (new Worker(...) in DuckDB.js) and
+      // the Kuzu WASM worker load from same-origin js/ files; blob: is included
+      // because Monaco/webpack worker bootstrapping can wrap workers in blob URLs.
+      workerSrc: ["'self'", "blob:"],
+      // Bootstrap and Monaco inject inline <style>/style attributes at runtime;
+      // 'unsafe-inline' for styles is unavoidable for Vue+Bootstrap+Monaco apps.
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      // FontAwesome / bundled fonts are same-origin; data: covers inline font
+      // data URIs some toolkits emit.
+      fontSrc: ["'self'", "data:"],
+      // Icons/favicons/canvas-derived images are same-origin; data: covers
+      // inline SVG/PNG data URIs used by G6 and Bootstrap; blob: covers a
+      // future canvas.toBlob()/toDataURL graph-image export (G6) so enforcing
+      // the policy later does not silently break a "download graph" feature.
+      imgSrc: ["'self'", "data:", "blob:"],
+      // XHR/fetch/WebSocket targets: only the app's own API is contacted.
+      connectSrc: ["'self'"],
+      // No <object>/<embed>/<applet> — eliminate a legacy plugin attack surface.
+      objectSrc: ["'none'"],
+      // Anti-clickjacking: forbid the app being framed anywhere (pairs with the
+      // X-Frame-Options header helmet also sets for legacy browsers).
+      frameAncestors: ["'none'"],
+      // Restrict <base href> so injected markup cannot repoint relative URLs.
+      baseUri: ["'self'"],
+      // Forms may only POST back to same-origin (the query API).
+      formAction: ["'self'"],
+    },
+  },
+  // HSTS: helmet's default (max-age 365 days = 31536000s, includeSubDomains).
+  // The app may be served over plain HTTP behind nginx-terminated TLS; that is
+  // fine because browsers ignore Strict-Transport-Security received over HTTP
+  // and only honour it over HTTPS, so this is safe to always enable.
+  // The remaining defaults are enforced as-is: X-Content-Type-Options: nosniff,
+  // Referrer-Policy: no-referrer, and X-Frame-Options: SAMEORIGIN (the CSP
+  // frame-ancestors 'none' above is the primary, stronger anti-clickjacking
+  // control in modern browsers). Helmet 8 also emits Cross-Origin-Opener-Policy
+  // and Cross-Origin-Resource-Policy (both same-origin) and Origin-Agent-Cluster;
+  // these are safe here because the app and all its resources are same-origin and
+  // it never takes a cross-origin-isolated / SharedArrayBuffer path.
+}));
+logger.info(
+  `Security headers enabled (helmet); CSP mode: ${CSP_REPORT_ONLY ? "report-only" : "enforce"}`
+);
+
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 8000;
 // JSON request-body cap. This is a DoS guardrail, not a data path: the largest
 // legitimate JSON body is a Cypher query (already capped at 50KB by

@@ -360,6 +360,64 @@ test_xff_spoofing() {
 }
 # --- end TASK-102 ---
 
+# --- TASK-100: security headers ---
+# Verifies the app emits application-layer security headers (helmet). These are
+# defence-in-depth: they must be present even if the nginx proxy is bypassed or
+# misconfigured. The CSP may be enforcing OR report-only, so we accept either
+# Content-Security-Policy or Content-Security-Policy-Report-Only.
+test_security_headers() {
+    print_header "Testing Security Headers (helmet / defence-in-depth)"
+
+    # Capture response headers from a normal GET. Use -sI-style header dump via
+    # -D - so we read the exact header block; grep is case-insensitive (-i)
+    # because header names are case-insensitive per HTTP.
+    local headers
+    headers=$(curl -s -D - -o /dev/null "$SERVER_URL/api/mode")
+
+    # X-Content-Type-Options: nosniff (blocks MIME-sniffing)
+    print_test "X-Content-Type-Options: nosniff present"
+    if echo "$headers" | grep -iq "^X-Content-Type-Options:.*nosniff"; then
+        print_pass "X-Content-Type-Options: nosniff present"
+    else
+        print_fail "X-Content-Type-Options: nosniff missing"
+    fi
+
+    # Clickjacking protection: accept X-Frame-Options OR CSP frame-ancestors
+    print_test "Clickjacking protection (X-Frame-Options or CSP frame-ancestors)"
+    if echo "$headers" | grep -iq "^X-Frame-Options:" || \
+       echo "$headers" | grep -iq "frame-ancestors"; then
+        print_pass "Clickjacking protection present"
+    else
+        print_fail "Clickjacking protection missing (no X-Frame-Options / frame-ancestors)"
+    fi
+
+    # Referrer-Policy present
+    print_test "Referrer-Policy present"
+    if echo "$headers" | grep -iq "^Referrer-Policy:"; then
+        print_pass "Referrer-Policy present"
+    else
+        print_fail "Referrer-Policy missing"
+    fi
+
+    # Strict-Transport-Security present (browsers ignore over plain HTTP; fine)
+    print_test "Strict-Transport-Security present"
+    if echo "$headers" | grep -iq "^Strict-Transport-Security:"; then
+        print_pass "Strict-Transport-Security present"
+    else
+        print_fail "Strict-Transport-Security missing"
+    fi
+
+    # CSP present in EITHER enforcing or report-only form
+    print_test "Content-Security-Policy present (enforce or report-only)"
+    if echo "$headers" | grep -iq "^Content-Security-Policy:" || \
+       echo "$headers" | grep -iq "^Content-Security-Policy-Report-Only:"; then
+        print_pass "Content-Security-Policy present"
+    else
+        print_fail "Content-Security-Policy missing (neither enforce nor report-only)"
+    fi
+}
+# --- end TASK-100 ---
+
 # Main execution
 main() {
     echo -e "${BLUE}╔════════════════════════════════════════════╗${NC}"
@@ -379,6 +437,7 @@ main() {
     test_query_validation
     test_rate_limiting
     test_xff_spoofing  # TASK-102: uses its own fresh per-IP bucket (right-most XFF 10.0.0.1); independent of test_rate_limiting's budget
+    test_security_headers  # TASK-100: security-headers presence check
     test_session_storage
     print_summary
 }
