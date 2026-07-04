@@ -1,5 +1,8 @@
 <template>
-  <div class="privacy-view">
+  <div
+    class="privacy-view"
+    @click.self="$emit('dismiss')"
+  >
     <div class="privacy-view__content">
       <h1>Privacy &amp; Data Notice — {{ legal.SERVICE_NAME }}</h1>
       <p class="privacy-view__meta">
@@ -251,6 +254,7 @@ import { LEGAL } from "../../utils/Constants";
 
 export default {
   name: "PrivacyView",
+  emits: ["dismiss"],
   data() {
     return {
       legal: LEGAL,

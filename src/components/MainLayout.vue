@@ -36,6 +36,7 @@
           <a
             href="#privacy"
             class="header-link"
+            @click.prevent="navigateTo('privacy')"
           >
             <i class="fa-solid fa-shield-halved" />
             <span>Privacy</span>
@@ -87,7 +88,10 @@
             :schema="schema"
             @reload-schema="reloadSchema"
           />
-          <PrivacyView v-show="showPrivacy" />
+          <PrivacyView
+            v-show="showPrivacy"
+            @dismiss="dismissPrivacy"
+          />
         </div>
       </div>
     </div>
@@ -216,6 +220,8 @@ export default {
     schema: null,
     isKuzuWasmInitialized: false,
     headerHeight: 0,
+    // View to restore when the privacy panel is dismissed by clicking away.
+    previousView: 'shell',
   }),
   computed: {
     ...mapStores(useModeStore),
@@ -273,6 +279,11 @@ export default {
         this.headerHeight = this.$refs.header.offsetHeight;
       }
     },
+    // The URL hash is the single source of truth for which container view is
+    // shown. Nav actions call navigateTo(), which updates the hash; the browser
+    // hashchange event (and the initial call in mounted) routes through here to
+    // perform the actual view switch. Keeping the mutation one-directional
+    // (hash -> view, never view -> hash inside the toggles) avoids re-entrancy.
     handleHashChange() {
       const hash = window.location.hash.substring(1);
       switch (hash) {
@@ -287,6 +298,10 @@ export default {
           this.toggleImporter(true);
           break;
         case 'privacy':
+          // Remember the view we came from so a click-away can restore it.
+          if (!this.showPrivacy) {
+            this.previousView = this.currentView();
+          }
           this.togglePrivacy();
           break;
         // Settings modal is handled separately as it's a modal, not a view in the main container
@@ -300,6 +315,31 @@ export default {
           }
           break;
       }
+    },
+    // Navigate to a container view by making the hash reflect it. Because the
+    // toggle happens in handleHashChange, this keeps the hash and the visible
+    // view in sync. If the hash already equals the target no hashchange event
+    // fires, so we invoke handleHashChange directly to re-show the view (this is
+    // what makes re-clicking the active nav item work).
+    navigateTo(view) {
+      if (window.location.hash.substring(1) === view) {
+        this.handleHashChange();
+      } else {
+        window.location.hash = view;
+      }
+    },
+    // Identify the currently visible container view (for previousView tracking).
+    currentView() {
+      if (this.showSchema) return 'schema';
+      if (this.showImporter) return 'importer';
+      if (this.showPrivacy) return 'privacy';
+      return 'shell';
+    },
+    // Click-away handler for the privacy panel: return to the view we came from
+    // (falling back to shell), keeping the hash in sync via navigateTo.
+    dismissPrivacy() {
+      const target = this.previousView === 'privacy' ? 'shell' : this.previousView;
+      this.navigateTo(target || 'shell');
     },
     async getSchema() {
       let schema;
@@ -323,10 +363,10 @@ export default {
         if (this.modeStore.isDemo && !wasmModalSeen) {
           this.accessModeModal.show();
           this.setCookie('wasmModalSeen', 'true', 365); // Set cookie for 365 days
-          this.toggleImporter(true);
+          this.navigateTo('importer');
         } else if (this.modeStore.isDemo) {
           // If in demo mode but WASM modal has been seen, still go to importer view
-          this.toggleImporter(true);
+          this.navigateTo('importer');
         }
       });
     },
@@ -486,9 +526,10 @@ export default {
     },
     // Handle import investigation from header button
     handleImportInvestigation(state) {
-      // Ensure we're on the shell view
+      // Ensure we're on the shell view (and that the hash reflects it, so a
+      // subsequent Privacy click always registers as a hash change).
       if (!this.showShell) {
-        this.toggleShell();
+        this.navigateTo('shell');
       }
       // Delegate to ShellMainView to restore the investigation
       this.$nextTick(() => {
@@ -499,9 +540,9 @@ export default {
     },
     // Handle share investigation from header button
     handleShare() {
-      // Ensure we're on the shell view
+      // Ensure we're on the shell view (and that the hash reflects it).
       if (!this.showShell) {
-        this.toggleShell();
+        this.navigateTo('shell');
       }
       this.$nextTick(() => {
         const state = this.$refs.shellView?.getInvestigationState();
