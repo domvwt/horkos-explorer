@@ -1288,6 +1288,49 @@ export default {
       return { tableName, primaryKey, primaryKeyValue, primaryKeyName };
     },
 
+    // Count only neighbours that are NOT already present on the canvas.
+    // Neighbour identity uses the same {table}_{offset} g6 id encoding as the
+    // rest of the graph, so a neighbour already drawn is never re-counted.
+    // Pure over its inputs (reads only the g6 graph) so it is unit-testable.
+    countNewNeighborNodes(neighborNodes) {
+      if (!Array.isArray(neighborNodes)) {
+        return 0;
+      }
+      const seen = new Set();
+      let newCount = 0;
+      neighborNodes.forEach(neighbor => {
+        if (!neighbor || !neighbor._id) {
+          return;
+        }
+        const neighborId = encodeId(neighbor._id);
+        if (seen.has(neighborId)) {
+          return;
+        }
+        seen.add(neighborId);
+        try {
+          this.g6Graph.getNodeData(neighborId);
+          // Node already on the canvas, don't count.
+        } catch (e) {
+          // Node not present, count it as a NEW neighbour.
+          newCount++;
+        }
+      });
+      return newCount;
+    },
+
+    // Record a computed neighbour count and refresh the ">10 new neighbours"
+    // profligate badge. Single source of truth for the badge threshold.
+    recordNeighborCount(nodeId, newCount) {
+      this.neighborCounts[nodeId] = newCount;
+      if (newCount > 10) {
+        this.profligateNodes.add(nodeId);
+        this.updateNodeBadge(nodeId, true);
+      } else {
+        this.profligateNodes.delete(nodeId);
+        this.updateNodeBadge(nodeId, false);
+      }
+    },
+
     async countNewNeighbors(nodeId) {
       // Check if already loading or cached
       if (this.neighborCountsLoading.has(nodeId)) {
@@ -1303,48 +1346,19 @@ export default {
       try {
         const nodeData = this.g6Graph.getNodeData(nodeId);
         const { tableName, primaryKeyName, primaryKeyValue } = this.getInfoForExpansion(nodeData);
-        const sizeLimit = this.settingsStore.performance.maxNumberOfNodesToExpand;
 
-        // Fetch neighbors
-        const neighbors = await NeighborsFetcher.fetchNeighbors({
+        // One request per rel type, covering just this node.
+        const neighborsByPk = await NeighborsFetcher.fetchNeighborNodesBatched({
           tableName,
           primaryKeyName,
-          primaryKeyValue,
+          primaryKeyValues: [primaryKeyValue],
           relTables: this.schema.relTables,
-          sizeLimit,
           isWasm: this.modeStore.isWasm,
         });
 
-        if (!neighbors || !neighbors.rows) {
-          this.neighborCounts[nodeId] = 0;
-          return 0;
-        }
-
-        // Count NEW neighbor NODES only (not edges)
-        let newCount = 0;
-        const { nodes } = this.extractGraphFromQueryResultMethod(neighbors);
-
-        nodes.forEach(n => {
-          try {
-            this.g6Graph.getNodeData(n.id);
-            // Node exists, don't count
-          } catch (e) {
-            // Node doesn't exist, count it
-            newCount++;
-          }
-        });
-
-        this.neighborCounts[nodeId] = newCount;
-
-        // Mark as profligate if >10 new neighbors
-        if (newCount > 10) {
-          this.profligateNodes.add(nodeId);
-          this.updateNodeBadge(nodeId, true);
-        } else {
-          this.profligateNodes.delete(nodeId);
-          this.updateNodeBadge(nodeId, false);
-        }
-
+        const neighborNodes = neighborsByPk[String(primaryKeyValue)] || [];
+        const newCount = this.countNewNeighborNodes(neighborNodes);
+        this.recordNeighborCount(nodeId, newCount);
         return newCount;
       } catch (e) {
         console.error("Failed to count neighbors:", e);
@@ -1362,14 +1376,69 @@ export default {
         // Get all currently visible nodes
         const allNodes = this.g6Graph.getNodeData();
 
-        // Find leaf nodes (nodes that are visible but not yet expanded)
+        // Find leaf nodes (nodes that are visible but not yet expanded) that
+        // still need a count: skip anything already cached or in flight so we
+        // never refetch.
         const expandedNodeIds = new Set(this.expansions.map(e => e.id));
-        const leafNodes = allNodes.filter(node => !expandedNodeIds.has(node.id));
+        const leafNodes = allNodes.filter(node =>
+          !expandedNodeIds.has(node.id) &&
+          this.neighborCounts[node.id] === undefined &&
+          !this.neighborCountsLoading.has(node.id)
+        );
+        if (leafNodes.length === 0) {
+          return;
+        }
 
-        // Count neighbors for all leaf nodes asynchronously
-        // Don't await - let this run in the background
+        // Group leaf nodes by their node table + primary-key column so each
+        // batched query has a single consistent table and pk name. Leaf nodes
+        // can span multiple node tables (one group -> M queries each).
+        const groups = new Map();
+        leafNodes.forEach(node => {
+          try {
+            const { tableName, primaryKeyName, primaryKeyValue } = this.getInfoForExpansion(node);
+            const groupKey = tableName;
+            if (!groups.has(groupKey)) {
+              groups.set(groupKey, { tableName, primaryKeyName, entries: [] });
+            }
+            groups.get(groupKey).entries.push({ nodeId: node.id, primaryKeyValue });
+            this.neighborCountsLoading.add(node.id);
+          } catch (e) {
+            console.error("Failed to resolve node for neighbor count:", e);
+          }
+        });
+
+        // Fire one batched fetch per node-table group; within a group the
+        // fetcher issues one query per rel type covering ALL nodes in the
+        // group. Total requests scale with (groups x rel types), independent of
+        // the number of leaf nodes. Runs in the background.
         Promise.all(
-          leafNodes.map(node => this.countNewNeighbors(node.id))
+          Array.from(groups.values()).map(async group => {
+            try {
+              const neighborsByPk = await NeighborsFetcher.fetchNeighborNodesBatched({
+                tableName: group.tableName,
+                primaryKeyName: group.primaryKeyName,
+                primaryKeyValues: group.entries.map(e => e.primaryKeyValue),
+                relTables: this.schema.relTables,
+                isWasm: this.modeStore.isWasm,
+              });
+
+              group.entries.forEach(entry => {
+                const neighborNodes = neighborsByPk[String(entry.primaryKeyValue)] || [];
+                const newCount = this.countNewNeighborNodes(neighborNodes);
+                this.recordNeighborCount(entry.nodeId, newCount);
+              });
+            } catch (e) {
+              console.error("Failed to fetch batched neighbor counts:", e);
+              // Populate a zero count so readers don't spin forever.
+              group.entries.forEach(entry => {
+                if (this.neighborCounts[entry.nodeId] === undefined) {
+                  this.neighborCounts[entry.nodeId] = 0;
+                }
+              });
+            } finally {
+              group.entries.forEach(entry => this.neighborCountsLoading.delete(entry.nodeId));
+            }
+          })
         ).catch(e => {
           console.error("Error updating neighbor counts:", e);
         });
