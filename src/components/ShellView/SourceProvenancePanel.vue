@@ -27,18 +27,11 @@
 </template>
 
 <script>
-// A list-valued property may arrive as an actual array or as a string
-// representation like "['psc', 'companies_house']".
-function parseArrayValue(value) {
-  if (Array.isArray(value)) {
-    return value;
-  }
-  if (typeof value === 'string' && value !== 'NULL') {
-    const cleaned = value.replace(/[\[\]'"]/g, '');
-    return cleaned.split(',').map(s => s.trim()).filter(s => s);
-  }
-  return [];
-}
+import {
+  parseListValue,
+  countRecordsBySystem,
+  sourceSystemDisplayName,
+} from "../../utils/DisplayPolicy";
 
 export default {
   name: "SourceProvenancePanel",
@@ -66,36 +59,17 @@ export default {
         return [];
       }
 
-      const sources = parseArrayValue(sourceProp.value);
+      const sources = parseListValue(sourceProp.value);
 
-      // Count records per system from the source_records ids, which are
-      // prefixed "system:..." — note the prefix spells systems with hyphens
-      // ("companies-house") where source_systems uses underscores.
+      // Count records per system from the source_records ids.
       const recordsProp = this.properties.find(p => p.name === 'source_records');
-      const recordCounts = {};
-      parseArrayValue(recordsProp && recordsProp.value).forEach(record => {
-        const system = String(record).split(':')[0].replace(/-/g, '_');
-        recordCounts[system] = (recordCounts[system] || 0) + 1;
-      });
+      const recordCounts = countRecordsBySystem(recordsProp && recordsProp.value);
 
       // Map source system names to display names
       const sourceMap = {};
       sources.forEach(source => {
-        let sourceType = 'Unknown';
-
-        switch (source) {
-          case 'companies_house':
-            sourceType = 'Companies House';
-            break;
-          case 'psc':
-            sourceType = 'PSC Register';
-            break;
-          case 'icij':
-            sourceType = 'ICIJ Offshore Leaks';
-            break;
-          default:
-            sourceType = source; // Show the raw value if unknown
-        }
+        // Unknown systems show their raw value.
+        const sourceType = sourceSystemDisplayName(source);
 
         if (!sourceMap[sourceType]) {
           sourceMap[sourceType] = 0;

@@ -108,59 +108,11 @@
 
 <script>
 import NeighborsFetcher from "../../utils/NeighborsFetcher";
-
-// Relationship label mapping based on edge type and direction
-const RELATIONSHIP_LABELS = {
-  PersonOwnership: { forward: 'Owner', reverse: 'Owned by' },
-  CorporateOwnership: { forward: 'Owner', reverse: 'Owned by' },
-  PersonInfluence: { forward: 'Controls', reverse: 'Controlled by' },
-  CorporateInfluence: { forward: 'Controls', reverse: 'Controlled by' },
-  RegisteredAddress: { forward: 'Registered at', reverse: 'Registered Address' },
-  CorrespondenceAddress: { forward: 'Correspondence at', reverse: 'Correspondence Address' },
-  // Match candidates (entity <-> VirtualHub); neutral copy, deliberately
-  // distinct from the confirmed relationship labels above
-  PersonAmbiguousLink: { forward: 'Possible match', reverse: 'Possible match' },
-  CompanyAmbiguousLink: { forward: 'Possible match', reverse: 'Possible match' },
-  AddressAmbiguousLink: { forward: 'Possible match', reverse: 'Possible match' },
-};
-
-// Display labels for entity types
-const ENTITY_DISPLAY_LABELS = {
-  Person: 'People',
-  Company: 'Companies',
-  Address: 'Addresses',
-  VirtualHub: 'Possible Matches',
-};
-
-// PSC nature-of-control bands arrive as strings like "25-to-50-percent";
-// render as "25–50%". Unrecognised values pass through verbatim.
-function formatShareValue(raw) {
-  const value = String(raw).trim();
-  const bandMatch = value.match(/^(\d+)-to-(\d+)-percent$/);
-  if (bandMatch) {
-    return `${bandMatch[1]}–${bandMatch[2]}%`;
-  }
-  if (/^\d+(\.\d+)?$/.test(value)) {
-    return `${value}%`;
-  }
-  return value;
-}
-
-// Ownership share lives inside the rel's `sources` STRUCT array (one entry
-// per contributing source record). An edge can carry several entries with
-// differing bands (multi-source convergence), so show the distinct set.
-function extractOwnershipShare(rel) {
-  if (!Array.isArray(rel.sources)) {
-    return null;
-  }
-  const values = rel.sources
-    .map(source => source && source.percentage)
-    .filter(value => value !== null && value !== undefined && value !== '');
-  if (values.length === 0) {
-    return null;
-  }
-  return [...new Set(values.map(formatShareValue))].join(', ');
-}
+import {
+  relationshipRoleLabel,
+  entityGroupLabel,
+  extractOwnershipShare,
+} from "../../utils/DisplayPolicy";
 
 export default {
   name: "ConnectedEntitiesPanel",
@@ -217,7 +169,7 @@ export default {
         if (!groups[entity.label]) {
           groups[entity.label] = {
             label: entity.label,
-            displayLabel: ENTITY_DISPLAY_LABELS[entity.label] || entity.label,
+            displayLabel: entityGroupLabel(entity.label),
             entities: [],
           };
         }
@@ -383,16 +335,13 @@ export default {
         if (seenKeys.has(seenKey)) return;
         seenKeys.add(seenKey);
 
-        // Determine relationship direction and label
-        const labelMapping = RELATIONSHIP_LABELS[edgeLabel] || { forward: edgeLabel, reverse: edgeLabel };
-
         // Check direction: _src/_id hold numeric {table, offset} internal ids,
         // so compare against the neighbor node — if the neighbor is the edge
         // source, the clicked node is the target (reverse)
         const neighborIsSource = rel._src
           && rel._src.table === node._id.table
           && rel._src.offset === node._id.offset;
-        const relationshipLabel = neighborIsSource ? labelMapping.reverse : labelMapping.forward;
+        const relationshipLabel = relationshipRoleLabel(edgeLabel, { reverse: neighborIsSource });
 
         // Check if node is already in the graph
         let inGraph = false;

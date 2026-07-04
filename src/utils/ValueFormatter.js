@@ -1,6 +1,6 @@
 import Moment from "moment";
 import { DATA_TYPES } from "./Constants";
-import { nodeTypeDisplayName, relTypeDisplayName } from "./DisplayLabels";
+import { nodeTypeDisplayName, relTypeDisplayName } from "./DisplayPolicy";
 
 class ValueFormatter {
   constructor() {

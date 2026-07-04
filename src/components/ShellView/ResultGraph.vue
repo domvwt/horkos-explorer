@@ -380,7 +380,11 @@ import ConnectedEntitiesPanel from "./ConnectedEntitiesPanel.vue";
 import ConfidenceIndicator from "./ConfidenceIndicator.vue";
 import ResultDisclaimer from "./ResultDisclaimer.vue";
 import g6Utils from '../../utils/G6Utils';
-import { nodeTypeDisplayName, relTypeDisplayName } from "../../utils/DisplayLabels";
+import {
+  nodeTypeDisplayName,
+  relTypeDisplayName,
+  hideInternalProperties
+} from "../../utils/DisplayPolicy";
 import Axios from "@/utils/AxiosWrapper";
 import { createGraphConfig, getLayoutConfig } from "./graphConfig";
 import { parseStableKey } from "@/utils/InvestigationState";
@@ -508,12 +512,10 @@ export default {
       return this.clickedLabel;
     },
     displayProperties() {
-      // quality_level / quality_concerns stay in clickedProperties for the
-      // confidence indicator to read, but are shown there rather than as raw rows.
-      // The entity/relationship type row is shown as the header badge instead.
-      return this.clickedProperties.filter(
-        p => p.name !== 'quality_level' && p.name !== 'quality_concerns' && !p.isLabel
-      );
+      // Internal fields stay in clickedProperties for the confidence indicator
+      // to read, but are hidden from the raw rows. The entity/relationship type
+      // row is shown as the header badge instead, so drop the label row too.
+      return hideInternalProperties(this.clickedProperties, { dropLabel: true });
     },
     clickedTypeDisplayName() {
       if (!this.clickedLabel) {

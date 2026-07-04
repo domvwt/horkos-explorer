@@ -35,6 +35,8 @@
 </template>
 
 <script>
+import { QUALITY_LEVEL_FIELD } from "../../utils/DisplayPolicy";
+
 export default {
   name: "ConfidenceIndicator",
   props: {
@@ -54,7 +56,7 @@ export default {
     // clickedProperties (so this panel can read it) but hidden from the raw
     // Properties list; here it becomes the human-facing confidence band.
     band() {
-      const prop = this.properties.find(p => p.name === 'quality_level');
+      const prop = this.properties.find(p => p.name === QUALITY_LEVEL_FIELD);
       const value = prop ? prop.value : null;
       // Beautified NULLs arrive as the string "NULL"; treat as absent.
       if (value === null || value === undefined || value === '' || value === 'NULL') {

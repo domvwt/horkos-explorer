@@ -16,7 +16,7 @@
 import G6Utils from "./G6Utils";
 import ValueFormatter from "./ValueFormatter";
 import { DATA_TYPES, LOOP_POSITIONS, ARC_CURVE_OFFSETS } from "./Constants";
-import { NODE_TYPE_DISPLAY_NAMES, relTypeDisplayName } from "./DisplayLabels";
+import { NODE_TYPE_DISPLAY_NAMES, relTypeDisplayName } from "./DisplayPolicy";
 
 /**
  * Encode a Kuzu internal ID to a string suitable for G6 node/edge IDs

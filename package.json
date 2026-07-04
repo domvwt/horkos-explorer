@@ -14,6 +14,8 @@
     "eslint": "eslint --ext .js,.vue src",
     "eslint-fix": "eslint --ext .js,.vue src --fix",
     "check-cypher-parser-sync": "node src/server/middleware/cypher-parser/check-sync.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "test-security": "bash scripts/test-security.sh"
   },
   "dependencies": {
@@ -63,6 +65,7 @@
     "sass": "^1.66.1",
     "sass-loader": "^13.3.2",
     "typescript": "^5.2.2",
+    "vitest": "^4.1.9",
     "webpack": "^5.88.2"
   },
   "eslintConfig": {

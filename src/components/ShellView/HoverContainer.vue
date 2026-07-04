@@ -35,6 +35,7 @@
 import { useSettingsStore } from "../../store/SettingsStore";
 import { mapStores } from 'pinia'
 import ValueFormatter from "../../utils/ValueFormatter";
+import { hideInternalProperties } from "../../utils/DisplayPolicy";
 
 export default {
   props: {
@@ -65,9 +66,11 @@ export default {
       const label = data.properties._label;
       this.hoveredLabel = label;
       // Internal resolver fields; the side panel presents these via the
-      // confidence chip instead of raw values.
-      this.hoveredProperties = ValueFormatter.filterAndBeautifyProperties(data.properties, this.schema)
-        .filter(p => p.name !== 'quality_level' && p.name !== 'quality_concerns');
+      // confidence chip instead of raw values. Hidden here too so the tooltip
+      // never leaks them. The synthetic type row is kept (unlike the side panel).
+      this.hoveredProperties = hideInternalProperties(
+        ValueFormatter.filterAndBeautifyProperties(data.properties, this.schema)
+      );
       this.hoveredIsNode = !(data.properties._src && data.properties._dst);
       this.showTooltip(event);
     },
