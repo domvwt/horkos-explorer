@@ -81,13 +81,15 @@ export TRUST_PROXY=1                      # How many reverse-proxy hops to trust
 export TRUST_PROXY_HOPS=1                 # Explicit hop count used when TRUST_PROXY is unset/true (default: 1)
 
 # Security headers (helmet)
-export CSP_REPORT_ONLY=true              # CSP enforce-vs-report mode (default: true). When true, the
-                                          # Content-Security-Policy is emitted as report-only (browser reports
-                                          # violations but does not block) so a mis-derived policy cannot break
-                                          # the query UI. Set to false to switch to the enforcing CSP header
-                                          # AFTER validating the app in a browser. All other helmet headers
-                                          # (HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy)
-                                          # are always enforced regardless of this flag.
+export CSP_REPORT_ONLY=false             # CSP enforce-vs-report mode. In-code default when UNSET is true
+                                          # (report-only) so a bare node run is fail-safe; the production
+                                          # Docker image sets this to false to ship the CSP ENFORCING, since
+                                          # the policy was validated against the real frontend (Monaco/WASM/
+                                          # G6/Bootstrap) with no violations. When true, the CSP is emitted as
+                                          # report-only (browser reports violations but does not block) — use
+                                          # that to re-validate after a frontend change. All other helmet
+                                          # headers (HSTS, X-Frame-Options, X-Content-Type-Options,
+                                          # Referrer-Policy) are always enforced regardless of this flag.
 
 # Rate limiting configuration (optional, defaults shown)
 export RATE_LIMIT_WINDOW_MS=60000        # Time window in ms (default: 60000 = 1 minute)

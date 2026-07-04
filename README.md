@@ -137,24 +137,27 @@ As defence-in-depth, the Express app mounts [`helmet`](https://helmetjs.github.i
 - `Strict-Transport-Security` (HSTS) — safe behind nginx-terminated TLS even when the app is served over plain HTTP, because browsers only honour HSTS received over HTTPS.
 - `Content-Security-Policy` — restricts resource loading to what the frontend actually needs (same-origin scripts plus `wasm-unsafe-eval` for the DuckDB/Kuzu WASM modules, same-origin/blob Web Workers for Monaco/DuckDB, inline styles for Bootstrap/Monaco).
 
-The CSP defaults to **report-only** mode, controlled by the `CSP_REPORT_ONLY` environment variable:
+The production image ships the CSP in **enforcing** mode (`CSP_REPORT_ONLY=false`),
+controlled by the `CSP_REPORT_ONLY` environment variable. The policy was validated
+against the real frontend (Monaco editor + workers, DuckDB/Kuzu WASM, Bootstrap
+inline styles, G6 graph) with no violations, so the browser blocks anything the
+policy forbids rather than only reporting it. (The in-code default when the variable
+is unset is report-only, so a bare `node` run outside the image is fail-safe.)
 
 ```bash
-# CSP report-only (default): browser reports violations but does NOT block,
-# so a mis-derived policy cannot break the query UI. Recommended until you have
-# validated the app in a browser under the real policy.
+# Default image: CSP enforced.
 docker run -p 8000:8000 \
            -v {path to the directory containing the database file}:/database \
            -e KUZU_FILE={database file name} \
            --rm kuzudb/explorer:latest
 
-# Switch the CSP to enforcing mode AFTER validating the UI works
-# (Monaco editor + G6 graph + Bootstrap render correctly with no CSP
-# violations reported in the browser console):
+# Fall back to report-only if a frontend change needs re-validating: the browser
+# reports CSP violations to the console but does NOT block, so a mis-derived
+# policy cannot break the query UI while you check it.
 docker run -p 8000:8000 \
            -v {path to the directory containing the database file}:/database \
            -e KUZU_FILE={database file name} \
-           -e CSP_REPORT_ONLY=false \
+           -e CSP_REPORT_ONLY=true \
            --rm kuzudb/explorer:latest
 ```
 

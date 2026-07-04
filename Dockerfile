@@ -58,5 +58,12 @@ ENV DISABLE_SESSION_DB=true
 ENV KUZU_QUERY_TIMEOUT=30000
 ENV KUZU_QUERY_SIZE_LIMIT=10000
 
+# Ship the Content-Security-Policy in enforcing mode. The derived policy was
+# validated against the real frontend (Monaco workers, DuckDB/Kuzu WASM,
+# Bootstrap inline styles, G6 data:/blob: images) with no violations, so the
+# browser should enforce it rather than only report. Set CSP_REPORT_ONLY=true
+# to fall back to report-only if a future frontend change needs re-validating.
+ENV CSP_REPORT_ONLY=false
+
 # Run app
 ENTRYPOINT ["node", "src/server/index.js"]
