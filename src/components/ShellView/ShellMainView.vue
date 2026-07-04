@@ -74,10 +74,27 @@ export default {
     isDemo: false,
     maximizedCellIndex: -1,
     isRestoringInvestigation: false,
+    isDemoCellFinalized: false,
+    demoCellQuery: "",
   }),
   computed: {
     isReadOnly() {
       return this.modeStore.isReadOnly;
+    },
+  },
+
+  watch: {
+    // The schema often arrives asynchronously after this component mounts
+    // (MainLayout fetches /api/schema in its own mounted() hook). If the
+    // demo cell was first populated with the schema-less fallback query,
+    // upgrade it once the schema becomes available so it can target a
+    // concrete relationship type - but only if the user hasn't edited the
+    // cell in the meantime (upgradeDemoCell does the pristine check).
+    schema(newSchema) {
+      if (!newSchema || this.isDemoCellFinalized) {
+        return;
+      }
+      this.upgradeDemoCell();
     },
   },
 
@@ -177,14 +194,82 @@ export default {
         this.shellCell.unshift(cell);
       }
     },
+    // Build a demo query from the loaded schema so it targets a single,
+    // concrete relationship type. A wildcard `MATCH (a)-[r]->(b) RETURN *`
+    // spanning every relationship table can fail on graphs where different
+    // rel tables have divergent property (STRUCT) shapes, since Kuzu then
+    // has to cast/union them into one result shape. Deriving the query from
+    // the first relationship table in the schema avoids that entirely, and
+    // keeps the demo schema-agnostic (no hardcoded rel type name). If no
+    // schema/relTables are available yet, fall back to a node-only query,
+    // which can never hit the cross-type cast.
+    buildDemoQuery() {
+      const relType = this.schema && this.schema.relTables && this.schema.relTables[0]
+        ? this.schema.relTables[0].name
+        : null;
+      // Only build the single-type query when the first rel table actually
+      // has a non-empty name; a malformed schema payload would otherwise
+      // produce `[r:undefined]`. In that case fall back to the node-only
+      // query, which can never hit the cross-type cast either.
+      if (relType) {
+        return `// Query to retrieve 5 "${relType}" relationships from the graph.
+// ▶️ Run this query by clicking the play button or pressing Shift + Enter.
+MATCH (a)-[r:${relType}]->(b) RETURN a, r, b LIMIT 5;`;
+      }
+      return `// Query to retrieve 5 nodes from the graph.
+// ▶️ Run this query by clicking the play button or pressing Shift + Enter.
+MATCH (n) RETURN n LIMIT 5;`;
+    },
+    // Whether the schema is loaded enough to derive the single-rel-type demo
+    // query (as opposed to the node-only fallback). Used to decide when the
+    // demo query is final and no further upgrade is needed.
+    hasSchemaForDemo() {
+      return !!(this.schema && this.schema.relTables && this.schema.relTables[0] && this.schema.relTables[0].name);
+    },
+    // Read the demo cell's current editor buffer, or null if unavailable.
+    // There is no higher-level getter for a single cell's live text, so we
+    // reach through the cell -> CypherEditor -> Monaco instance directly.
+    getDemoCellText() {
+      const cell = this.$refs[this.getCellRef(0)] && this.$refs[this.getCellRef(0)][0];
+      const monaco = cell && cell.$refs.editor && cell.$refs.editor.editor;
+      return monaco ? monaco.getValue() : null;
+    },
+    writeDemoCell(query) {
+      const cell = this.$refs[this.getCellRef(0)] && this.$refs[this.getCellRef(0)][0];
+      if (!cell) {
+        return;
+      }
+      cell.loadEditorFromHistory({ cypherQuery: query });
+      // Remember exactly what we wrote so a later schema-arrival upgrade can
+      // tell whether the user has since edited the cell (see watch.schema).
+      this.demoCellQuery = query;
+      // Once the query is derived from a real schema it is final: stop
+      // re-deriving it on subsequent schema updates (e.g. reloadSchema()).
+      if (this.hasSchemaForDemo()) {
+        this.isDemoCellFinalized = true;
+      }
+    },
     loadDemoCell() {
       this.$nextTick(() => {
-        const cell = this.$refs[this.getCellRef(0)][0]
-        cell.loadEditorFromHistory({
-          cypherQuery: `// Query to retrieve 5 relationships from the graph.
-// ▶️ Run this query by clicking the play button or pressing Shift + Enter.
-MATCH (a)-[r]->(b) RETURN * LIMIT 5;`,
-        });
+        this.writeDemoCell(this.buildDemoQuery());
+      });
+    },
+    // Called when the schema arrives after the demo cell was first populated
+    // with the node-only fallback. Upgrade the fallback to the single-rel-type
+    // query, but ONLY if the cell is still pristine (its buffer still equals
+    // exactly the fallback text we wrote). If the user has typed anything, we
+    // must not clobber their input: skip the overwrite and finalize so the
+    // watcher stops firing.
+    upgradeDemoCell() {
+      this.$nextTick(() => {
+        const current = this.getDemoCellText();
+        const isPristine = current !== null && current === this.demoCellQuery;
+        if (isPristine) {
+          this.writeDemoCell(this.buildDemoQuery());
+        } else {
+          // User has edited (or the buffer is unreadable) - leave it alone.
+          this.isDemoCellFinalized = true;
+        }
       });
     },
     maximize(index) {
