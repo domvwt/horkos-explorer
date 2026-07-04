@@ -349,6 +349,30 @@ test_gpt_endpoint_disabled() {
     fi
 }
 
+# Fail-closed in-code defaults: when MODE / KUZU_QUERY_SIZE_LIMIT /
+# KUZU_QUERY_TIMEOUT are UNSET, the server must still fall back to the SAFE value
+# (READ_ONLY / 10000 rows / 30000ms) rather than the old fail-open behaviour, so
+# safety survives a dropped Dockerfile ENV.
+#
+# These assertions require booting the server WITHOUT those env vars, which the
+# single-instance suite here cannot do mid-run. They are documented for an
+# env-matrix harness (boot one instance per case) and are NOT wired into main():
+#
+#   1. MODE unset            -> GET /api/mode reports READ_ONLY (not READ_WRITE)
+#   2. MODE="" / whitespace  -> READ_ONLY
+#   3. MODE=garbage          -> READ_ONLY (fails closed, no crash)
+#   4. MODE unset            -> a CREATE/DROP/DELETE is rejected (READ_ONLY validation active)
+#   5. MODE=READ_WRITE       -> /api/mode reports READ_WRITE (operator raise-path intact)
+#   6. KUZU_QUERY_SIZE_LIMIT unset -> broad MATCH capped at 10000 rows
+#   7. KUZU_QUERY_SIZE_LIMIT=0/neg -> falls back to 10000 (not unbounded)
+#   8. KUZU_QUERY_SIZE_LIMIT=50000 -> operator raise-path works (cap honored above default)
+#   9. KUZU_QUERY_TIMEOUT unset -> startup log shows "Query timeout: 30000 ms"
+#
+# When run against an instance that ITSELF booted with these unset, the existing
+# test_access_mode (mode==READ_ONLY) and test_resource_guards (10000-row cap)
+# already exercise cases 1 and 6 — so a CI job that starts the server with no
+# MODE/limit env and runs this suite validates the fail-closed defaults directly.
+
 # Print summary
 print_summary() {
     print_header "Test Summary"

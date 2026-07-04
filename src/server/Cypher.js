@@ -12,8 +12,18 @@ try {
 
 const DEMO_MODE = MODES.DEMO;
 
-let querySizeLimit = parseInt(process.env.KUZU_QUERY_SIZE_LIMIT);
-querySizeLimit = isNaN(querySizeLimit) ? null : querySizeLimit;
+// Fail-closed default: if KUZU_QUERY_SIZE_LIMIT is unset or invalid, results are
+// still hard-capped to a finite number of rows so a broad MATCH cannot stream the
+// whole graph (exfiltration). Operators can raise the cap via the env var.
+const DEFAULT_QUERY_SIZE_LIMIT = 10000;
+
+const parsedQuerySizeLimit = parseInt(process.env.KUZU_QUERY_SIZE_LIMIT);
+// Treat unset / non-numeric / zero / negative as invalid and fall back to the
+// safe default, so the cap loop in processSingleResult always runs.
+const querySizeLimit =
+  !isNaN(parsedQuerySizeLimit) && parsedQuerySizeLimit > 0
+    ? parsedQuerySizeLimit
+    : DEFAULT_QUERY_SIZE_LIMIT;
 if (querySizeLimit) {
   logger.info(`Query size limit: ${querySizeLimit}`);
 }

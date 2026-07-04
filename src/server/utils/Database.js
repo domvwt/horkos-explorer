@@ -10,6 +10,11 @@ const CONSTANTS = require("./Constants");
 const MODES = CONSTANTS.MODES;
 const READ_WRITE_MODE = MODES.READ_WRITE;
 
+// Fail-closed default: if KUZU_QUERY_TIMEOUT is unset or invalid, every pooled
+// connection still gets a finite per-query wall-clock timeout so a single query
+// cannot run indefinitely (DoS). Operators can raise/lower it via the env var.
+const DEFAULT_QUERY_TIMEOUT_MS = 30000;
+
 let kuzu;
 // Try submodule build first (local dev), fall back to node_modules (Docker)
 const submodulePath = path.join(
@@ -91,10 +96,14 @@ class Database {
     logger.info(
       `Access mode: ${isReadOnlyMode ? MODES.READ_ONLY : MODES.READ_WRITE}`
     );
-    const queryTimeout = parseInt(process.env.KUZU_QUERY_TIMEOUT);
-    if (!isNaN(queryTimeout)) {
-      logger.info(`Query timeout: ${queryTimeout} ms`);
-    }
+    const parsedQueryTimeout = parseInt(process.env.KUZU_QUERY_TIMEOUT);
+    // Treat unset / non-numeric / zero / negative as invalid and fall back to
+    // the safe finite default, so this.queryTimeout is always a positive number.
+    const queryTimeout =
+      !isNaN(parsedQueryTimeout) && parsedQueryTimeout > 0
+        ? parsedQueryTimeout
+        : DEFAULT_QUERY_TIMEOUT_MS;
+    logger.info(`Query timeout: ${queryTimeout} ms`);
     this.bufferPoolSize = bufferPoolSize;
     this.isReadOnlyMode = isReadOnlyMode;
     this.numberConnections = numberConnections;
@@ -121,9 +130,9 @@ class Database {
         useCount: 0,
         id: i,
       };
-      if (!isNaN(this.queryTimeout)) {
-        conn.connection.setQueryTimeout(this.queryTimeout);
-      }
+      // this.queryTimeout is always a finite positive number (see constructor),
+      // so every pooled connection gets a query timeout by default.
+      conn.connection.setQueryTimeout(this.queryTimeout);
       this.connectionPool.push(conn);
     }
   }
@@ -133,14 +142,23 @@ class Database {
   }
 
   getAccessModeString() {
-    if (!process.env.MODE) {
+    const rawMode = (process.env.MODE || "").trim();
+    if (!rawMode) {
       logger.warn(
-        "MODE environment variable not set, defaulting to READ_WRITE. " +
-        "The database will be opened writable and query validation will not block write operations."
+        "MODE environment variable not set, defaulting to READ_ONLY for safety. " +
+        "Set MODE=READ_WRITE explicitly to open the database writable and allow write operations."
       );
-      return READ_WRITE_MODE;
+      return MODES.READ_ONLY;
     }
-    return process.env.MODE.toUpperCase();
+    const mode = rawMode.toUpperCase();
+    if (!Object.prototype.hasOwnProperty.call(MODES, mode)) {
+      logger.warn(
+        `Unrecognised MODE value "${process.env.MODE}", defaulting to READ_ONLY for safety. ` +
+        "Valid values are DEMO, READ_ONLY, READ_WRITE."
+      );
+      return MODES.READ_ONLY;
+    }
+    return mode;
   }
 
   getDb() {

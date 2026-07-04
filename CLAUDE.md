@@ -46,7 +46,10 @@ export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 export PATH=$JAVA_HOME/bin:$PATH
 
 # Database configuration
-export MODE=READ_ONLY                                         # Force read-only mode (recommended)
+export MODE=READ_ONLY                                         # Access mode. If MODE is unset/empty or unrecognised, the
+                                                             # server fails closed to READ_ONLY (safe default). To enable
+                                                             # writes (e.g. Importer/Reset in local dev) you MUST set
+                                                             # MODE=READ_WRITE explicitly; a bare run is read-only.
 export KUZU_DIR=/home/domvwt/projects/horkos/data            # Directory containing .kuzu database
 export KUZU_FILE=horkos_dev_pl_graph.kuzu                    # Database filename (use dev database for development)
 
