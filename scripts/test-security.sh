@@ -528,6 +528,91 @@ test_security_headers() {
 }
 # --- end TASK-100 ---
 
+# --- TASK-105: resource guards (DoS) + datasets route robustness ---
+# Confirmed live against the shipping READ_ONLY server during the TASK-105
+# adversarial sweep. These lock in the guardrails that bound a single
+# unauthenticated request's CPU/memory/response cost, plus the datasets
+# /files route crash discovered by the sweep.
+test_resource_guards() {
+    print_header "Testing Resource Guards (DoS bounds — TASK-105)"
+
+    # 1. Validator nesting-depth cap: a deeply-nested-paren query must be
+    #    REJECTED by the O(n) depth check BEFORE the expensive ANTLR parse,
+    #    so it returns fast (a bare ANTLR parse of depth 300+ freezes the
+    #    event loop for tens of seconds). We assert both: rejected AND fast.
+    print_test "Deeply-nested query rejected quickly (parser CPU-DoS cap)"
+    local nested start end elapsed_ms body
+    nested=$(printf 'RETURN %s1%s' "$(printf '(%.0s' $(seq 1 500))" "$(printf ')%.0s' $(seq 1 500))")
+    start=$(date +%s%3N)
+    body=$(curl -s -X POST "$SERVER_URL/api/cypher" \
+        -H "Content-Type: application/json" \
+        --data-binary "$(jq -nc --arg q "$nested" '{query:$q}')")
+    end=$(date +%s%3N)
+    elapsed_ms=$((end - start))
+    if echo "$body" | grep -q "QUERY_VALIDATION_FAILED" && [ "$elapsed_ms" -lt 1000 ]; then
+        print_pass "Depth-500 query rejected in ${elapsed_ms}ms (< 1000ms cap holds)"
+    else
+        print_fail "Depth-500 query not cheaply rejected (${elapsed_ms}ms): $(echo "$body" | head -c 120)"
+    fi
+
+    # 2. Result-size cap: a broad cartesian must be truncated at
+    #    KUZU_QUERY_SIZE_LIMIT rows (default 10000), not stream the whole graph.
+    print_test "Broad result set capped at row limit (no whole-graph exfiltration)"
+    local rows
+    rows=$(curl -s -X POST "$SERVER_URL/api/cypher" \
+        -H "Content-Type: application/json" \
+        --data-binary '{"query":"MATCH (a),(b) RETURN a.id, b.id"}' | jq -r '.rows | length' 2>/dev/null)
+    if [ -n "$rows" ] && [ "$rows" != "null" ] && [ "$rows" -le 10000 ]; then
+        print_pass "Result capped at ${rows} rows (<= 10000)"
+    else
+        print_fail "Result-size cap not enforced (rows=$rows)"
+    fi
+
+    # 3. JSON body-size limit: a body over JSON_BODY_LIMIT (default 1mb) must
+    #    be rejected with 413 before the handler runs.
+    print_test "Oversized JSON body rejected (413)"
+    local bigcode
+    bigcode=$(jq -nc --arg q "MATCH (n) RETURN n //$(printf 'A%.0s' $(seq 1 1200000))" '{query:$q}' \
+        | curl -s -o /dev/null -w "%{http_code}" -X POST "$SERVER_URL/api/cypher" \
+            -H "Content-Type: application/json" --data-binary @-)
+    if [ "$bigcode" = "413" ]; then
+        print_pass "Oversized body rejected with HTTP 413"
+    else
+        print_fail "Oversized body not rejected (got HTTP $bigcode, expected 413)"
+    fi
+}
+
+# Datasets /files/:file must not crash the process when the datasets directory
+# is absent (e.g. a SKIP_DATASETS=true slim image build). The sweep found that
+# an unguarded `await fs.readdir` on a KNOWN dataset name with a missing dir
+# throws an unhandled rejection that terminates the whole server (unauth DoS).
+# NOTE: run this LAST — on an unpatched server it kills the process, so any
+# test after it would spuriously fail against a dead server.
+test_datasets_route_robustness() {
+    print_header "Testing Datasets Route Robustness (unauth crash — TASK-105)"
+
+    local known probe_code alive_code
+    known=$(curl -s "$SERVER_URL/api/datasets" | jq -r '.[0] // empty' 2>/dev/null)
+    if [ -z "$known" ]; then
+        print_info "No datasets advertised (datasets feature absent) — skipping crash probe"
+        return
+    fi
+
+    print_test "GET /api/datasets/<known>/files/x does not crash the server"
+    # Fire the probe at a known dataset name; a missing datasets dir on disk is
+    # what triggers the unguarded readdir. Then confirm the server is STILL up.
+    probe_code=$(curl -s -o /dev/null -w "%{http_code}" \
+        "$SERVER_URL/api/datasets/$(jq -rn --arg s "$known" '$s|@uri')/files/probe")
+    sleep 1
+    alive_code=$(curl -s -o /dev/null -w "%{http_code}" "$SERVER_URL/api/mode")
+    if [ "$alive_code" = "200" ]; then
+        print_pass "Server survived the datasets /files probe (route returned $probe_code, /api/mode still 200)"
+    else
+        print_fail "Server CRASHED after datasets /files probe (/api/mode now $alive_code) — unguarded readdir DoS"
+    fi
+}
+# --- end TASK-105 ---
+
 # Main execution
 main() {
     echo -e "${BLUE}╔════════════════════════════════════════════╗${NC}"
@@ -549,6 +634,10 @@ main() {
     test_xff_spoofing  # TASK-102: uses its own fresh per-IP bucket (right-most XFF 10.0.0.1); independent of test_rate_limiting's budget
     test_security_headers  # TASK-100: security-headers presence check
     test_session_storage
+    test_resource_guards  # TASK-105: nesting-depth DoS cap, result-size cap, body-size 413
+    # MUST be last: on an unpatched server the datasets /files probe crashes the
+    # process, so any test after it would fail against a dead server.
+    test_datasets_route_robustness  # TASK-105: unauthenticated datasets /files readdir crash
     print_summary
 }
 
