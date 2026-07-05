@@ -119,6 +119,106 @@
             <i class="fa-solid fa-up-down-left-right" />
             Collapse Neighbors
           </button>
+
+          <button
+            class="btn btn-sm btn-outline-secondary"
+            :disabled="findConnectionInFlight"
+            @click="openConnectionPicker()"
+          >
+            <i class="fa-solid fa-route" />
+            Find connection to…
+          </button>
+        </div>
+
+        <!-- Find-connection picker: pick a second endpoint (a notebook pin or a
+             searched entity) to connect the selected node to. Esc or a click
+             outside closes it. -->
+        <div
+          v-if="clickedIsNode && showConnectionPicker"
+          ref="connectionPicker"
+          class="result-graph__connection-picker"
+        >
+          <div class="connection-picker__header">
+            <span>Connect to…</span>
+            <button
+              class="connection-picker__close"
+              title="Close"
+              @click="closeConnectionPicker()"
+            >
+              <i class="fa-solid fa-times" />
+            </button>
+          </div>
+
+          <div
+            v-if="connectionPinTargets().length > 0"
+            class="connection-picker__section"
+          >
+            <div class="connection-picker__section-title">From your notebook</div>
+            <ul class="connection-picker__list">
+              <li
+                v-for="pin in connectionPinTargets()"
+                :key="`pin-${pin.label}-${pin.pk}`"
+              >
+                <button
+                  class="connection-picker__item"
+                  @click="pickConnectionTarget(pin)"
+                >
+                  <span class="connection-picker__item-type">{{ pin.label }}</span>
+                  {{ pin.name }}
+                </button>
+              </li>
+            </ul>
+          </div>
+
+          <div
+            v-if="!connectionSearchUnavailable"
+            class="connection-picker__section"
+          >
+            <div class="connection-picker__section-title">Search for an entity</div>
+            <div class="connection-picker__search-row">
+              <select
+                v-model="connectionSearchType"
+                class="form-select form-select-sm connection-picker__type"
+                @change="onConnectionSearchInput()"
+              >
+                <option value="Person">Person</option>
+                <option value="Company">Company</option>
+                <option value="Address">Address</option>
+              </select>
+              <input
+                v-model="connectionSearchQuery"
+                type="text"
+                class="form-control form-control-sm"
+                placeholder="Type a name…"
+                autocomplete="off"
+                @input="onConnectionSearchInput()"
+              >
+            </div>
+            <ul
+              v-if="connectionSearchResults.length > 0"
+              class="connection-picker__list"
+            >
+              <li
+                v-for="hit in connectionSearchResults"
+                :key="`hit-${hit.label}-${hit.pk}`"
+              >
+                <button
+                  class="connection-picker__item"
+                  @click="pickConnectionTarget(hit)"
+                >
+                  <span class="connection-picker__item-type">{{ hit.label }}</span>
+                  {{ hit.name }}
+                </button>
+              </li>
+            </ul>
+          </div>
+
+          <p
+            v-if="connectionPinTargets().length === 0 && connectionSearchUnavailable"
+            class="connection-picker__empty"
+          >
+            Pin some entities in your notebook to connect to them.
+          </p>
         </div>
 
         <div v-if="displayLabel">
@@ -356,6 +456,51 @@
       :right-position="isSidePanelOpen ? sidebarWidth + 16 : 16"
       @dismiss="dismissToast"
     />
+
+    <!-- Connection-result action bar: shown after a find. On a hit it confirms
+         the hop count and notes the save name is ready in the notebook; on a
+         miss it offers a deeper search. Kept separate from GraphToast so the
+         plain info toast stays action-free. -->
+    <div
+      v-if="connectionResult"
+      class="result-graph__connection-result"
+      :style="{ right: (isSidePanelOpen ? sidebarWidth + 16 : 16) + 'px' }"
+    >
+      <div class="connection-result__body">
+        <template v-if="connectionResult.status === 'found'">
+          <i class="fa-solid fa-route" />
+          <span>
+            Connected in {{ connectionResult.hops }}
+            {{ connectionResult.hops === 1 ? 'step' : 'steps' }}.
+            <span class="connection-result__hint">
+              Save it from your notebook (name ready).
+            </span>
+          </span>
+        </template>
+        <template v-else>
+          <i class="fa-solid fa-circle-info" />
+          <span>No connection within {{ connectionResult.maxHops }} steps.</span>
+        </template>
+      </div>
+      <div class="connection-result__actions">
+        <button
+          v-if="connectionResult.status === 'no-path' && connectionResult.canDeepen"
+          class="btn btn-sm btn-outline-secondary"
+          :disabled="findConnectionInFlight"
+          @click="searchConnectionDeeper()"
+        >
+          <i class="fa-solid fa-magnifying-glass-plus" />
+          Search deeper
+        </button>
+        <button
+          class="connection-result__close"
+          title="Dismiss"
+          @click="dismissConnectionResult()"
+        >
+          <i class="fa-solid fa-times" />
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -372,6 +517,7 @@ import {
   extractGraphFromQueryResult
 } from "../../utils/GraphResultExtractor";
 import NeighborsFetcher from "../../utils/NeighborsFetcher";
+import PathFinder, { DEFAULT_MAX_HOPS, HARD_MAX_HOPS } from "../../utils/PathFinder";
 import { useSettingsStore } from "../../store/SettingsStore";
 import { useModeStore } from "../../store/ModeStore";
 import { useNotebookStore } from "../../store/NotebookStore";
@@ -405,6 +551,14 @@ export default {
     ConfidenceIndicator,
     ResultDisclaimer,
     EntityPinPanel
+  },
+  // Provided by MainLayout: pre-fills the notebook sidebar's save-view input
+  // after a successful find-connection. Optional (default no-op) so the graph
+  // still works if rendered outside MainLayout, e.g. in isolation/tests.
+  inject: {
+    prefillSaveViewName: {
+      default: () => () => {},
+    },
   },
   props: {
     queryResult: {
@@ -493,6 +647,23 @@ export default {
     isUndoRedoInProgress: false,
     // Re-entrancy guard for pin navigation (see handleSelectPinnedEntity).
     pinSelectInFlight: false,
+    // ---- Find-connection (shortest path between two entities) -----------
+    // Re-entrancy guard so a second find can't interleave a duplicate history
+    // entry while one is still running (mirrors pinSelectInFlight).
+    findConnectionInFlight: false,
+    // Node-panel picker: pick a second endpoint (a notebook pin or a searched
+    // entity) to connect the selected node to.
+    showConnectionPicker: false,
+    connectionSearchQuery: "",
+    connectionSearchType: "Person",
+    connectionSearchResults: [],
+    connectionSearchTimer: null,
+    connectionSearchRequestId: 0,
+    connectionSearchUnavailable: false,
+    // Lightweight result bar shown after a find: hop count + one-click save
+    // and (for a miss) search-deeper. { status, hops, maxHops, endpoints,
+    // canDeepen } or null when nothing to show.
+    connectionResult: null,
   }),
   computed: {
     graphVizSettings() {
@@ -780,6 +951,12 @@ export default {
     window.removeEventListener("mousemove", this.handleResizeMove);
     window.removeEventListener("mouseup", this.stopResize);
     window.removeEventListener('keydown', this.handleKeydown);
+    // Tear down any live find-connection picker dismissal listeners.
+    document.removeEventListener("keydown", this.onConnectionPickerKeydown);
+    document.removeEventListener("mousedown", this.onConnectionPickerClickAway, true);
+    if (this.connectionSearchTimer) {
+      window.clearTimeout(this.connectionSearchTimer);
+    }
   },
   methods: {
     copyToClipboard(text) {
@@ -2698,6 +2875,353 @@ export default {
     },
 
     /**
+     * Find the shortest connection between two entities and lay it on the
+     * canvas. Entry point for both the node-panel picker and the notebook
+     * sidebar's two-pin action; endpoints are { label, pk }.
+     *
+     * Runs the parameterised, hop-bounded SHORTEST-path query (PathFinder),
+     * distinguishing three outcomes:
+     *   - a path was found  -> merge it additively, highlight + focus the whole
+     *     path, toast the hop count, pre-fill the sidebar's save-view name,
+     *     record undo;
+     *   - no path within N hops -> clear message with a "search deeper" option
+     *     (re-run at the hard max), and no deepen option once already at the max;
+     *   - a query/network error -> its own toast (never masquerades as no-path).
+     *
+     * @param {{label:string, pk:*}} a  first endpoint
+     * @param {{label:string, pk:*}} b  second endpoint
+     * @param {number} [maxHops]  requested upper hop bound (defaults to 4)
+     */
+    async handleFindConnection(a, b, maxHops = DEFAULT_MAX_HOPS) {
+      if (this.findConnectionInFlight) {
+        return;
+      }
+      // Same-entity guard: nothing to connect. (The sidebar path also guards
+      // this, but the picker path reaches here directly.)
+      if (a && b && a.label === b.label && String(a.pk) === String(b.pk)) {
+        this.showToast("That's the same entity — pick a different one to connect to.", 4000);
+        return;
+      }
+      // Both labels must be real node tables before we interpolate them (params
+      // can't stand in for identifiers). Escaping in PathFinder keeps a stray
+      // value inert, but an unknown label can't produce a path anyway.
+      const validLabels = this.getValidNodeLabels();
+      if (!a || !b || !validLabels.has(a.label) || !validLabels.has(b.label)) {
+        this.showToast("Couldn't find a connection: unknown entity type.", 5000);
+        return;
+      }
+
+      this.findConnectionInFlight = true;
+      // Close the picker as soon as a find starts so it doesn't hover over the
+      // result.
+      this.closeConnectionPicker();
+      try {
+        let result;
+        try {
+          result = await PathFinder.findShortestPath({
+            labelA: a.label,
+            pkNameA: this.primaryKeyNameForLabel(a.label),
+            pkValueA: a.pk,
+            labelB: b.label,
+            pkNameB: this.primaryKeyNameForLabel(b.label),
+            pkValueB: b.pk,
+            maxHops,
+            isWasm: this.modeStore.isWasm,
+          });
+        } catch (e) {
+          // A DB / network error must never be reported as "no connection".
+          console.warn('Find-connection query failed:', e);
+          this.connectionResult = null;
+          this.showToast("Couldn't run the connection search — try again.", 5000);
+          return;
+        }
+
+        if (!result.found) {
+          // No path within the searched bound. Offer a deeper search unless we
+          // are already at the hard ceiling.
+          const canDeepen = result.maxHops < HARD_MAX_HOPS;
+          this.connectionResult = {
+            status: 'no-path',
+            hops: 0,
+            maxHops: result.maxHops,
+            endpoints: [a, b],
+            canDeepen,
+          };
+          this.showToast(
+            `No connection found within ${result.maxHops} steps.`,
+            canDeepen ? 6000 : 5000
+          );
+          return;
+        }
+
+        await this.addPathToCanvas(result, a, b);
+      } finally {
+        this.findConnectionInFlight = false;
+      }
+    },
+
+    /**
+     * Merge a found path onto the canvas, highlight and focus it, toast the hop
+     * count, record undo, and pre-fill the sidebar's save-view name so the path
+     * can be saved in one click. The path row is a RECURSIVE_REL (_nodes/_rels),
+     * which the existing graph extractor already handles — so it flows through
+     * addDataWithQueryResult exactly like any other result, additively.
+     */
+    async addPathToCanvas(result, a, b) {
+      // Seed an empty canvas if no query has ever run (same idiom as the pin
+      // navigation flow).
+      const isSeedingEmptyCanvas = !this.g6Graph;
+      if (isSeedingEmptyCanvas) {
+        await this.initializeEmptyGraph([]);
+        await this.$nextTick();
+      }
+
+      const nodesBefore = new Set((this.g6Graph?.getNodeData() || []).map(n => n.id));
+      const edgesBefore = new Set((this.g6Graph?.getEdgeData() || []).map(e => e.id));
+
+      // The recursive-path row keyed on the RETURN alias 'p'; the extractor
+      // keys on dataTypes[column] === 'RECURSIVE_REL'.
+      const queryResult = { rows: [result.row], dataTypes: result.dataTypes };
+      await this.addDataWithQueryResult(queryResult);
+
+      const nodesAfter = this.g6Graph ? (this.g6Graph.getNodeData() || []) : [];
+      const edgesAfter = this.g6Graph ? (this.g6Graph.getEdgeData() || []) : [];
+      const addedNodes = nodesAfter.filter(n => !nodesBefore.has(n.id));
+      const addedEdges = edgesAfter.filter(e => !edgesBefore.has(e.id));
+
+      // Record for undo. Reuse the established 'add-connected-node' command with
+      // a null source so the existing undo/redo path removes exactly these.
+      if (addedNodes.length > 0 || addedEdges.length > 0) {
+        this.historyManager.push({
+          type: 'add-connected-node',
+          data: {
+            sourceNodeId: null,
+            addedNodes: JSON.parse(JSON.stringify(addedNodes)),
+            addedEdges: JSON.parse(JSON.stringify(addedEdges)),
+          }
+        });
+      }
+
+      // Highlight the whole path (its nodes + edges) with the 'active' state and
+      // focus the viewport on it. The path's element ids are the encoded ids of
+      // its _nodes/_rels; some may already have been on the canvas, so resolve
+      // against what is actually present. Reset every other element first so a
+      // prior selection/highlight can't linger (same reset idiom the highlight-
+      // mode toggles use).
+      const pathIds = new Set(this.pathElementIds(result.row).filter(id => this.elementExists(id)));
+      const combined = {};
+      (this.g6Graph?.getNodeData() || []).forEach(n => {
+        combined[n.id] = pathIds.has(n.id) ? ['active'] : [];
+      });
+      (this.g6Graph?.getEdgeData() || []).forEach(e => {
+        combined[e.id] = pathIds.has(e.id) ? ['active'] : [];
+      });
+      await this.setElementState(combined);
+      const presentIds = [...pathIds];
+      if (presentIds.length > 0 && this.g6Graph) {
+        try {
+          // G6 v5 focusElement accepts an id array to frame multiple elements.
+          await this.g6Graph.focusElement(presentIds);
+        } catch (e) {
+          console.warn('Could not focus the connection path:', e);
+        }
+      }
+      // Clear the selected-node side panel: the whole path is the focus now, not
+      // a single node (mirrors addDataWithQueryResult clearing clickedId).
+      this.clickedId = null;
+
+      this.connectionResult = {
+        status: 'found',
+        hops: result.hops,
+        maxHops: result.maxHops,
+        endpoints: [a, b],
+        canDeepen: false,
+      };
+      const stepWord = result.hops === 1 ? 'step' : 'steps';
+      this.showToast(`Connected in ${result.hops} ${stepWord}.`, 5000);
+
+      // One-click save: pre-fill the notebook sidebar's save-view input with a
+      // suggested name so the user just clicks Save. Names are truncated so a
+      // long entity name can't produce an unwieldy view name. Does not expand a
+      // collapsed sidebar (the draft waits for it to open).
+      const suggestedName = `${this.shortEndpointName(a)} ↔ ${this.shortEndpointName(b)}`;
+      this.prefillSaveViewName(suggestedName);
+    },
+
+    /**
+     * Encoded G6 element ids (nodes + rels) of a recursive-path row, in path
+     * order. Pure over the row so highlight/focus target exactly the path.
+     */
+    pathElementIds(row) {
+      const path = row && row.p;
+      if (!path) return [];
+      const ids = [];
+      (path._nodes || []).forEach(n => { if (n && n._id) ids.push(encodeId(n._id)); });
+      (path._rels || []).forEach(r => { if (r && r._id) ids.push(encodeId(r._id)); });
+      return ids;
+    },
+
+    // getNodeData/getEdgeData THROW on an unknown id (graphlib) rather than
+    // returning null, so probe existence defensively.
+    elementExists(id) {
+      if (!this.g6Graph) return false;
+      try {
+        return Boolean(this.g6Graph.getNodeData(id));
+      } catch (e) {
+        try {
+          return Boolean(this.g6Graph.getEdgeData(id));
+        } catch (e2) {
+          return false;
+        }
+      }
+    },
+
+    /**
+     * Re-run the last no-path find at the hard-max hop bound. Wired to the
+     * "Search deeper" affordance on the no-path result bar.
+     */
+    searchConnectionDeeper() {
+      const r = this.connectionResult;
+      if (!r || r.status !== 'no-path' || !r.canDeepen) return;
+      const [a, b] = r.endpoints;
+      this.handleFindConnection(a, b, HARD_MAX_HOPS);
+    },
+
+    // Short, length-capped human label for an endpoint, used to build the
+    // suggested save-view name. Falls back to pk then label.
+    shortEndpointName(endpoint) {
+      if (!endpoint) return '';
+      const raw = String(endpoint.name || endpoint.pk || '').trim() || String(endpoint.label || '');
+      const MAX = 24;
+      return raw.length > MAX ? `${raw.slice(0, MAX - 1)}…` : raw;
+    },
+
+    dismissConnectionResult() {
+      this.connectionResult = null;
+    },
+
+    // ---- Node-panel "Find connection to…" picker -----------------------
+    // The picker is seeded with the active notebook's pins (the entities the
+    // user is already tracking) and a live entity search (same /api/suggest
+    // affordance NodeSearch uses). Picking a target runs handleFindConnection
+    // from the currently-selected node to that target.
+    openConnectionPicker() {
+      if (!this.clickedIsNode || !this.clickedId) return;
+      this.showConnectionPicker = true;
+      this.connectionSearchQuery = "";
+      this.connectionSearchResults = [];
+      // Default the search entity-type to the clicked node's type so the most
+      // likely target is one keystroke away.
+      if (this.getValidNodeLabels().has(this.clickedLabel)) {
+        this.connectionSearchType = this.clickedLabel;
+      }
+      // Esc / click-away dismissal (deferred so the opening click doesn't
+      // immediately count as a click-away).
+      this.$nextTick(() => {
+        document.addEventListener("keydown", this.onConnectionPickerKeydown);
+        document.addEventListener("mousedown", this.onConnectionPickerClickAway, true);
+      });
+    },
+    closeConnectionPicker() {
+      this.showConnectionPicker = false;
+      document.removeEventListener("keydown", this.onConnectionPickerKeydown);
+      document.removeEventListener("mousedown", this.onConnectionPickerClickAway, true);
+      if (this.connectionSearchTimer) {
+        window.clearTimeout(this.connectionSearchTimer);
+        this.connectionSearchTimer = null;
+      }
+    },
+    onConnectionPickerKeydown(e) {
+      if (e.key === "Escape") {
+        this.closeConnectionPicker();
+      }
+    },
+    onConnectionPickerClickAway(e) {
+      const el = this.$refs.connectionPicker;
+      // Ignore clicks inside the picker; anything else closes it. The
+      // "Find connection to…" button lives outside the picker, so re-clicking
+      // it after a click-away close re-opens cleanly.
+      if (el && !el.contains(e.target)) {
+        this.closeConnectionPicker();
+      }
+    },
+    // The clicked node as an endpoint { label, pk } — the fixed first end of
+    // every find started from the picker. Reads the RAW pk off the live node
+    // data (same source getInfoForExpansion uses for queries), not the
+    // display-beautified clickedProperties, so the value binds correctly.
+    clickedEndpoint() {
+      let pk = null;
+      try {
+        const nodeData = this.g6Graph ? this.g6Graph.getNodeData(this.clickedId) : null;
+        const props = nodeData && nodeData.data && nodeData.data.properties;
+        const pkName = this.primaryKeyNameForLabel(this.clickedLabel);
+        if (props && pkName) {
+          pk = props[pkName];
+        }
+      } catch (e) {
+        pk = null;
+      }
+      return { label: this.clickedLabel, pk, name: this.entityDisplayName };
+    },
+    // Notebook pins offered as connection targets, excluding the clicked node
+    // itself (you can't connect an entity to itself).
+    connectionPinTargets() {
+      const self = this.clickedEndpoint();
+      return this.notebookStore.pinnedEntities
+        .filter(
+          pin => !(pin.label === self.label && String(pin.pk) === String(self.pk))
+        )
+        .map(pin => ({ label: pin.label, pk: pin.pk, name: pin.name || pin.pk }));
+    },
+    onConnectionSearchInput() {
+      if (this.connectionSearchTimer) {
+        window.clearTimeout(this.connectionSearchTimer);
+      }
+      const q = (this.connectionSearchQuery || "").trim();
+      if (q.length < 2) {
+        this.connectionSearchResults = [];
+        return;
+      }
+      this.connectionSearchTimer = window.setTimeout(() => {
+        this.fetchConnectionSearch(q);
+      }, 250);
+    },
+    async fetchConnectionSearch(query) {
+      const requestId = ++this.connectionSearchRequestId;
+      try {
+        const response = await Axios.get("/api/suggest", {
+          params: { q: query, type: this.connectionSearchType, limit: 10 },
+        });
+        // Ignore stale responses so a slower earlier request can't clobber a
+        // newer one (same guard NodeSearch uses).
+        if (requestId !== this.connectionSearchRequestId) return;
+        this.connectionSearchResults = (response.data || [])
+          .filter(item => item.cluster_id)
+          .map(item => ({
+            label: this.connectionSearchType,
+            pk: item.cluster_id,
+            name: item.name || item.cluster_id,
+          }));
+      } catch (e) {
+        if (requestId !== this.connectionSearchRequestId) return;
+        // 404 => the autocomplete endpoint isn't configured; hide the search and
+        // fall back to pins only.
+        if (e.response && e.response.status === 404) {
+          this.connectionSearchUnavailable = true;
+        }
+        this.connectionSearchResults = [];
+      }
+    },
+    pickConnectionTarget(target) {
+      const self = this.clickedEndpoint();
+      if (self.pk == null) {
+        this.showToast("Couldn't identify the selected entity.", 4000);
+        return;
+      }
+      this.handleFindConnection(self, target);
+    },
+
+    /**
      * Group the nodes currently on the canvas by their (table, primary-key
      * column) so a batched rel fetch can bind one pk list per distinct table.
      * Returns [{ table, primaryKeyName, primaryKeyValues }].
@@ -4022,6 +4546,156 @@ export default {
 
     i {
       font-size: 0.875rem;
+    }
+  }
+}
+
+// ---- Find-connection picker (node side panel) --------------------------
+.result-graph__connection-picker {
+  margin: 0.5rem 0 0.75rem;
+  padding: 0.5rem;
+  border: 1px solid var(--bs-body-bg-accent);
+  border-radius: 0.375rem;
+  background-color: var(--bs-body-bg-secondary);
+
+  .connection-picker__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.8rem;
+    font-weight: 600;
+    margin-bottom: 0.4rem;
+    color: var(--bs-body-text);
+  }
+
+  .connection-picker__close {
+    background: none;
+    border: none;
+    color: var(--bs-body-text-secondary);
+    cursor: pointer;
+    padding: 0.1rem 0.25rem;
+    border-radius: 0.25rem;
+
+    &:hover {
+      background-color: var(--bs-body-bg-hover);
+      color: var(--bs-body-text);
+    }
+  }
+
+  .connection-picker__section + .connection-picker__section {
+    margin-top: 0.5rem;
+  }
+
+  .connection-picker__section-title {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    color: var(--bs-body-text-secondary);
+    margin-bottom: 0.25rem;
+  }
+
+  .connection-picker__search-row {
+    display: flex;
+    gap: 0.35rem;
+  }
+
+  .connection-picker__type {
+    max-width: 8rem;
+    flex: 0 0 auto;
+  }
+
+  .connection-picker__list {
+    list-style: none;
+    margin: 0.35rem 0 0;
+    padding: 0;
+    max-height: 12rem;
+    overflow-y: auto;
+  }
+
+  .connection-picker__item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    padding: 0.3rem 0.4rem;
+    border-radius: 0.25rem;
+    font-size: 0.8rem;
+    color: var(--bs-body-text);
+    cursor: pointer;
+
+    &:hover {
+      background-color: var(--bs-body-bg-hover);
+    }
+  }
+
+  .connection-picker__item-type {
+    display: inline-block;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    color: var(--bs-body-text-secondary);
+    margin-right: 0.35rem;
+  }
+
+  .connection-picker__empty {
+    font-size: 0.75rem;
+    color: var(--bs-body-text-secondary);
+    margin: 0.25rem 0 0;
+  }
+}
+
+// ---- Connection-result action bar --------------------------------------
+.result-graph__connection-result {
+  position: absolute;
+  top: 4.25rem; // sits just below the info toast
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 400px;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid var(--bs-body-bg-accent);
+  border-radius: 0.375rem;
+  background-color: var(--bs-body-bg-secondary);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+
+  .connection-result__body {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--bs-body-text);
+
+    i {
+      color: var(--bs-body-bg-accent);
+    }
+  }
+
+  .connection-result__actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .connection-result__hint {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--bs-body-text-secondary);
+    margin-top: 0.15rem;
+  }
+
+  .connection-result__close {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: var(--bs-body-text-secondary);
+    cursor: pointer;
+    padding: 0.125rem;
+    border-radius: 0.25rem;
+
+    &:hover {
+      background-color: var(--bs-body-bg-hover);
+      color: var(--bs-body-text);
     }
   }
 }

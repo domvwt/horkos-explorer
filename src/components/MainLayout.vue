@@ -62,6 +62,7 @@
         @select-entity="handleNotebookSelectEntity"
         @save-view="handleNotebookSaveView"
         @restore-view="handleNotebookRestoreView"
+        @find-connection="handleNotebookFindConnection"
       />
       <div class="main-layout__main-container">
         <div class="container-fluid">
@@ -217,6 +218,17 @@ export default {
     ImportModal,
     ShareModal,
     NotebookSidebar,
+  },
+  provide() {
+    return {
+      // Injected by a deeply-nested ResultGraph so a successful "find
+      // connection" can pre-fill the notebook sidebar's save-view input (a
+      // reverse path that avoids threading a prop through ShellCell /
+      // ResultContainer). Resolves the sidebar ref at call time.
+      prefillSaveViewName: (name) => {
+        this.$refs.notebookSidebar?.prefillViewName(name);
+      },
+    };
   },
   data: () => ({
     accessModeModal: null,
@@ -585,6 +597,11 @@ export default {
     handleNotebookRestoreView(view) {
       this.notebookDelegate("restore-view", (shell) =>
         shell?.restoreNotebookView(view)
+      );
+    },
+    handleNotebookFindConnection(endpoints) {
+      this.notebookDelegate("find-connection", (shell) =>
+        shell?.findNotebookConnection(endpoints)
       );
     },
     // Handle share investigation from header button

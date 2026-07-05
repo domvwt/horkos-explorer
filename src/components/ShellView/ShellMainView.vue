@@ -43,6 +43,7 @@ import {
   saveViewThroughCell,
   restoreViewThroughCell,
   selectEntityThroughCell,
+  findConnectionThroughCell,
 } from "@/utils/NotebookSidebarLogic";
 export default {
   name: "ShellMainView",
@@ -435,6 +436,12 @@ MATCH (n) RETURN n LIMIT 5;`;
     // Restore a saved view onto the active cell's canvas.
     restoreNotebookView(view) {
       return restoreViewThroughCell(this.activeResultGraph(), view);
+    },
+
+    // Find the shortest connection between two selected pins on the active
+    // cell's canvas (endpoints = [{label, pk}, {label, pk}]).
+    findNotebookConnection(endpoints) {
+      return findConnectionThroughCell(this.activeResultGraph(), endpoints);
     },
 
     /**

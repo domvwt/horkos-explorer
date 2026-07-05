@@ -125,7 +125,22 @@
               v-for="pin in notebookStore.pinnedEntities"
               :key="pin.key"
               class="notebook-sidebar__entity"
+              :class="{ 'notebook-sidebar__entity--selected': isPinSelected(pin.key) }"
             >
+              <button
+                class="notebook-sidebar__entity-toggle"
+                :class="{ 'is-selected': isPinSelected(pin.key) }"
+                :title="isPinSelected(pin.key)
+                  ? 'Unselect (for Find connection)'
+                  : 'Select for Find connection'"
+                :aria-pressed="isPinSelected(pin.key)"
+                @click="togglePinSelected(pin.key)"
+              >
+                <i
+                  class="fa-solid"
+                  :class="isPinSelected(pin.key) ? 'fa-circle-check' : 'fa-circle'"
+                />
+              </button>
               <button
                 class="notebook-sidebar__entity-name"
                 :title="`Select ${pin.name || pin.pk}`"
@@ -147,6 +162,22 @@
               </button>
             </li>
           </ul>
+          <!-- Find connection: shown once any pin is selected, enabled only at
+               exactly two. Discovers the shortest path between them on the
+               active graph. -->
+          <div
+            v-if="selectedPinKeys.length > 0"
+            class="notebook-sidebar__find-connection"
+          >
+            <button
+              class="btn btn-sm btn-outline-primary w-100"
+              :disabled="!canFindConnection"
+              @click="findConnectionBetweenSelected()"
+            >
+              <i class="fa-solid fa-route" />
+              {{ canFindConnection ? "Find connection" : "Select two pins" }}
+            </button>
+          </div>
         </div>
 
         <!-- Noted-but-unpinned entities (orphan notes) -->
@@ -339,10 +370,14 @@ const NOTE_PREVIEW_LENGTH = 60;
  */
 export default {
   name: "NotebookSidebar",
-  emits: ["select-entity", "save-view", "restore-view", "toggle"],
+  emits: ["select-entity", "save-view", "restore-view", "find-connection", "toggle"],
   data() {
     return {
       expanded: false,
+      // Keys ("Label|pk") of pins the user has ticked for a "Find connection"
+      // between exactly two of them. Insertion-ordered so ticking a third can
+      // drop the oldest (see togglePinSelected).
+      selectedPinKeys: [],
       // Blur-commit draft for the notebook page (mirrors EntityPinPanel's note
       // draft): typing edits the local draft; commitPage() writes it to the
       // store on blur, and beforeUnmount flushes any pending edit.
@@ -366,8 +401,37 @@ export default {
     pageDirty() {
       return this.pageDraft !== (this.notebookStore.page || "");
     },
+    // The two pins currently ticked for a "Find connection", resolved back to
+    // { label, pk } endpoints. Empty unless exactly two are selected.
+    selectedConnectionEndpoints() {
+      if (this.selectedPinKeys.length !== 2) {
+        return [];
+      }
+      const byKey = new Map(
+        this.notebookStore.pinnedEntities.map((p) => [p.key, p])
+      );
+      const pins = this.selectedPinKeys.map((k) => byKey.get(k)).filter(Boolean);
+      if (pins.length !== 2) {
+        return [];
+      }
+      return pins.map((p) => ({ label: p.label, pk: p.pk }));
+    },
+    // The "Find connection" action is enabled only for exactly two selections.
+    canFindConnection() {
+      return this.selectedConnectionEndpoints.length === 2;
+    },
   },
   watch: {
+    // Pins can be unpinned elsewhere (entity panel, canvas) while ticked here;
+    // prune stale ticks so the find-connection bar can't linger for pins that
+    // no longer exist.
+    "notebookStore.pinnedEntities"(pins) {
+      const live = new Set(pins.map((p) => p.key));
+      const pruned = this.selectedPinKeys.filter((k) => live.has(k));
+      if (pruned.length !== this.selectedPinKeys.length) {
+        this.selectedPinKeys = pruned;
+      }
+    },
     // Reload the page draft whenever the active notebook changes so switching
     // notebooks shows the right narrative. Flush any pending edit to the
     // OUTGOING notebook first, so switching without blurring the textarea
@@ -471,6 +535,9 @@ export default {
     // ---- Notebook lifecycle ---------------------------------------------
     onSwitch(id) {
       this.flushPageDraft();
+      // Pins belong to a notebook, so a two-pin selection can't carry across a
+      // switch.
+      this.clearPinSelection();
       this.notebookStore.switchNotebook(id);
     },
     onNewNotebook() {
@@ -516,6 +583,48 @@ export default {
       this.$emit("select-entity", { label, pk });
     },
 
+    // ---- Pin selection for "Find connection" ----------------------------
+    // A minimal per-pin tick: exactly two ticked pins enable the action.
+    isPinSelected(key) {
+      return this.selectedPinKeys.includes(key);
+    },
+    togglePinSelected(key) {
+      const idx = this.selectedPinKeys.indexOf(key);
+      if (idx !== -1) {
+        this.selectedPinKeys.splice(idx, 1);
+        return;
+      }
+      // Keep at most two selected: ticking a third drops the oldest so the
+      // action stays a two-endpoint operation.
+      this.selectedPinKeys.push(key);
+      if (this.selectedPinKeys.length > 2) {
+        this.selectedPinKeys.shift();
+      }
+    },
+    clearPinSelection() {
+      this.selectedPinKeys = [];
+    },
+    // Emit the find-connection request for the two ticked pins. The endpoints
+    // are validated (and the same-entity / no-graph cases handled) in
+    // NotebookSidebarLogic on the way to the active cell's ResultGraph; the
+    // { ok, reason } outcome comes back via handleDelegateResult.
+    findConnectionBetweenSelected() {
+      const endpoints = this.selectedConnectionEndpoints;
+      if (endpoints.length !== 2) return;
+      this.$emit("find-connection", endpoints);
+    },
+
+    /**
+     * Pre-fill the "save current view" input with a suggested name (called by
+     * ResultGraph via MainLayout's provided prefill fn after a successful find,
+     * so a single Save click saves the connection view). Does NOT auto-expand
+     * the sidebar — a collapsed sidebar keeps the draft ready for when it opens.
+     */
+    prefillViewName(name) {
+      if (typeof name !== "string" || !name.trim()) return;
+      this.newViewName = name.trim();
+    },
+
     // ---- Saved views ----------------------------------------------------
     // Save/restore need the live G6 canvas, which lives in a shell cell, so
     // both are emitted up to MainLayout, which delegates through
@@ -548,6 +657,11 @@ export default {
         if (action === "save-view") {
           this.newViewName = "";
         }
+        if (action === "find-connection") {
+          // The find dispatched; clear the ticks so the panel is ready for the
+          // next pair. (The path/no-path outcome is toasted on the canvas.)
+          this.clearPinSelection();
+        }
         return;
       }
       const reason = result && result.reason;
@@ -556,8 +670,13 @@ export default {
           "save-view": "Open a graph result to save a view.",
           "restore-view": "Open a graph result to restore this view.",
           "select-entity": "Open a graph result to locate this entity.",
+          "find-connection": "Open a graph result to find a connection.",
         };
         this.showFeedback(messages[action] || "Open a graph result first.");
+      } else if (reason === "same-entity") {
+        this.showFeedback("Pick two different entities to connect.");
+      } else if (reason === "no-pair") {
+        this.showFeedback("Select exactly two pins to find a connection.");
       }
     },
     showFeedback(text) {
@@ -785,6 +904,38 @@ export default {
     display: flex;
     align-items: center;
     gap: 0.25rem;
+  }
+
+  &__entity--selected {
+    background-color: var(--bs-body-bg-hover);
+    border: 1px solid var(--bs-body-bg-accent);
+    border-radius: 0.375rem;
+  }
+
+  &__entity-toggle {
+    flex: 0 0 auto;
+    background: none;
+    border: none;
+    padding: 0.1rem 0.25rem;
+    cursor: pointer;
+    color: var(--bs-body-text-secondary);
+    border-radius: 0.25rem;
+
+    &:hover {
+      color: var(--bs-body-text);
+    }
+
+    &.is-selected {
+      color: var(--bs-body-bg-accent);
+    }
+  }
+
+  &__find-connection {
+    margin-top: 0.5rem;
+
+    .btn i {
+      margin-right: 0.35rem;
+    }
   }
 
   &__entity-name {
