@@ -381,7 +381,7 @@ import {
 import NeighborsFetcher from "../../utils/NeighborsFetcher";
 import { useSettingsStore } from "../../store/SettingsStore";
 import { useModeStore } from "../../store/ModeStore";
-import { useInvestigationStore } from "../../store/InvestigationStore";
+import { useNotebookStore } from "../../store/NotebookStore";
 import { mapStores } from 'pinia'
 import ValueFormatter from "../../utils/ValueFormatter";
 import HoverContainer from "./HoverContainer.vue";
@@ -578,7 +578,7 @@ export default {
         (a, b) => Number(a === 'VirtualHub') - Number(b === 'VirtualHub')
       );
     },
-    ...mapStores(useSettingsStore, useModeStore, useInvestigationStore),
+    ...mapStores(useSettingsStore, useModeStore, useNotebookStore),
     labelColor() {
       // Return white for dark mode, dark gray for light mode
       return this.modeStore.theme === 'vs-dark' ? '#ffffff' : '#333333';
@@ -2457,7 +2457,7 @@ export default {
         return;
       }
       const { code } = generateExportCode(state);
-      const saved = this.investigationStore.saveView(trimmed, code);
+      const saved = this.notebookStore.saveView(trimmed, code);
       if (saved) {
         this.showToast(`Saved view "${trimmed}".`, 3000);
       }

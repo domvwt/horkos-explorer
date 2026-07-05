@@ -189,7 +189,7 @@ import Axios from "@/utils/AxiosWrapper";
 import { generateExportCode } from "@/utils/InvestigationState";
 import { useSettingsStore } from "../store/SettingsStore";
 import { useModeStore } from "../store/ModeStore";
-import { useInvestigationStore } from "../store/InvestigationStore";
+import { useNotebookStore } from "../store/NotebookStore";
 import { mapActions, mapStores } from 'pinia'
 import { Modal } from 'bootstrap';
 import DuckDB from '../utils/DuckDB';
@@ -226,7 +226,7 @@ export default {
     previousView: 'shell',
   }),
   computed: {
-    ...mapStores(useModeStore, useInvestigationStore),
+    ...mapStores(useModeStore, useNotebookStore),
     homeUrl() {
       const search = window.location.search;
       return search ? `/${search}#shell` : '/#shell';
@@ -249,9 +249,9 @@ export default {
     window.removeEventListener("hashchange", this.handleHashChange);
   },
   async created() {
-    // Hydrate the client-side investigation log (pins / notes / saved views)
+    // Hydrate the client-side notebooks (pins / notes / page / saved views)
     // from localStorage before any view renders.
-    this.investigationStore.load();
+    this.notebookStore.load();
     await this.getMode();
     // Read theme preference from cookie and apply it
     const savedTheme = this.getCookie('themePreference');

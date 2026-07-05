@@ -38,15 +38,15 @@
 
 <script>
 import { mapStores } from "pinia";
-import { useInvestigationStore } from "../../store/InvestigationStore";
+import { useNotebookStore } from "../../store/NotebookStore";
 
 /**
  * Pin/unpin + per-entity note affordance for the selected graph node.
  *
  * Self-contained like ExternalLinksPanel: it receives the clicked entity's
  * type + beautified properties, derives the cluster id (primary key) from
- * them, and reads/writes the client-side InvestigationStore. No network
- * calls — everything persists to localStorage via the store.
+ * them, and reads/writes the client-side NotebookStore's active notebook. No
+ * network calls — everything persists to localStorage via the store.
  */
 export default {
   name: "EntityPinPanel",
@@ -71,7 +71,7 @@ export default {
     };
   },
   computed: {
-    ...mapStores(useInvestigationStore),
+    ...mapStores(useNotebookStore),
     // The cluster id is the primary key; fall back to the "id" property.
     pk() {
       const pkProp = this.properties.find((p) => p.isPrimaryKey);
@@ -86,10 +86,10 @@ export default {
       return nameProp && nameProp.value != null ? String(nameProp.value) : this.pk;
     },
     pinned() {
-      return this.investigationStore.isPinned(this.entityType, this.pk);
+      return this.notebookStore.isPinned(this.entityType, this.pk);
     },
     savedNote() {
-      return this.investigationStore.noteFor(this.entityType, this.pk);
+      return this.notebookStore.noteFor(this.entityType, this.pk);
     },
     dirty() {
       return this.draftNote.trim() !== this.savedNote;
@@ -116,20 +116,20 @@ export default {
   methods: {
     togglePin() {
       if (!this.pk) return;
-      this.investigationStore.togglePin(this.entityType, this.pk, this.displayName);
+      this.notebookStore.togglePin(this.entityType, this.pk, this.displayName);
     },
     // Commit the current draft to the entity it was typed against.
     flushDraft() {
       const { entityType, pk } = this.draftEntity;
       if (!pk) return;
-      const saved = this.investigationStore.noteFor(entityType, pk);
+      const saved = this.notebookStore.noteFor(entityType, pk);
       if (this.draftNote.trim() === saved) return;
-      this.investigationStore.setNote(entityType, pk, this.draftNote);
+      this.notebookStore.setNote(entityType, pk, this.draftNote);
     },
     commitNote() {
       if (!this.pk) return;
       if (this.draftNote.trim() === this.savedNote) return;
-      this.investigationStore.setNote(this.entityType, this.pk, this.draftNote);
+      this.notebookStore.setNote(this.entityType, this.pk, this.draftNote);
     },
   },
 };

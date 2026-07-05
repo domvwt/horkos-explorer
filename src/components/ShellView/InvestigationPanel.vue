@@ -11,10 +11,10 @@
     <div class="investigation-panel__section">
       <div class="investigation-panel__section-title">
         Pinned entities
-        <span class="badge">{{ investigationStore.pinnedCount }}</span>
+        <span class="badge">{{ notebookStore.pinnedCount }}</span>
       </div>
       <p
-        v-if="investigationStore.pinnedCount === 0"
+        v-if="notebookStore.pinnedCount === 0"
         class="investigation-panel__empty"
       >
         No pinned entities. Select a node and click <strong>Pin</strong> to add it.
@@ -24,7 +24,7 @@
         class="investigation-panel__list"
       >
         <li
-          v-for="pin in investigationStore.pinnedEntities"
+          v-for="pin in notebookStore.pinnedEntities"
           :key="pin.key"
           class="investigation-panel__pin"
         >
@@ -39,7 +39,7 @@
           <button
             class="investigation-panel__icon-btn"
             title="Unpin"
-            @click="investigationStore.unpin(pin.label, pin.pk)"
+            @click="notebookStore.unpin(pin.label, pin.pk)"
           >
             <i class="fa-solid fa-xmark" />
           </button>
@@ -51,7 +51,7 @@
     <div class="investigation-panel__section">
       <div class="investigation-panel__section-title">
         Saved views
-        <span class="badge">{{ investigationStore.savedViewCount }}</span>
+        <span class="badge">{{ notebookStore.savedViewCount }}</span>
       </div>
       <div class="investigation-panel__save-row">
         <input
@@ -72,7 +72,7 @@
         </button>
       </div>
       <p
-        v-if="investigationStore.savedViewCount === 0"
+        v-if="notebookStore.savedViewCount === 0"
         class="investigation-panel__empty"
       >
         No saved views. Arrange the graph, name it above, and save.
@@ -82,7 +82,7 @@
         class="investigation-panel__list"
       >
         <li
-          v-for="view in investigationStore.savedViews"
+          v-for="view in notebookStore.savedViews"
           :key="view.id"
           class="investigation-panel__pin"
         >
@@ -97,7 +97,7 @@
           <button
             class="investigation-panel__icon-btn"
             title="Delete this view"
-            @click="investigationStore.removeView(view.id)"
+            @click="notebookStore.removeView(view.id)"
           >
             <i class="fa-solid fa-xmark" />
           </button>
@@ -113,15 +113,15 @@
       <div class="investigation-panel__backup-row">
         <button
           class="btn btn-sm btn-outline-secondary"
-          title="Download your investigation log as a JSON file"
-          @click="exportLog"
+          title="Download this notebook as a JSON file"
+          @click="exportNotebook"
         >
           <i class="fa-solid fa-file-export" />
           Export
         </button>
         <button
           class="btn btn-sm btn-outline-secondary"
-          title="Import an investigation log from a JSON file (replaces the current log)"
+          title="Import a notebook from a JSON file (added as a new notebook)"
           @click="triggerImport"
         >
           <i class="fa-solid fa-file-import" />
@@ -153,17 +153,19 @@
 
 <script>
 import { mapStores } from "pinia";
-import { useInvestigationStore } from "../../store/InvestigationStore";
+import { useNotebookStore } from "../../store/NotebookStore";
 
 /**
- * The investigation log panel: lists pinned entities and saved graph views,
- * and provides JSON export/import. Pin/note capture lives on the per-entity
- * EntityPinPanel; this panel is the log's home and its local backup surface.
+ * The notebook panel: lists the active notebook's pinned entities and saved
+ * graph views, and provides JSON export/import. Pin/note capture lives on the
+ * per-entity EntityPinPanel; this panel is the notebook's home and its local
+ * backup surface.
  *
  * Saving/restoring a graph view needs the live G6 canvas, which this panel
  * doesn't own, so it emits "restore-view" up to ResultGraph and asks the
  * parent (via the request-save-view event) for the current canvas state.
- * Export/import act directly on the store — no network calls.
+ * Export/import act directly on the store — no network calls. Export is
+ * per-notebook and import is additive (the file lands as a new notebook).
  */
 export default {
   name: "InvestigationPanel",
@@ -176,7 +178,7 @@ export default {
     };
   },
   computed: {
-    ...mapStores(useInvestigationStore),
+    ...mapStores(useNotebookStore),
   },
   methods: {
     saveView() {
@@ -188,18 +190,29 @@ export default {
       this.newViewName = "";
     },
 
-    exportLog() {
-      const payload = this.investigationStore.exportLog();
+    exportNotebook() {
+      const payload = this.notebookStore.exportNotebook();
       const json = JSON.stringify(payload, null, 2);
       const blob = new Blob([json], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `investigation-${this.timestampSlug()}.json`;
+      a.download = `notebook-${this.nameSlug()}-${this.timestampSlug()}.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+    },
+
+    // A filename-safe slug of the active notebook's name so exports are
+    // recognisable; falls back to "untitled" when empty.
+    nameSlug() {
+      const name = this.notebookStore.activeNotebook.name || "";
+      const slug = name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      return slug || "untitled";
     },
 
     // A filename-safe local timestamp; avoids ISO colons which some OSes reject.
@@ -225,10 +238,10 @@ export default {
 
       const reader = new FileReader();
       reader.onload = () => {
-        const result = this.investigationStore.importLog(reader.result);
+        const result = this.notebookStore.importNotebook(reader.result);
         this.importOk = result.ok;
         this.importMessage = result.ok
-          ? "Investigation log imported."
+          ? "Notebook imported."
           : result.error;
       };
       reader.onerror = () => {
