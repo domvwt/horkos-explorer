@@ -14,10 +14,6 @@
         @click="expand"
       >
         <i class="fa-solid fa-book" />
-        <span
-          v-if="notebookStore.pinnedCount > 0"
-          class="notebook-sidebar__rail-badge"
-        >{{ notebookStore.pinnedCount }}</span>
       </button>
       <button
         class="notebook-sidebar__rail-chevron"
@@ -668,22 +664,6 @@ export default {
     &:hover {
       background-color: var(--bs-body-bg-hover);
     }
-  }
-
-  &__rail-badge {
-    position: absolute;
-    top: -0.15rem;
-    right: -0.25rem;
-    min-width: 1.1rem;
-    height: 1.1rem;
-    padding: 0 0.25rem;
-    border-radius: 0.6rem;
-    background-color: var(--bs-body-bg-accent);
-    color: #fff;
-    font-size: 0.65rem;
-    font-weight: 600;
-    line-height: 1.1rem;
-    text-align: center;
   }
 
   &__rail-chevron {
