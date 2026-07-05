@@ -210,6 +210,13 @@
             :properties="clickedProperties"
           />
 
+          <!-- Pin + note this entity to the investigation log -->
+          <EntityPinPanel
+            v-if="clickedIsNode"
+            :entity-type="clickedLabel"
+            :properties="clickedProperties"
+          />
+
           <!-- Sources & Matching: provenance and merge confidence, grouped -->
           <div
             v-if="clickedIsNode"
@@ -329,6 +336,13 @@
               No nodes or rels to show.
             </p>
           </div>
+
+          <!-- Investigation log: pins, saved views, export/import -->
+          <InvestigationPanel
+            @select-entity="handleSelectPinnedEntity"
+            @restore-view="handleRestoreSavedView"
+            @request-save-view="handleSaveCurrentView"
+          />
         </div>
       </div>
     </div>
@@ -370,6 +384,7 @@ import {
 import NeighborsFetcher from "../../utils/NeighborsFetcher";
 import { useSettingsStore } from "../../store/SettingsStore";
 import { useModeStore } from "../../store/ModeStore";
+import { useInvestigationStore } from "../../store/InvestigationStore";
 import { mapStores } from 'pinia'
 import ValueFormatter from "../../utils/ValueFormatter";
 import HoverContainer from "./HoverContainer.vue";
@@ -379,6 +394,8 @@ import SourceProvenancePanel from "./SourceProvenancePanel.vue";
 import ConnectedEntitiesPanel from "./ConnectedEntitiesPanel.vue";
 import ConfidenceIndicator from "./ConfidenceIndicator.vue";
 import ResultDisclaimer from "./ResultDisclaimer.vue";
+import EntityPinPanel from "./EntityPinPanel.vue";
+import InvestigationPanel from "./InvestigationPanel.vue";
 import g6Utils from '../../utils/G6Utils';
 import {
   nodeTypeDisplayName,
@@ -387,7 +404,7 @@ import {
 } from "../../utils/DisplayPolicy";
 import Axios from "@/utils/AxiosWrapper";
 import { createGraphConfig, getLayoutConfig } from "./graphConfig";
-import { parseStableKey } from "@/utils/InvestigationState";
+import { parseStableKey, generateExportCode, parseExportCode } from "@/utils/InvestigationState";
 
 export default {
   name: "ResultGraph",
@@ -398,7 +415,9 @@ export default {
     SourceProvenancePanel,
     ConnectedEntitiesPanel,
     ConfidenceIndicator,
-    ResultDisclaimer
+    ResultDisclaimer,
+    EntityPinPanel,
+    InvestigationPanel
   },
   props: {
     queryResult: {
@@ -563,7 +582,7 @@ export default {
         (a, b) => Number(a === 'VirtualHub') - Number(b === 'VirtualHub')
       );
     },
-    ...mapStores(useSettingsStore, useModeStore),
+    ...mapStores(useSettingsStore, useModeStore, useInvestigationStore),
     labelColor() {
       // Return white for dark mode, dark gray for light mode
       return this.modeStore.theme === 'vs-dark' ? '#ffffff' : '#333333';
@@ -2392,6 +2411,75 @@ export default {
       } catch (e) {
         return null;
       }
+    },
+
+    // Investigation log handlers (pins / saved views panel)
+
+    /**
+     * Select a pinned entity in the current graph, if it's present. Pinned
+     * entities live in the investigation log across queries, so the entity may
+     * not be on the current canvas — in that case we surface a toast rather
+     * than failing silently.
+     */
+    handleSelectPinnedEntity({ label, pk }) {
+      if (!this.g6Graph) return;
+      const match = (this.g6Graph.getNodeData() || []).find((node) => {
+        const props = node.data && node.data.properties;
+        return props && props._label === label && String(props.id) === String(pk);
+      });
+      if (match) {
+        this.handleClick(match);
+        // Make the selection visually exclusive: clear every element's state,
+        // then mark the matched node active (matching disableHighlightMode's
+        // array-form state convention used everywhere else in this file).
+        const combined = {};
+        this.g6Graph.getNodeData().forEach((node) => {
+          combined[node.id] = [];
+        });
+        this.g6Graph.getEdgeData().forEach((edge) => {
+          combined[edge.id] = [];
+        });
+        combined[match.id] = ['active'];
+        this.setElementState(combined);
+      } else {
+        this.showToast('That pinned entity is not in the current graph.', 4000);
+      }
+    },
+
+    /**
+     * Save the current canvas as a named view in the investigation log. Reuses
+     * the existing share serializer so a saved view stores the same compact,
+     * refetch-on-restore representation as a share code (positions + label/pk +
+     * hidden set), never raw entity properties.
+     */
+    handleSaveCurrentView(name) {
+      const trimmed = (name || '').trim();
+      if (!trimmed) return;
+      const state = this.getInvestigationState();
+      if (!state.graphData || !state.graphData.nodes || state.graphData.nodes.length === 0) {
+        this.showToast('Nothing to save — the graph is empty.', 4000);
+        return;
+      }
+      const { code } = generateExportCode(state);
+      const saved = this.investigationStore.saveView(trimmed, code);
+      if (saved) {
+        this.showToast(`Saved view "${trimmed}".`, 3000);
+      }
+    },
+
+    /**
+     * Restore a saved view onto the canvas. The stored state is a share code;
+     * parse it back to the minimal shape and run the existing restore flow,
+     * which refetches full properties from the database.
+     */
+    async handleRestoreSavedView(view) {
+      if (!view || !view.state) return;
+      const parsed = parseExportCode(view.state);
+      if (!parsed) {
+        this.showToast('Could not restore this view (it may be corrupted).', 5000);
+        return;
+      }
+      await this.restoreInvestigationState(parsed);
     },
 
 
