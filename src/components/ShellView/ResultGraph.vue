@@ -500,6 +500,8 @@ export default {
     historyManager: null,
     historyVersion: 0,
     isUndoRedoInProgress: false,
+    // Re-entrancy guard for pin navigation (see handleSelectPinnedEntity).
+    pinSelectInFlight: false,
   }),
   computed: {
     graphVizSettings() {
@@ -507,6 +509,16 @@ export default {
     },
     performanceSettings() {
       return this.settingsStore.performance;
+    },
+    // A stable signature of the ACTIVE notebook's pinned entity keys. Changes on
+    // pin/unpin AND when the active notebook switches (pinnedEntities is scoped
+    // to the active notebook), so a watcher on it drives canvas badge sync in
+    // both cases without touching graph data.
+    pinnedKeySignature() {
+      return this.notebookStore.pinnedEntities
+        .map((pin) => pin.key)
+        .sort()
+        .join(',');
     },
     maximizeButtonClass() {
       return (this.isEditorMaximized ? "fa-minimize" : "fa-maximize") + " fa-lg fa-solid";
@@ -717,6 +729,11 @@ export default {
       if (this.g6Graph) {
         this.redrawGraph();
       }
+    },
+    // Keep the canvas star badges in step with the active notebook's pins.
+    // Fires on pin/unpin and on active-notebook switch (see the computed).
+    pinnedKeySignature() {
+      this.syncPinBadges();
     },
   },
   created() {
@@ -1064,6 +1081,7 @@ export default {
       // Trigger neighbor count update for all leaf nodes
       this.$nextTick(() => {
         this.updateNeighborCounts();
+        this.syncPinBadges();
       });
     },
 
@@ -2015,6 +2033,7 @@ export default {
       // Trigger neighbor count update for any new leaf nodes
       this.$nextTick(() => {
         this.updateNeighborCounts();
+        this.syncPinBadges();
       });
     },
 
@@ -2355,6 +2374,68 @@ export default {
       }
     },
 
+    /**
+     * The G6 v5 badges style for a node given its pinned state. A pinned node
+     * carries a single star badge at its top-right; an unpinned node carries an
+     * empty badges array (which removes any previously-rendered badge). The star
+     * glyph is drawn with the Font Awesome font already used for node icons.
+     */
+    pinBadgesFor(isPinned) {
+      if (!isPinned) return [];
+      return [{
+        text: '\uf005', // fa-star (solid)
+        placement: 'right-top',
+        fontFamily: 'Font Awesome 6 Free',
+        fontWeight: 900,
+        fontSize: 12,
+        fill: '#ffffff',
+        backgroundFill: '#f5a623',
+        padding: [2, 2],
+      }];
+    },
+
+    /**
+     * Reconcile the star badge on every canvas node with the active notebook's
+     * pins. Reactive to pin/unpin and to the active notebook switching (both are
+     * driven by the watcher on the pinned-key set below). Uses updateNodeData so
+     * only badges change — no canvas rebuild.
+     *
+     * Delta-only: fresh badges arrays would defeat G6's shallow style dedup, so
+     * only nodes whose badge PRESENCE actually changed are updated, and draw()
+     * is skipped entirely when nothing changed. Current presence is read from
+     * the node's own data model (style.badges) rather than a side Set, so it
+     * survives graph rebuilds and undo/redo snapshot restores without going
+     * stale.
+     */
+    syncPinBadges() {
+      if (!this.g6Graph) return;
+      try {
+        const updates = [];
+        (this.g6Graph.getNodeData() || []).forEach((node) => {
+          const props = node.data && node.data.properties;
+          const label = props && props._label;
+          const pkName = label ? this.primaryKeyNameForLabel(label) : null;
+          const pkValue = pkName ? props[pkName] : undefined;
+          const pinned = label && pkValue !== undefined && pkValue !== null
+            ? this.notebookStore.isPinned(label, String(pkValue))
+            : false;
+          const hasBadge = Boolean(node.style?.badges?.length);
+          if (pinned !== hasBadge) {
+            updates.push({ id: node.id, style: { badges: this.pinBadgesFor(pinned) } });
+          }
+        });
+        if (updates.length > 0) {
+          this.g6Graph.updateNodeData(updates);
+          // draw() commits the style change WITHOUT re-running layout or
+          // re-fitting the viewport (render() would do both), so the star badge
+          // appears/disappears in place with no canvas rebuild or camera jump.
+          this.g6Graph.draw();
+        }
+      } catch (e) {
+        console.warn('Failed to sync pin badges:', e);
+      }
+    },
+
     // Investigation State Management Methods
 
     /**
@@ -2412,34 +2493,239 @@ export default {
     // Investigation log handlers (pins / saved views panel)
 
     /**
-     * Select a pinned entity in the current graph, if it's present. Pinned
-     * entities live in the investigation log across queries, so the entity may
-     * not be on the current canvas — in that case we surface a toast rather
-     * than failing silently.
+     * The primary-key property name for a node label, per the schema. Falls
+     * back to "id" (the Horkos cluster-id convention) when the schema is
+     * unavailable, matching how pins are keyed elsewhere.
      */
-    handleSelectPinnedEntity({ label, pk }) {
-      if (!this.g6Graph) return;
-      const match = (this.g6Graph.getNodeData() || []).find((node) => {
+    primaryKeyNameForLabel(label) {
+      const table = (this.schema?.nodeTables || []).find(t => t.name === label);
+      const pkProp = table?.properties?.find(p => p.isPrimaryKey);
+      return pkProp ? pkProp.name : 'id';
+    },
+
+    /**
+     * Find the on-canvas node matching a pin's label + primary key, or null.
+     * Matches on the schema's primary-key property rather than a hard-coded
+     * "id" so it stays correct if a node table keys on something else.
+     */
+    findCanvasNodeByLabelPk(label, pk) {
+      if (!this.g6Graph) return null;
+      const pkName = this.primaryKeyNameForLabel(label);
+      return (this.g6Graph.getNodeData() || []).find((node) => {
         const props = node.data && node.data.properties;
-        return props && props._label === label && String(props.id) === String(pk);
+        return props && props._label === label && String(props[pkName]) === String(pk);
+      }) || null;
+    },
+
+    /**
+     * Clear every element's selection state and mark one node active, then move
+     * the viewport so it is visible. `focusElement` is G6 v5's viewport idiom
+     * for bringing an element into view (used here rather than fitCenter, which
+     * re-centres the whole graph). The exclusive-clear uses the array-form state
+     * convention used everywhere else in this file (disableHighlightMode etc.).
+     */
+    async selectAndFocusNode(nodeData) {
+      this.handleClick(nodeData);
+      const combined = {};
+      this.g6Graph.getNodeData().forEach((node) => {
+        combined[node.id] = [];
       });
-      if (match) {
-        this.handleClick(match);
-        // Make the selection visually exclusive: clear every element's state,
-        // then mark the matched node active (matching disableHighlightMode's
-        // array-form state convention used everywhere else in this file).
-        const combined = {};
-        this.g6Graph.getNodeData().forEach((node) => {
-          combined[node.id] = [];
-        });
-        this.g6Graph.getEdgeData().forEach((edge) => {
-          combined[edge.id] = [];
-        });
-        combined[match.id] = ['active'];
-        this.setElementState(combined);
-      } else {
-        this.showToast('That pinned entity is not in the current graph.', 4000);
+      this.g6Graph.getEdgeData().forEach((edge) => {
+        combined[edge.id] = [];
+      });
+      combined[nodeData.id] = ['active'];
+      await this.setElementState(combined);
+      try {
+        await this.g6Graph.focusElement(nodeData.id);
+      } catch (e) {
+        console.warn('Failed to focus pinned node:', e);
       }
+    },
+
+    /**
+     * Select a pinned entity, always landing the user on it. A pin is a
+     * promise: whatever the entity's state, clicking it in the notebook panel
+     * takes you to it.
+     *   - On canvas & visible  -> select + move viewport to it.
+     *   - On canvas but hidden -> unhide, then select + focus.
+     *   - Not on canvas        -> refetch by label+pk, add to the canvas with
+     *                             any rels to existing canvas nodes, select +
+     *                             focus, and record the addition for undo. On an
+     *                             empty canvas the pin becomes the seed node.
+     *   - Not in the database  -> toast; the entity no longer exists here.
+     */
+    async handleSelectPinnedEntity({ label, pk }) {
+      // In-flight guard: a second click while a fetch-and-add is still running
+      // would interleave a second nodesBefore/nodesAfter diff and push a
+      // duplicate history entry. Drop re-entrant clicks until this one settles.
+      if (this.pinSelectInFlight) {
+        return;
+      }
+      this.pinSelectInFlight = true;
+      try {
+        await this.doSelectPinnedEntity(label, pk);
+      } finally {
+        this.pinSelectInFlight = false;
+      }
+    },
+
+    async doSelectPinnedEntity(label, pk) {
+      const match = this.findCanvasNodeByLabelPk(label, pk);
+      if (match) {
+        // Case 2: on canvas but hidden -> unhide first so we don't "select" an
+        // invisible node, then select + focus. Also restore this node's edges to
+        // any still-visible neighbour so it doesn't reappear as an orphan.
+        if (this.hiddenElements.nodes[match.id]) {
+          delete this.hiddenElements.nodes[match.id];
+          const toShow = { [match.id]: 'visible' };
+          (this.g6Graph.getEdgeData() || []).forEach((edge) => {
+            const touchesMatch = edge.source === match.id || edge.target === match.id;
+            if (!touchesMatch || !this.hiddenElements.edges[edge.id]) return;
+            const other = edge.source === match.id ? edge.target : edge.source;
+            if (!this.hiddenElements.nodes[other]) {
+              delete this.hiddenElements.edges[edge.id];
+              toShow[edge.id] = 'visible';
+            }
+          });
+          await this.setElementVisibility(toShow);
+        }
+        await this.selectAndFocusNode(match);
+        return;
+      }
+      // Case 3/4: not on canvas -> refetch and add, or report it's gone.
+      await this.fetchAndAddPinnedEntity(label, pk);
+    },
+
+    /**
+     * Refetch a pinned entity by label + primary key and add it to the canvas,
+     * wiring up any rels connecting it to nodes already present, then select +
+     * focus it. Pushes the addition to the history manager so it is undoable.
+     * If the entity can't be found in the database, surfaces a toast (the only
+     * remaining failure path).
+     */
+    async fetchAndAddPinnedEntity(label, pk) {
+      // Refetch full node properties (dual server/WASM path, preserved via
+      // refetchNodeProperties). Returns a { pk -> rawNode } map.
+      // rethrowQueryErrors keeps a transient query/network failure distinct
+      // from a genuinely empty result, so "no longer in this database" is only
+      // ever shown when the database really answered with no rows.
+      let propsMap;
+      try {
+        propsMap = await this.refetchNodeProperties(
+          [{ label, pk: String(pk) }],
+          { rethrowQueryErrors: true }
+        );
+      } catch (e) {
+        console.warn('Pinned entity lookup failed:', e);
+        this.showToast("Couldn't check the database — try again.", 5000);
+        return;
+      }
+      const rawNode = propsMap[String(pk)];
+      if (!rawNode || !rawNode._label) {
+        this.showToast('This pinned entity is no longer in this database.', 5000);
+        return;
+      }
+
+      // Fetch every rel connecting the pinned node to nodes already on the
+      // canvas, grouped by the canvas nodes' table (mirrors how
+      // handleAddConnectedNode gathers edges, batched across all present nodes).
+      const focusPkName = this.primaryKeyNameForLabel(label);
+      const rawRels = [];
+      const others = this.groupCanvasNodesByTable();
+      if (others.length > 0) {
+        try {
+          const relResult = await NeighborsFetcher.fetchRelsBetweenNodeAndMany({
+            focusTable: label,
+            focusPkName,
+            focusPkValue: rawNode[focusPkName],
+            others,
+            relTables: this.schema.relTables,
+            isWasm: this.modeStore.isWasm,
+          });
+          if (relResult && relResult.rows) {
+            relResult.rows.forEach(row => {
+              if (row.r && row.r._id) rawRels.push(row.r);
+            });
+          }
+        } catch (e) {
+          console.warn('Failed to fetch rels for pinned node:', e);
+        }
+      }
+
+      // A graph instance normally already exists after any query (drawGraph
+      // creates it even for a zero-row result), so the common path is a plain
+      // incremental add. Only when no query has ever run is g6Graph null; in
+      // that case spin up an empty graph first (setupGraphEventHandlers and
+      // graphCreated are handled by initializeEmptyGraph) so the pin can seed it.
+      const isSeedingEmptyCanvas = !this.g6Graph;
+      if (isSeedingEmptyCanvas) {
+        await this.initializeEmptyGraph([]);
+        await this.$nextTick();
+      }
+
+      const nodesBefore = new Set((this.g6Graph?.getNodeData() || []).map(n => n.id));
+      const edgesBefore = new Set((this.g6Graph?.getEdgeData() || []).map(e => e.id));
+
+      const queryResult = {
+        rows: [[rawNode, ...rawRels]],
+        dataTypes: ['NODE', ...rawRels.map(() => 'REL')],
+      };
+      await this.addDataWithQueryResult(queryResult);
+
+      const addedG6Id = encodeId(rawNode._id);
+      const nodesAfter = this.g6Graph ? (this.g6Graph.getNodeData() || []) : [];
+      const edgesAfter = this.g6Graph ? (this.g6Graph.getEdgeData() || []) : [];
+      const addedNodes = nodesAfter.filter(n => !nodesBefore.has(n.id));
+      const addedEdges = edgesAfter.filter(e => !edgesBefore.has(e.id));
+
+      // Record for undo. Reuse the existing 'add-connected-node' command so the
+      // established undo/redo path removes exactly these nodes/edges.
+      if (addedNodes.length > 0 || addedEdges.length > 0) {
+        this.historyManager.push({
+          type: 'add-connected-node',
+          data: {
+            sourceNodeId: null,
+            addedNodes: JSON.parse(JSON.stringify(addedNodes)),
+            addedEdges: JSON.parse(JSON.stringify(addedEdges)),
+          }
+        });
+      }
+
+      // getNodeData(id) THROWS on an unknown id (graphlib), it does not return
+      // null — same guard idiom as handleConnectedNodeClick.
+      let newNode = null;
+      try {
+        newNode = this.g6Graph ? this.g6Graph.getNodeData(addedG6Id) : null;
+      } catch (e) {
+        newNode = null;
+      }
+      if (newNode) {
+        await this.selectAndFocusNode(newNode);
+      } else {
+        console.warn('Pinned node was fetched but not found on the canvas:', addedG6Id);
+      }
+    },
+
+    /**
+     * Group the nodes currently on the canvas by their (table, primary-key
+     * column) so a batched rel fetch can bind one pk list per distinct table.
+     * Returns [{ table, primaryKeyName, primaryKeyValues }].
+     */
+    groupCanvasNodesByTable() {
+      const byTable = {};
+      (this.g6Graph?.getNodeData() || []).forEach((node) => {
+        const props = node.data && node.data.properties;
+        if (!props || !props._label) return;
+        const table = props._label;
+        const pkName = this.primaryKeyNameForLabel(table);
+        const pkValue = props[pkName];
+        if (pkValue === undefined || pkValue === null) return;
+        if (!byTable[table]) {
+          byTable[table] = { table, primaryKeyName: pkName, primaryKeyValues: [] };
+        }
+        byTable[table].primaryKeyValues.push(pkValue);
+      });
+      return Object.values(byTable);
     },
 
     /**
@@ -2631,6 +2917,7 @@ export default {
       // Resize and fit
       this.$nextTick(() => {
         this.updateNeighborCounts();
+        this.syncPinBadges();
       });
 
       await this.$nextTick();
@@ -2712,8 +2999,18 @@ export default {
 
     /**
      * Refetch node properties from database. Returns map of pk -> node data.
+     *
+     * By default query failures are swallowed (logged and treated as "no rows")
+     * so bulk restore keeps going past one bad label. Callers that must tell a
+     * transient fetch ERROR apart from a genuine empty result (e.g. pin
+     * navigation's "no longer in this database" path) pass
+     * `rethrowQueryErrors: true` to have the failure propagate instead.
+     *
+     * By contract this queries and keys on the `id` column, not the table's
+     * declared primary key — every Horkos node table keys on `id`. Callers
+     * supporting non-`id`-keyed tables must not rely on this method.
      */
-    async refetchNodeProperties(minimalNodes) {
+    async refetchNodeProperties(minimalNodes, { rethrowQueryErrors = false } = {}) {
       if (!minimalNodes || minimalNodes.length === 0) {
         return {};
       }
@@ -2757,6 +3054,9 @@ export default {
           }
         } catch (error) {
           console.warn('[ResultGraph] Failed to refetch nodes for label:', label, error);
+          if (rethrowQueryErrors) {
+            throw error;
+          }
         }
       }
       return results;
@@ -3128,6 +3428,7 @@ export default {
       this.$nextTick(() => {
         this.$refs.connectedEntitiesPanel?.refreshInGraphStatus();
         this.updateNeighborCounts();
+        this.syncPinBadges();
       });
     },
 
@@ -3174,6 +3475,7 @@ export default {
 
       this.g6Graph.setData(newData);
       await this.render();
+      this.syncPinBadges();
     },
 
   },

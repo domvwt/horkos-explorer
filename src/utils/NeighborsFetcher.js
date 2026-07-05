@@ -218,6 +218,100 @@ class NeighborsFetcher {
     return neighborsByPk;
   }
 
+  // Build one query per relationship type that can connect the focus node's
+  // table to `otherTable`, matching in EITHER direction. The focus node is
+  // pinned by its single primary key ($pk1); the other endpoints are bound as a
+  // list ($pks2) via UNWIND so all edges between the focus node and every canvas
+  // node of one table are fetched in a single request per rel type. Each query
+  // projects only the relationship `r` — a single concrete type has one property
+  // shape, so the divergent-STRUCT binding hazard never arises.
+  //
+  // Pure over its inputs (no I/O), so it is unit-testable without a DB.
+  _buildRelsBetweenNodeAndPksQueries({
+    focusTable,
+    focusPkName,
+    otherTable,
+    otherPkName,
+    relTables,
+  }) {
+    if (!Array.isArray(relTables)) {
+      throw new Error("_buildRelsBetweenNodeAndPksQueries requires relTables (schema.relTables)");
+    }
+    const escapedFocus = DataDefinitionLanguage._escapeName(focusTable);
+    const escapedOther = DataDefinitionLanguage._escapeName(otherTable);
+    const escapedFocusPk = DataDefinitionLanguage._escapeName(focusPkName);
+    const escapedOtherPk = DataDefinitionLanguage._escapeName(otherPkName);
+
+    // Connectivity is matched on the raw table names; only escaped names are
+    // interpolated into queries. A rel type is relevant if it connects the two
+    // tables in either direction.
+    return relTables
+      .filter(t =>
+        (t.connectivity || []).some(
+          c =>
+            (c.src === focusTable && c.dst === otherTable) ||
+            (c.src === otherTable && c.dst === focusTable)
+        )
+      )
+      .map(t =>
+        `UNWIND $pks2 AS pk2 MATCH (a:${escapedFocus}) -[r:${DataDefinitionLanguage._escapeName(t.name)}]- (b:${escapedOther}) WHERE a.${escapedFocusPk} = $pk1 AND b.${escapedOtherPk} = pk2 RETURN r;`
+      );
+  }
+
+  // All edges between one focus node and a set of other nodes already on the
+  // canvas, grouped by the other nodes' table. `others` is an array of
+  // { table, primaryKeyName, primaryKeyValues } — one entry per distinct
+  // (table, pk-column) among the canvas nodes. Returns a merged result of the
+  // shape `{ rows: [{ r }], dataTypes }` (or null if nothing connects), matching
+  // fetchRelsBetween so callers can reuse the same row-handling path.
+  //
+  // Requests scale with (rel types per table pairing) x (distinct canvas
+  // tables), NOT with the number of canvas nodes.
+  //
+  // Unlike fetchNeighborNodesBatched, $pks2 is deliberately NOT chunked: every
+  // returned row is an edge incident to the ONE focus node, so a query's row
+  // count is bounded by the focus node's degree for that single rel type — not
+  // by |pks2|. The KUZU_QUERY_SIZE_LIMIT truncation hazard that forced chunking
+  // there (rows ~ chunkSize x per-source degree) therefore doesn't apply here.
+  async fetchRelsBetweenNodeAndMany({
+    focusTable,
+    focusPkName,
+    focusPkValue,
+    others,
+    relTables,
+    isWasm = false,
+  }) {
+    if (!Array.isArray(others)) {
+      throw new Error("fetchRelsBetweenNodeAndMany requires an others array");
+    }
+    const pk1 = this._unwrapPrimaryKeyValue(focusPkValue);
+    const requests = [];
+    others.forEach(other => {
+      const values = (other.primaryKeyValues || [])
+        .map(v => this._unwrapPrimaryKeyValue(v))
+        .filter(v => v !== undefined && v !== null);
+      if (values.length === 0) {
+        return;
+      }
+      const queries = this._buildRelsBetweenNodeAndPksQueries({
+        focusTable,
+        focusPkName,
+        otherTable: other.table,
+        otherPkName: other.primaryKeyName,
+        relTables,
+      });
+      queries.forEach(query => {
+        requests.push(this._runQuery(query, { pk1, pks2: values }, isWasm));
+      });
+    });
+
+    if (requests.length === 0) {
+      return null;
+    }
+    const results = await Promise.all(requests);
+    return this._mergeResults(results);
+  }
+
   // All edges between two specific nodes, in either direction. Undirected
   // per-type matches are safe: a single bound type has one property shape.
   async fetchRelsBetween({

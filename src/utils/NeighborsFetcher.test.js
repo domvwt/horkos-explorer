@@ -319,6 +319,170 @@ describe("fetchNeighborNodesBatched", () => {
   });
 });
 
+describe("_buildRelsBetweenNodeAndPksQueries", () => {
+  it("emits one query per rel type that connects the two tables, in either direction", () => {
+    // Directorship connects Person<->Company (Person is focus here, Company the
+    // other), CorporateOwnership is Company<->Company (irrelevant to a Person
+    // focus), ResidentialAddress is Person<->Address (irrelevant to a Company
+    // other). Only Directorship qualifies.
+    const queries = NeighborsFetcher._buildRelsBetweenNodeAndPksQueries({
+      focusTable: "Person",
+      focusPkName: "id",
+      otherTable: "Company",
+      otherPkName: "id",
+      relTables,
+    });
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toContain("-[r:`Directorship`]-");
+  });
+
+  it("binds the focus pk as $pk1 and the other endpoints as an UNWIND $pks2 list", () => {
+    const queries = NeighborsFetcher._buildRelsBetweenNodeAndPksQueries({
+      focusTable: "Person",
+      focusPkName: "id",
+      otherTable: "Company",
+      otherPkName: "id",
+      relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
+    });
+    expect(queries[0]).toBe(
+      "UNWIND $pks2 AS pk2 MATCH (a:`Person`) -[r:`Directorship`]- (b:`Company`) WHERE a.`id` = $pk1 AND b.`id` = pk2 RETURN r;"
+    );
+  });
+
+  it("matches undirected so it finds edges regardless of stored direction", () => {
+    // Company as focus, Company as other, via CorporateOwnership (Company<->
+    // Company). The undirected `-[r]-` pattern means one query catches both
+    // ownership directions.
+    const queries = NeighborsFetcher._buildRelsBetweenNodeAndPksQueries({
+      focusTable: "Company",
+      focusPkName: "id",
+      otherTable: "Company",
+      otherPkName: "id",
+      relTables: [{ name: "CorporateOwnership", connectivity: [{ src: "Company", dst: "Company" }] }],
+    });
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toContain("(a:`Company`) -[r:`CorporateOwnership`]- (b:`Company`)");
+  });
+
+  it("escapes identifiers and returns no queries for an unconnected table pair", () => {
+    expect(
+      NeighborsFetcher._buildRelsBetweenNodeAndPksQueries({
+        focusTable: "Person",
+        focusPkName: "id",
+        otherTable: "Address",
+        otherPkName: "id",
+        relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
+      })
+    ).toHaveLength(0);
+
+    const escaped = NeighborsFetcher._buildRelsBetweenNodeAndPksQueries({
+      focusTable: "Weird Table",
+      focusPkName: "pk name",
+      otherTable: "Other Table",
+      otherPkName: "other pk",
+      relTables: [{ name: "Rel Type", connectivity: [{ src: "Weird Table", dst: "Other Table" }] }],
+    });
+    expect(escaped[0]).toContain("(a:`Weird Table`)");
+    expect(escaped[0]).toContain("(b:`Other Table`)");
+    expect(escaped[0]).toContain("a.`pk name` = $pk1");
+    expect(escaped[0]).toContain("b.`other pk` = pk2");
+    expect(escaped[0]).toContain("-[r:`Rel Type`]-");
+  });
+
+  it("throws when relTables is not an array", () => {
+    expect(() =>
+      NeighborsFetcher._buildRelsBetweenNodeAndPksQueries({
+        focusTable: "Person",
+        focusPkName: "id",
+        otherTable: "Company",
+        otherPkName: "id",
+      })
+    ).toThrow();
+  });
+});
+
+describe("fetchRelsBetweenNodeAndMany", () => {
+  it("runs one request per (rel type x other-table) and merges the rows", async () => {
+    const rel1 = { _id: { table: 5, offset: 1 }, _label: "Directorship" };
+    const rel2 = { _id: { table: 6, offset: 2 }, _label: "ResidentialAddress" };
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      // Person focus -> Company others (Directorship)
+      .mockResolvedValueOnce({ rows: [{ r: rel1 }], dataTypes: { r: "REL" } })
+      // Person focus -> Address others (ResidentialAddress)
+      .mockResolvedValueOnce({ rows: [{ r: rel2 }], dataTypes: { r: "REL" } });
+
+    const merged = await NeighborsFetcher.fetchRelsBetweenNodeAndMany({
+      focusTable: "Person",
+      focusPkName: "id",
+      focusPkValue: "p1",
+      others: [
+        { table: "Company", primaryKeyName: "id", primaryKeyValues: ["c1", "c2"] },
+        { table: "Address", primaryKeyName: "id", primaryKeyValues: ["a1"] },
+      ],
+      relTables,
+    });
+
+    // Person connects to Company via Directorship (1 query) and to Address via
+    // ResidentialAddress (1 query) -> 2 requests.
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    // Focus pk is bound once as $pk1; the other endpoints ride as $pks2.
+    runSpy.mock.calls.forEach(([, params]) => {
+      expect(params.pk1).toBe("p1");
+      expect(Array.isArray(params.pks2)).toBe(true);
+    });
+    expect(merged.rows.map(row => encodeId(row.r._id)).sort()).toEqual(["5_1", "6_2"]);
+    runSpy.mockRestore();
+  });
+
+  it("makes no request and returns null when no other table connects to the focus", async () => {
+    const runSpy = vi.spyOn(NeighborsFetcher, "_runQuery");
+    // Address focus with only a Company other, but the only rel type given is
+    // Directorship (Person<->Company) which never touches Address.
+    const merged = await NeighborsFetcher.fetchRelsBetweenNodeAndMany({
+      focusTable: "Address",
+      focusPkName: "id",
+      focusPkValue: "a1",
+      others: [{ table: "Company", primaryKeyName: "id", primaryKeyValues: ["c1"] }],
+      relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
+    });
+    expect(merged).toBeNull();
+    expect(runSpy).not.toHaveBeenCalled();
+    runSpy.mockRestore();
+  });
+
+  it("skips other-table entries with an empty pk list without querying them", async () => {
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValue({ rows: [], dataTypes: { r: "REL" } });
+    await NeighborsFetcher.fetchRelsBetweenNodeAndMany({
+      focusTable: "Person",
+      focusPkName: "id",
+      focusPkValue: "p1",
+      others: [
+        { table: "Company", primaryKeyName: "id", primaryKeyValues: [] },
+        { table: "Address", primaryKeyName: "id", primaryKeyValues: ["a1"] },
+      ],
+      relTables,
+    });
+    // Company has no pks -> only the Address (ResidentialAddress) query runs.
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy.mock.calls[0][0]).toContain("-[r:`ResidentialAddress`]-");
+    runSpy.mockRestore();
+  });
+
+  it("throws when others is not an array", async () => {
+    await expect(
+      NeighborsFetcher.fetchRelsBetweenNodeAndMany({
+        focusTable: "Person",
+        focusPkName: "id",
+        focusPkValue: "p1",
+        relTables,
+      })
+    ).rejects.toThrow();
+  });
+});
+
 // The "new neighbours only" count is a pure function of a neighbour-node list
 // and the set of node ids already on the canvas. This mirrors the component's
 // countNewNeighborNodes: encode each neighbour to its {table}_{offset} g6 id,
