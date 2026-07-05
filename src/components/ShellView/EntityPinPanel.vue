@@ -108,6 +108,11 @@ export default {
       },
     },
   },
+  // Blur doesn't fire when the panel is removed programmatically (e.g. a new
+  // query result clears the selection), so flush any pending draft here too.
+  beforeUnmount() {
+    this.flushDraft();
+  },
   methods: {
     togglePin() {
       if (!this.pk) return;
