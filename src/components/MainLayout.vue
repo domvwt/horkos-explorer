@@ -90,6 +90,7 @@
           />
           <PrivacyView
             v-show="showPrivacy"
+            :visible="showPrivacy"
             @dismiss="dismissPrivacy"
           />
         </div>

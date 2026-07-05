@@ -3,6 +3,14 @@
     class="privacy-view"
     @click.self="$emit('dismiss')"
   >
+    <button
+      type="button"
+      class="btn-close privacy-view__close"
+      aria-label="Close"
+      @click="$emit('dismiss')"
+    >
+      <i class="fa-solid fa-times" />
+    </button>
     <div class="privacy-view__content">
       <h1>Privacy &amp; Data Notice — {{ legal.SERVICE_NAME }}</h1>
       <p class="privacy-view__meta">
@@ -254,13 +262,36 @@ import { LEGAL } from "../../utils/Constants";
 
 export default {
   name: "PrivacyView",
+  props: {
+    // Whether the panel is currently shown. The parent keeps this mounted with
+    // v-show, so the document-level Esc handler must ignore keystrokes while hidden.
+    visible: {
+      type: Boolean,
+      default: false,
+    },
+  },
   emits: ["dismiss"],
   data() {
     return {
       legal: LEGAL,
     };
   },
+  mounted() {
+    document.addEventListener("keydown", this.handleKeyDown);
+  },
+  beforeUnmount() {
+    document.removeEventListener("keydown", this.handleKeyDown);
+  },
   methods: {
+    // Dismiss on Esc so the panel is keyboard-reachable (click-away is mouse-only).
+    // The listener lives on document for the whole session (v-show keeps us mounted),
+    // so ignore Esc unless the panel is actually visible.
+    handleKeyDown(event) {
+      if (!this.visible) return;
+      if (event.key === "Escape" || event.key === "Esc") {
+        this.$emit("dismiss");
+      }
+    },
     // Build a mailto: to the single contact inbox, with a per-route subject so
     // one inbox can triage data-subject / error-report / child-guardian requests.
     mailto(subject) {
@@ -274,6 +305,7 @@ export default {
 
 <style lang="scss" scoped>
 .privacy-view {
+  position: relative;
   height: 100%;
   overflow-y: auto;
   padding: 2rem 1rem;
@@ -282,6 +314,35 @@ export default {
   &__content {
     max-width: 52rem;
     margin: 0 auto;
+  }
+
+  // Explicit dismiss affordance. Sticky so it stays reachable while the panel
+  // scrolls (on narrow viewports the top click-away gutter scrolls away).
+  &__close {
+    position: sticky;
+    top: 0;
+    float: right;
+    z-index: 1;
+    margin: -1rem -0.5rem 0 0;
+    background: none;
+    border: none;
+    color: var(--bs-body-text-secondary);
+    cursor: pointer;
+    padding: 0.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.25rem;
+    transition: background-color 0.2s, color 0.2s;
+
+    &:hover {
+      background-color: var(--bs-body-bg-hover);
+      color: var(--bs-body-text);
+    }
+
+    i {
+      font-size: 1.25rem;
+    }
   }
 
   h1 {
