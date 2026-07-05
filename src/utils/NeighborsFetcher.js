@@ -2,6 +2,30 @@ import Axios from "@/utils/AxiosWrapper";
 import DataDefinitionLanguage from "./DataDefinitionLanguage";
 import Kuzu from "./KuzuWasm";
 
+// Max number of source pks bound into a single batched neighbour-count query.
+//
+// Each batched query returns ONE row per (source pk, neighbour node) pair for a
+// single rel type, and the server hard-caps every result to
+// KUZU_QUERY_SIZE_LIMIT (default 10000 rows) and SILENTLY truncates the rest.
+// So a chunk's row count is `chunkSize x (max neighbours of one rel type per
+// source node)`. Chunking the pk list keeps each request well under the cap so
+// a dense group can't be truncated and undercounted.
+//
+// 25 leaves generous headroom: a chunk only risks the 10000-row cap if a single
+// source node has more than ~400 neighbours of ONE concrete rel type (10000/25),
+// far beyond anything in this domain (a company's directors, a person's
+// directorships, an address's residents). Requests now scale with
+// (ceil(N/25) x rel types) instead of rel types alone, but for a typical canvas
+// of a few dozen leaf nodes that is one or two chunks. Results merge safely
+// because they are keyed by source pk (see fetchNeighborNodesBatched).
+//
+// Assumes the default KUZU_QUERY_SIZE_LIMIT of 10000; the server-only limit is
+// not cleanly readable from this client-side fetcher, so an operator who sets
+// that env var substantially lower would need a correspondingly smaller chunk
+// size to keep chunks under the cap. Undercounting only degrades an advisory
+// badge, so this is an accepted LOW-severity tradeoff.
+const NEIGHBOR_COUNT_PK_CHUNK_SIZE = 25;
+
 // Kuzu cannot bind a wildcard relationship variable across edge tables whose
 // same-named STRUCT properties differ in shape (e.g. the Ownership vs
 // Influence `sources` structs), so every fetch here runs one query per
@@ -154,12 +178,23 @@ class NeighborsFetcher {
       primaryKeyName,
       relTables,
     });
-    const params = {
-      pks: primaryKeyValues.map(v => this._unwrapPrimaryKeyValue(v)),
-    };
+    const unwrappedPks = primaryKeyValues.map(v => this._unwrapPrimaryKeyValue(v));
+
+    // Split the pk list into chunks so each batched request stays well under the
+    // server's silent KUZU_QUERY_SIZE_LIMIT row cap (see the constant above).
+    // The query text is identical across chunks — only the bound $pks param
+    // varies — so pk VALUES are never interpolated, preserving injection safety.
+    // Results merge into a single per-pk map, which is order-independent and
+    // free of double-counting because rows are keyed by their source pk.
+    const chunks = [];
+    for (let i = 0; i < unwrappedPks.length; i += NEIGHBOR_COUNT_PK_CHUNK_SIZE) {
+      chunks.push(unwrappedPks.slice(i, i + NEIGHBOR_COUNT_PK_CHUNK_SIZE));
+    }
 
     const results = await Promise.all(
-      queries.map(query => this._runQuery(query, params, isWasm))
+      chunks.flatMap(chunk =>
+        queries.map(query => this._runQuery(query, { pks: chunk }, isWasm))
+      )
     );
 
     results.forEach(result => {

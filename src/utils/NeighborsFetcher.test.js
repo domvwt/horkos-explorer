@@ -186,6 +186,104 @@ describe("fetchNeighborNodesBatched", () => {
     runSpy.mockRestore();
   });
 
+  it("chunks a pk list larger than the chunk size into multiple requests per rel type", async () => {
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValue({ rows: [], dataTypes: {} });
+
+    // 60 pks with a chunk size of 25 -> 3 chunks (25 + 25 + 10). One rel type
+    // means one query per chunk, so 3 requests total (not 1, and not 60).
+    const pks = Array.from({ length: 60 }, (_, i) => `c${i}`);
+    await NeighborsFetcher.fetchNeighborNodesBatched({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValues: pks,
+      relTables: [
+        { name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] },
+      ],
+    });
+
+    expect(runSpy).toHaveBeenCalledTimes(3);
+    // Each chunk stays at or below the chunk size, and the chunks partition the
+    // full pk list exactly (no pk dropped, none duplicated across chunks).
+    const chunks = runSpy.mock.calls.map(([, params]) => params.pks);
+    expect(chunks.map(c => c.length)).toEqual([25, 25, 10]);
+    expect(chunks.flat()).toEqual(pks);
+    runSpy.mockRestore();
+  });
+
+  it("merges per-pk neighbours across chunks without dropping or double-counting", async () => {
+    const nodeA = { _id: { table: 1, offset: 10 }, _label: "Address" };
+    const nodeB = { _id: { table: 1, offset: 11 }, _label: "Address" };
+    const nodeC = { _id: { table: 1, offset: 12 }, _label: "Address" };
+
+    // 26 pks -> 2 chunks (25 + 1). A source pk that appears in the FIRST chunk
+    // (c0) and one that appears in the SECOND chunk (c25) must both land in the
+    // merged map, and neighbours for the same pk from different chunk results
+    // must accumulate rather than overwrite.
+    const pks = Array.from({ length: 26 }, (_, i) => `c${i}`);
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      // chunk 1 result (pks c0..c24)
+      .mockResolvedValueOnce({
+        rows: [
+          { pk: "c0", dst: nodeA },
+          { pk: "c0", dst: nodeB },
+        ],
+        dataTypes: { pk: "STRING", dst: "NODE" },
+      })
+      // chunk 2 result (pk c25)
+      .mockResolvedValueOnce({
+        rows: [{ pk: "c25", dst: nodeC }],
+        dataTypes: { pk: "STRING", dst: "NODE" },
+      });
+
+    const byPk = await NeighborsFetcher.fetchNeighborNodesBatched({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValues: pks,
+      relTables: [
+        { name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] },
+      ],
+    });
+
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    expect(byPk.c0.map(n => encodeId(n._id)).sort()).toEqual(["1_10", "1_11"]);
+    expect(byPk.c25.map(n => encodeId(n._id))).toEqual(["1_12"]);
+    runSpy.mockRestore();
+  });
+
+  it("accumulates neighbours for a pk that recurs across chunks (multi rel type)", async () => {
+    const nodeA = { _id: { table: 1, offset: 10 }, _label: "Address" };
+    const nodeP = { _id: { table: 2, offset: 5 }, _label: "Person" };
+
+    // A single pk with two rel types produces two queries * one chunk = two
+    // requests. Both results carry the same source pk and must accumulate.
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValueOnce({
+        rows: [{ pk: "c1", dst: nodeA }],
+        dataTypes: { pk: "STRING", dst: "NODE" },
+      })
+      .mockResolvedValueOnce({
+        rows: [{ pk: "c1", dst: nodeP }],
+        dataTypes: { pk: "STRING", dst: "NODE" },
+      });
+
+    const byPk = await NeighborsFetcher.fetchNeighborNodesBatched({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValues: ["c1"],
+      relTables: [
+        { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
+        { name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] },
+      ],
+    });
+
+    expect(byPk.c1.map(n => encodeId(n._id)).sort()).toEqual(["1_10", "2_5"]);
+    runSpy.mockRestore();
+  });
+
   it("short-circuits with no requests for an empty pk list", async () => {
     const runSpy = vi.spyOn(NeighborsFetcher, "_runQuery");
     const byPk = await NeighborsFetcher.fetchNeighborNodesBatched({
