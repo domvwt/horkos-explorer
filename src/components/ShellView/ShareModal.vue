@@ -6,7 +6,7 @@
   >
     <div class="share-modal-content">
       <div class="share-modal-header">
-        <h5>Share Investigation</h5>
+        <h5>Share view</h5>
         <button
           class="btn-close"
           @click="$emit('close')"
@@ -17,7 +17,7 @@
 
       <div class="share-modal-body">
         <p class="share-modal-description">
-          Copy this code to share your investigation. Paste it into the Import Investigation dialog to restore.
+          Copy this code to share the current view. Paste it into the Open a shared view dialog to restore.
         </p>
 
         <div class="share-code-container">

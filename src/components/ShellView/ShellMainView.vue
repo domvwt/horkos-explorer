@@ -39,6 +39,11 @@ import { v4 as uuidv4 } from 'uuid';
 import Axios from "@/utils/AxiosWrapper";
 import { MODES } from "@/utils/Constants";
 import { useModeStore } from "@/store/ModeStore";
+import {
+  saveViewThroughCell,
+  restoreViewThroughCell,
+  selectEntityThroughCell,
+} from "@/utils/NotebookSidebarLogic";
 export default {
   name: "ShellMainView",
   components: {
@@ -379,6 +384,57 @@ MATCH (n) RETURN n LIMIT 5;`;
         return cell.getInvestigationState();
       }
       return null;
+    },
+
+    // ---- Notebook sidebar delegation -------------------------------------
+    // The notebook sidebar is owned by MainLayout but its actions (select a
+    // pinned/noted entity, save the current canvas as a view, restore a saved
+    // view) must act on the live graph, which lives inside a shell cell. These
+    // methods bridge MainLayout -> the active cell's ResultGraph, mirroring the
+    // existing handleImportInvestigation delegation path.
+
+    // The ResultGraph of the active cell (or the first cell as a fallback), or
+    // null if no graph is mounted yet.
+    activeResultGraph() {
+      if (this.shellCell.length === 0) return null;
+      // Prefer whichever cell's editor is currently active; fall back to the
+      // first cell so the sidebar always has a target (same convention as the
+      // import/restore flow, which uses cell 0).
+      let cell = null;
+      for (let i = 0; i < this.shellCell.length; i++) {
+        const c = this.$refs[this.getCellRef(i)]?.[0];
+        if (c && c.isActive && c.isActive()) {
+          cell = c;
+          break;
+        }
+      }
+      if (!cell) {
+        cell = this.$refs[this.getCellRef(0)]?.[0] || null;
+      }
+      if (!cell) return null;
+      const container = cell.$refs[cell.getRefName(0)]?.[0];
+      return container?.$refs?.resultGraph || null;
+    },
+
+    // Each action routes through the unit-tested NotebookSidebarLogic helpers
+    // with the resolved ResultGraph as the delegate, and returns { ok, reason }
+    // so MainLayout can hand the outcome back to the sidebar for feedback
+    // (e.g. "no-graph" when the active cell shows a table / code view).
+
+    // Route a pinned/noted entity click to the active cell's pin-navigation
+    // handler (it already handles on-canvas / hidden / off-canvas / not-found).
+    selectNotebookEntity({ label, pk }) {
+      return selectEntityThroughCell(this.activeResultGraph(), { label, pk });
+    },
+
+    // Save the active cell's current canvas as a named saved view.
+    saveNotebookView(name) {
+      return saveViewThroughCell(this.activeResultGraph(), name);
+    },
+
+    // Restore a saved view onto the active cell's canvas.
+    restoreNotebookView(view) {
+      return restoreViewThroughCell(this.activeResultGraph(), view);
     },
 
     /**

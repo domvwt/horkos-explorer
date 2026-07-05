@@ -6,7 +6,7 @@
   >
     <div class="import-modal-content">
       <div class="import-modal-header">
-        <h5>Import Investigation</h5>
+        <h5>Open a shared view</h5>
         <button
           class="btn-close"
           @click="$emit('close')"
@@ -17,7 +17,7 @@
 
       <div class="import-modal-body">
         <p class="import-modal-description">
-          Paste an investigation export code to restore a shared graph.
+          Paste an export code to restore a shared view.
         </p>
 
         <div class="import-code-container">
@@ -44,7 +44,7 @@
         <div class="import-hint">
           <small class="text-muted">
             <i class="fa-solid fa-info-circle" />
-            Get an export code by clicking "Share Investigation" on any graph, then copy the code.
+            Get an export code by clicking "Share view" on any graph, then copy the code.
           </small>
         </div>
       </div>

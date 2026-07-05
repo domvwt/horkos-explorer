@@ -517,3 +517,59 @@ describe("wipeAll", () => {
     expect(store.activeNotebook.name).toBe("Untitled notebook");
   });
 });
+
+describe("orphanNotes", () => {
+  it("is empty when there are no notes", () => {
+    const store = freshStore();
+    expect(store.orphanNotes).toEqual([]);
+    expect(store.orphanNoteCount).toBe(0);
+  });
+
+  it("excludes notes whose entity is pinned", () => {
+    const store = freshStore();
+    store.pin("Person", "p1", "Alice");
+    store.setNote("Person", "p1", "pinned note");
+    expect(store.orphanNotes).toEqual([]);
+    expect(store.orphanNoteCount).toBe(0);
+  });
+
+  it("surfaces a note on an unpinned entity, decoding label and pk", () => {
+    const store = freshStore();
+    store.setNote("Company", "c9", "look into this shell");
+    expect(store.orphanNoteCount).toBe(1);
+    expect(store.orphanNotes).toEqual([
+      { key: "Company|c9", label: "Company", pk: "c9", note: "look into this shell" },
+    ]);
+  });
+
+  it("moves a note between pinned and orphan as the pin toggles", () => {
+    const store = freshStore();
+    store.setNote("Person", "p2", "watch");
+    expect(store.orphanNoteCount).toBe(1);
+    store.pin("Person", "p2", "Bob");
+    expect(store.orphanNoteCount).toBe(0);
+    store.unpin("Person", "p2");
+    expect(store.orphanNoteCount).toBe(1);
+    expect(store.orphanNotes[0].pk).toBe("p2");
+  });
+
+  it("returns orphan notes sorted stably by key", () => {
+    const store = freshStore();
+    store.setNote("Person", "p3", "n3");
+    store.setNote("Company", "c1", "n1");
+    store.setNote("Address", "a2", "n2");
+    expect(store.orphanNotes.map((o) => o.key)).toEqual([
+      "Address|a2",
+      "Company|c1",
+      "Person|p3",
+    ]);
+  });
+
+  it("is per-notebook: orphan notes don't bleed across notebooks", () => {
+    const store = freshStore();
+    store.setNote("Company", "c1", "matter A note");
+    expect(store.orphanNoteCount).toBe(1);
+    store.createNotebook("B");
+    expect(store.orphanNoteCount).toBe(0);
+  });
+});

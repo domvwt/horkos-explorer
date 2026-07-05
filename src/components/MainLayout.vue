@@ -54,6 +54,15 @@
 
     <!-- Main Container -->
     <div class="wrapper">
+      <!-- Notebook: persistent, collapsible left rail (owned by the app shell,
+           present on all main views). Graph actions delegate through
+           ShellMainView to the active cell's ResultGraph. -->
+      <NotebookSidebar
+        ref="notebookSidebar"
+        @select-entity="handleNotebookSelectEntity"
+        @save-view="handleNotebookSaveView"
+        @restore-view="handleNotebookRestoreView"
+      />
       <div class="main-layout__main-container">
         <div class="container-fluid">
           <SchemaViewMain
@@ -185,6 +194,7 @@ import ImporterMainView from "./ImporterView/ImporterMainView.vue";
 import PrivacyView from "./PrivacyView/PrivacyView.vue";
 import ImportModal from "./ShellView/ImportModal.vue";
 import ShareModal from "./ShellView/ShareModal.vue";
+import NotebookSidebar from "./NotebookSidebar.vue";
 import Axios from "@/utils/AxiosWrapper";
 import { generateExportCode } from "@/utils/InvestigationState";
 import { useSettingsStore } from "../store/SettingsStore";
@@ -206,6 +216,7 @@ export default {
     PrivacyView,
     ImportModal,
     ShareModal,
+    NotebookSidebar,
   },
   data: () => ({
     accessModeModal: null,
@@ -543,6 +554,39 @@ export default {
         }
       });
     },
+    // ---- Notebook sidebar delegation ------------------------------------
+    // The sidebar is owned by the shell but its graph actions must act on the
+    // live canvas inside a shell cell. Mirror the handleImportInvestigation
+    // path: ensure we're on the shell view, then delegate to ShellMainView,
+    // which reaches the active cell's ResultGraph. Each delegation returns
+    // { ok, reason }; hand that back to the sidebar so a miss (e.g. the active
+    // cell shows a table, or no query has run) surfaces feedback instead of
+    // silently doing nothing.
+    notebookDelegate(action, invoke) {
+      if (!this.showShell) {
+        this.navigateTo('shell');
+      }
+      this.$nextTick(() => {
+        const result =
+          invoke(this.$refs.shellView) || { ok: false, reason: "no-graph" };
+        this.$refs.notebookSidebar?.handleDelegateResult(action, result);
+      });
+    },
+    handleNotebookSelectEntity({ label, pk }) {
+      this.notebookDelegate("select-entity", (shell) =>
+        shell?.selectNotebookEntity({ label, pk })
+      );
+    },
+    handleNotebookSaveView(name) {
+      this.notebookDelegate("save-view", (shell) =>
+        shell?.saveNotebookView(name)
+      );
+    },
+    handleNotebookRestoreView(view) {
+      this.notebookDelegate("restore-view", (shell) =>
+        shell?.restoreNotebookView(view)
+      );
+    },
     // Handle share investigation from header button
     handleShare() {
       // Ensure we're on the shell view (and that the hash reflects it).
@@ -657,11 +701,15 @@ body {
   flex: 1;
   overflow: hidden;
   display: flex;
-  flex-direction: column;
+  // Notebook sidebar (left) + main container (right), docked side by side so
+  // the sidebar pushes the canvas rather than overlaying it.
+  flex-direction: row;
+  position: relative;
 }
 
 .main-layout__main-container {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   height: 100%;
   position: relative;
   overflow: hidden;

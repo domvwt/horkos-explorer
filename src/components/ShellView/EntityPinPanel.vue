@@ -4,11 +4,11 @@
     class="entity-pin"
   >
     <div class="entity-pin__header">
-      <h6>Investigation</h6>
+      <h6>Notebook</h6>
       <button
         class="btn btn-sm"
         :class="pinned ? 'btn-warning' : 'btn-outline-secondary'"
-        :title="pinned ? 'Unpin this entity' : 'Pin this entity to your investigation log'"
+        :title="pinned ? 'Unpin this entity' : 'Pin this entity to your notebook'"
         @click="togglePin"
       >
         <i

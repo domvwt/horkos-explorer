@@ -233,6 +233,34 @@ export const useNotebookStore = defineStore("notebook", {
     savedViewCount() {
       return this.activeNotebook.savedViews.length;
     },
+    // Entities that carry a note but are NOT pinned in the active notebook
+    // ("orphan notes"). Notes are kept independently of pins, so a note can
+    // outlive an unpin or annotate an entity that was never pinned; the sidebar
+    // surfaces these so they're never invisible. Each entry decodes the "Label|pk"
+    // key back to { key, label, pk, note } so the UI can navigate to the entity.
+    // Newest keys aren't tracked per-note, so ordering falls back to label+pk for
+    // stability.
+    orphanNotes() {
+      const nb = this.activeNotebook;
+      const pins = nb.pins;
+      const out = [];
+      for (const [key, note] of Object.entries(nb.notes)) {
+        if (pins[key]) continue; // pinned — surfaced in the pins list instead
+        const sep = key.indexOf("|");
+        if (sep === -1) continue; // malformed key; skip defensively
+        out.push({
+          key,
+          label: key.slice(0, sep),
+          pk: key.slice(sep + 1),
+          note,
+        });
+      }
+      out.sort((a, b) => a.key.localeCompare(b.key));
+      return out;
+    },
+    orphanNoteCount() {
+      return this.orphanNotes.length;
+    },
     // Reactive predicate: is this entity pinned in the active notebook?
     isPinned() {
       return (label, pk) => Boolean(this.activeNotebook.pins[entityKey(label, pk)]);

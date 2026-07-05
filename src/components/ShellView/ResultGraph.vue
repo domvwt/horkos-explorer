@@ -210,7 +210,7 @@
             :properties="clickedProperties"
           />
 
-          <!-- Pin + note this entity to the investigation log -->
+          <!-- Pin + note this entity in your notebook -->
           <EntityPinPanel
             v-if="clickedIsNode"
             :entity-type="clickedLabel"
@@ -336,13 +336,6 @@
               No nodes or rels to show.
             </p>
           </div>
-
-          <!-- Investigation log: pins, saved views, export/import -->
-          <InvestigationPanel
-            @select-entity="handleSelectPinnedEntity"
-            @restore-view="handleRestoreSavedView"
-            @request-save-view="handleSaveCurrentView"
-          />
         </div>
       </div>
     </div>
@@ -392,7 +385,6 @@ import ConnectedEntitiesPanel from "./ConnectedEntitiesPanel.vue";
 import ConfidenceIndicator from "./ConfidenceIndicator.vue";
 import ResultDisclaimer from "./ResultDisclaimer.vue";
 import EntityPinPanel from "./EntityPinPanel.vue";
-import InvestigationPanel from "./InvestigationPanel.vue";
 import {
   nodeTypeDisplayName,
   relTypeDisplayName,
@@ -412,8 +404,7 @@ export default {
     ConnectedEntitiesPanel,
     ConfidenceIndicator,
     ResultDisclaimer,
-    EntityPinPanel,
-    InvestigationPanel
+    EntityPinPanel
   },
   props: {
     queryResult: {
@@ -2736,17 +2727,20 @@ export default {
      */
     handleSaveCurrentView(name) {
       const trimmed = (name || '').trim();
-      if (!trimmed) return;
+      if (!trimmed) return false;
       const state = this.getInvestigationState();
       if (!state.graphData || !state.graphData.nodes || state.graphData.nodes.length === 0) {
         this.showToast('Nothing to save — the graph is empty.', 4000);
-        return;
+        return false;
       }
       const { code } = generateExportCode(state);
       const saved = this.notebookStore.saveView(trimmed, code);
       if (saved) {
         this.showToast(`Saved view "${trimmed}".`, 3000);
       }
+      // Report whether a view was actually written, so the notebook sidebar
+      // can keep its typed name on failure instead of silently clearing it.
+      return Boolean(saved);
     },
 
     /**
