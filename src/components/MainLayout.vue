@@ -26,14 +26,6 @@
             <span>Import</span>
           </button>
           <a
-            href="https://github.com/domvwt/horkos"
-            target="_blank"
-            class="header-link"
-          >
-            <i class="fa-solid fa-book" />
-            <span>Docs</span>
-          </a>
-          <a
             href="#privacy"
             class="header-link"
             @click.prevent="navigateTo('privacy')"

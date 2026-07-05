@@ -4211,8 +4211,17 @@ export default {
       &.result-graph__overview-table {
         table-layout: fixed;
 
+        th,
+        td {
+          vertical-align: middle;
+        }
+
+        // Counts read as a column: right-aligned, digits in tabular figures so
+        // rows line up against the variable-width label badges.
         td {
           width: 120px;
+          text-align: right;
+          font-variant-numeric: tabular-nums;
         }
       }
 
