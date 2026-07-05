@@ -103,7 +103,7 @@ function toSuggestion(row, config) {
   for (const col of config.disambiguators) {
     const value = row[col];
     if (value === null || value === undefined) continue;
-    // node-duckdb returns BIGINT columns (e.g. record_count) as BigInt,
+    // DuckDB returns BIGINT columns (e.g. record_count) as JS bigint,
     // which JSON.stringify rejects
     disambiguators[col] = typeof value === "bigint" ? Number(value) : value;
   }

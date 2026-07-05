@@ -1,4 +1,4 @@
-const duckdb = require("duckdb");
+const { DuckDBInstance } = require("@duckdb/node-api");
 const logger = require("./Logger");
 
 /**
@@ -7,39 +7,69 @@ const logger = require("./Logger");
  * Provides read-only access to DuckDB search tables for autocomplete
  * functionality. Connection is optional - if DUCKDB_FILE is not set,
  * autocomplete features gracefully degrade.
+ *
+ * Uses the promise-based @duckdb/node-api ("node-neo") binding. Because
+ * instance/connection creation is async, init() kicks off connection setup
+ * without blocking the caller and stores the in-flight promise; query() and
+ * getCapabilities() await it, so requests that arrive during the (brief)
+ * startup window queue rather than fail. isEnabled() flips true only once a
+ * connection is actually established.
  */
 class DuckDBConnection {
   constructor() {
-    this.db = null;
+    this.instance = null;
     this.conn = null;
     this.enabled = false;
     this.capabilities = null;
+    // Promise that resolves once the connection is ready (or rejects/settles
+    // to a disabled state). query()/getCapabilities() await this so the async
+    // startup is transparent to callers, which invoke init() fire-and-forget.
+    this.ready = null;
   }
 
   /**
    * Initialize DuckDB connection from environment variable.
    * Reads DUCKDB_FILE (documented name) or DUCKDB_PATH (legacy alias).
    * If neither is set, autocomplete will be disabled.
+   *
+   * Returns the readiness promise so callers may await it if they wish, but
+   * awaiting is optional — index.js/Configure.js call this fire-and-forget.
+   * @returns {Promise<void>}
    */
   init() {
     const duckdbPath = process.env.DUCKDB_FILE || process.env.DUCKDB_PATH;
     if (!duckdbPath) {
       logger.info("DUCKDB_FILE not set - autocomplete disabled");
-      return;
+      this.ready = Promise.resolve();
+      return this.ready;
     }
 
+    this.ready = this._connect(duckdbPath);
+    return this.ready;
+  }
+
+  /**
+   * Establish the read-only instance/connection and run capability
+   * detection. Any failure leaves the manager disabled (autocomplete
+   * gracefully degrades) rather than throwing to the boot path.
+   */
+  async _connect(duckdbPath) {
     try {
-      this.db = new duckdb.Database(duckdbPath, { access_mode: "READ_ONLY" });
-      this.conn = this.db.connect();
+      this.instance = await DuckDBInstance.create(duckdbPath, {
+        access_mode: "READ_ONLY",
+      });
+      this.conn = await this.instance.connect();
       this.enabled = true;
       logger.info(`DuckDB connected: ${duckdbPath} (autocomplete enabled)`);
     } catch (err) {
       logger.error(`Failed to connect to DuckDB at ${duckdbPath}: ${err.message}`);
       this.enabled = false;
+      this.instance = null;
+      this.conn = null;
       return;
     }
 
-    this.capabilities = this.detectCapabilities();
+    this.capabilities = await this.detectCapabilities();
   }
 
   /**
@@ -105,6 +135,10 @@ class DuckDBConnection {
    * @returns {Promise<{fts: boolean, tables: Object}>}
    */
   async getCapabilities() {
+    // Wait for startup connection/detection to settle before reporting.
+    if (this.ready) {
+      await this.ready;
+    }
     if (!this.capabilities) {
       return { fts: false, tables: {} };
     }
@@ -120,16 +154,29 @@ class DuckDBConnection {
    * @throws {Error} If connection is not available or query fails.
    */
   async query(sql, ...params) {
-    if (!this.enabled) {
+    // Wait for the in-flight connection so queries issued during startup
+    // resolve once ready. Guard against a self-await deadlock: detectCapabilities
+    // runs INSIDE the `ready` promise and itself calls query() — by that point
+    // `this.conn` is already set, so we must NOT await `ready` (which is still
+    // pending on detectCapabilities). Only await when the connection isn't up yet.
+    if (this.ready && !this.conn) {
+      await this.ready;
+    }
+    if (!this.enabled || !this.conn) {
       throw new Error("DuckDB connection not available");
     }
 
-    return new Promise((resolve, reject) => {
-      this.conn.all(sql, ...params, (err, rows) => {
-        if (err) reject(err);
-        else resolve(rows || []);
-      });
-    });
+    // node-neo takes positional parameters as an array; the old binding took
+    // them variadically. Collect the variadic params into an array to preserve
+    // this method's call signature for existing callers (Suggest.js).
+    const reader =
+      params.length > 0
+        ? await this.conn.runAndReadAll(sql, params)
+        : await this.conn.runAndReadAll(sql);
+    // getRowObjects() yields plain objects keyed by column name (BIGINT
+    // columns arrive as JS bigint, matching the old node-duckdb behaviour that
+    // Suggest.js relies on).
+    return reader.getRowObjects();
   }
 
   /**
@@ -145,15 +192,18 @@ class DuckDBConnection {
    */
   close() {
     if (this.conn) {
-      this.conn.close();
+      this.conn.closeSync();
       this.conn = null;
     }
-    if (this.db) {
-      this.db.close();
-      this.db = null;
+    if (this.instance) {
+      if (typeof this.instance.closeSync === "function") {
+        this.instance.closeSync();
+      }
+      this.instance = null;
     }
     this.enabled = false;
     this.capabilities = null;
+    this.ready = null;
   }
 }
 
