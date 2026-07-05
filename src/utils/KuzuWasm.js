@@ -109,7 +109,7 @@ class Kuzu {
       dataTypes[name] = columnTypes[i];
     });
     return { rows, dataTypes };
-  };
+  }
 
   async query(statement, params = null) {
     const conn = await this.getConnection();

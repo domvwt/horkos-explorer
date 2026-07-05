@@ -9,7 +9,9 @@ let sessionDb;
 const queryMap = new Map();
 try {
   sessionDb = require("./utils/SessionDatabase");
-} catch (err) { }
+} catch (err) {
+  // SessionDatabase is optional (absent in stateless deployments); sessionDb stays undefined.
+}
 
 const DEMO_MODE = MODES.DEMO;
 

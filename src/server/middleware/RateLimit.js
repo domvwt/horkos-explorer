@@ -58,7 +58,7 @@ const queryLimiter = rateLimit({
     });
   },
   // Skip rate limiting for successful cached queries (if implemented)
-  skip: (req) => {
+  skip: () => {
     // Could check if query is in cache and skip rate limit
     return false;
   }

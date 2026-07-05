@@ -8,7 +8,7 @@ class ValueFormatter {
     this.parsedComplexTypes = {};
   }
 
-  filterAndBeautifyProperties(rawValue, schema, isRecursiveRel = false) {
+  filterAndBeautifyProperties(rawValue, schema) {
     const properties = [];
 
     // Always add the label (entity/relationship type) as the first property
@@ -112,10 +112,10 @@ class ValueFormatter {
   beautifyRecursiveRelValue(value, type) {
     return {
       _nodes: value._nodes.map((node) =>
-        this.filterAndBeautifyProperties({ ...node }, type, true)
+        this.filterAndBeautifyProperties({ ...node }, type)
       ),
       _rels: value._rels.map((rel) =>
-        this.filterAndBeautifyProperties({ ...rel }, type, true)
+        this.filterAndBeautifyProperties({ ...rel }, type)
       ),
     };
   }

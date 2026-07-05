@@ -370,12 +370,9 @@
 import { Graph, GraphEvent } from '@antv/g6';
 import G6Utils from "../../utils/G6Utils";
 import { GraphHistoryManager } from "../../utils/GraphHistoryManager";
-import {
-  DATA_TYPES, UI_SIZE, GRAPH_LAYOUTS
-} from "../../utils/Constants";
+import { UI_SIZE } from "../../utils/Constants";
 import {
   encodeId,
-  getNodeIcon,
   formatNodeLabel,
   buildG6Node,
   buildG6Edge,
@@ -396,7 +393,6 @@ import ConfidenceIndicator from "./ConfidenceIndicator.vue";
 import ResultDisclaimer from "./ResultDisclaimer.vue";
 import EntityPinPanel from "./EntityPinPanel.vue";
 import InvestigationPanel from "./InvestigationPanel.vue";
-import g6Utils from '../../utils/G6Utils';
 import {
   nodeTypeDisplayName,
   relTypeDisplayName,
@@ -1467,7 +1463,7 @@ export default {
     },
 
     async expandOnNode(model) {
-      const { tableName, primaryKey, primaryKeyValue, primaryKeyName } = this.getInfoForExpansion(model);
+      const { tableName, primaryKeyValue, primaryKeyName } = this.getInfoForExpansion(model);
       const sizeLimit = this.settingsStore.performance.maxNumberOfNodesToExpand;
       let neighbors = null;
       try {
@@ -2890,7 +2886,7 @@ export default {
             await this.redoHide(cmd.data);
             break;
           case 'showAll':
-            await this.redoShowAll(cmd.data);
+            await this.redoShowAll();
             break;
           case 'add-connected-node':
             await this.redoAddConnectedNode(cmd.data);
@@ -3055,7 +3051,7 @@ export default {
     /**
      * Redo showAll = show all again
      */
-    async redoShowAll(data) {
+    async redoShowAll() {
       const combined = { ...this.hiddenElements.nodes, ...this.hiddenElements.edges };
       Object.keys(combined).forEach(key => combined[key] = 'visible');
       await this.setElementVisibility(combined);

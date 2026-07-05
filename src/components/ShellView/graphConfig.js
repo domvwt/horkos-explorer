@@ -25,15 +25,9 @@ const EFFECTIVE_NODE_SIZE = NODE_SIZE + LABEL_HEIGHT; // ~135px total footprint
 /**
  * Get D3 force layout configuration (default)
  *
- * @param {Array} edges - Edge data for distance calculation
  * @returns {Object} Force layout configuration
  */
-function getD3ForceConfig(edges) {
-  // Calculate dynamic node spacing based on edge count
-  let nodeSpacing = edges.length * 8;
-  nodeSpacing = nodeSpacing < 80 ? 80 : nodeSpacing;
-  nodeSpacing = nodeSpacing > 500 ? 500 : nodeSpacing;
-
+function getD3ForceConfig() {
   return {
     type: 'd3-force',
     link: {
@@ -107,10 +101,9 @@ function getCircularConfig(nodeCount = 10) {
 /**
  * Get dagre (hierarchical) layout configuration
  *
- * @param {number} nodeCount - Number of nodes in the graph
  * @returns {Object} Dagre layout configuration
  */
-function getDagreConfig(nodeCount = 10) {
+function getDagreConfig() {
   // Use effective node size for spacing - labels need vertical space
   // nodesep: horizontal spacing between nodes in same rank
   // ranksep: vertical spacing between ranks (needs extra for labels)
@@ -130,10 +123,9 @@ function getDagreConfig(nodeCount = 10) {
 /**
  * Get concentric layout configuration
  *
- * @param {number} nodeCount - Number of nodes in the graph
  * @returns {Object} Concentric layout configuration
  */
-function getConcentricConfig(nodeCount = 10) {
+function getConcentricConfig() {
   return {
     type: 'concentric',
     sortBy: 'degree',
@@ -151,7 +143,6 @@ function getConcentricConfig(nodeCount = 10) {
  *
  * @param {string} layoutType - Layout type key (d3-force, circular, dagre, concentric)
  * @param {Object} options - Layout-specific options
- * @param {Array} options.edges - Edge data (for d3-force)
  * @param {number} options.nodeCount - Number of nodes in the graph
  * @param {boolean} options.isLayoutChange - Whether this is a layout change (vs initial render)
  * @returns {Object} Layout configuration
@@ -164,12 +155,12 @@ export function getLayoutConfig(layoutType, options = {}) {
     case 'circular':
       return getCircularConfig(nodeCount);
     case 'dagre':
-      return getDagreConfig(nodeCount);
+      return getDagreConfig();
     case 'concentric':
-      return getConcentricConfig(nodeCount);
+      return getConcentricConfig();
     case 'd3-force':
     default: {
-      const config = getD3ForceConfig(options.edges || []);
+      const config = getD3ForceConfig();
       // When switching TO force layout, use lower initial energy to prevent nodes shooting away
       if (isLayoutChange) {
         config.alpha = 0.3;

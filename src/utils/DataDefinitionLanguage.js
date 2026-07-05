@@ -133,7 +133,7 @@ class DataDefinitionLanguage {
   }
 
   getCsvOptionsSubquery(csvFormatOptions) {
-    const { delimiter, quote, escape, hasHeader, listBegin, listEnd, parallelism, ignoreErrors } = csvFormatOptions;
+    const { delimiter, quote, escape, hasHeader, parallelism, ignoreErrors } = csvFormatOptions;
     let csvOptions = [];
     csvOptions.push(`HEADER=${hasHeader}`);
     csvOptions.push(`DELIM="${this._jsonEscapedString(delimiter)}"`);

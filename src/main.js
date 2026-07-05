@@ -10,7 +10,3 @@ const app = createApp(App);
 
 app.use(pinia);
 app.mount("#app");
-
-export function toggleDarkMode() {
-  const modeStore = useModeStore();
-}

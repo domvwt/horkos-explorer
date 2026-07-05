@@ -146,7 +146,7 @@ export default {
       if (this.isWasm) {
         return Promise.resolve();
       }
-      return Axios.delete(`/api/session/history/${uuid}`).catch((error) => {
+      return Axios.delete(`/api/session/history/${uuid}`).catch(() => {
         // Session endpoint not available (DISABLE_SESSION_DB=true) - ignore
         console.debug('Server-side history delete not available');
       });
