@@ -701,8 +701,8 @@ body {
   flex: 1;
   overflow: hidden;
   display: flex;
-  // Notebook sidebar (left) + main container (right), docked side by side so
-  // the sidebar pushes the canvas rather than overlaying it.
+  /* Notebook sidebar (left) + main container (right), docked side by side so
+     the sidebar pushes the canvas rather than overlaying it. */
   flex-direction: row;
   position: relative;
 }
