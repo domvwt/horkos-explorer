@@ -3,15 +3,15 @@
     class="privacy-view"
     @click.self="$emit('dismiss')"
   >
-    <button
-      type="button"
-      class="btn-close privacy-view__close"
-      aria-label="Close"
-      @click="$emit('dismiss')"
-    >
-      <i class="fa-solid fa-times" />
-    </button>
     <div class="privacy-view__content">
+      <button
+        type="button"
+        class="privacy-view__close"
+        aria-label="Close"
+        @click="$emit('dismiss')"
+      >
+        <i class="fa-solid fa-times" />
+      </button>
       <h1>Privacy &amp; Data Notice — {{ legal.SERVICE_NAME }}</h1>
       <p class="privacy-view__meta">
         <strong>Effective date:</strong> {{ legal.EFFECTIVE_DATE }} ·
@@ -316,14 +316,16 @@ export default {
     margin: 0 auto;
   }
 
-  // Explicit dismiss affordance. Sticky so it stays reachable while the panel
-  // scrolls (on narrow viewports the top click-away gutter scrolls away).
+  // Explicit dismiss affordance, anchored inside the centred content column so
+  // it reads as part of the panel on wide screens. Sticky so it stays reachable
+  // while the panel scrolls (on narrow viewports the click-away gutter scrolls
+  // away).
   &__close {
     position: sticky;
     top: 0;
     float: right;
     z-index: 1;
-    margin: -1rem -0.5rem 0 0;
+    margin: 0 0 0.5rem 1rem;
     background: none;
     border: none;
     color: var(--bs-body-text-secondary);
