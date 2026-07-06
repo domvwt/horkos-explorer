@@ -176,7 +176,6 @@
         <div class="notebook-sidebar__section">
           <div class="notebook-sidebar__section-title">
             Pinned entities
-            <span class="badge">{{ notebookStore.pinnedCount }}</span>
           </div>
           <p
             v-if="notebookStore.pinnedCount === 0"
@@ -223,7 +222,6 @@
         >
           <div class="notebook-sidebar__section-title">
             Noted entities
-            <span class="badge">{{ notebookStore.orphanNoteCount }}</span>
           </div>
           <ul class="notebook-sidebar__list">
             <li
@@ -255,7 +253,6 @@
         <div class="notebook-sidebar__section">
           <div class="notebook-sidebar__section-title">
             Saved views
-            <span class="badge">{{ notebookStore.savedViewCount }}</span>
           </div>
           <div class="notebook-sidebar__save-row">
             <input
@@ -459,9 +456,9 @@ const NOTE_PREVIEW_LENGTH = 60;
 
 /**
  * Left-docked, always-present, collapsible notebook rail owned by the app
- * shell (MainLayout). Collapsed it is a narrow icon rail (no counter badge);
- * expanded it shows the active notebook's page, pins, noted-but-unpinned
- * entities, saved views, per-notebook backup and a wipe-everything action.
+ * shell (MainLayout). Collapsed it is a narrow icon rail; expanded it shows
+ * the active notebook's page, pins, noted-but-unpinned entities, saved
+ * views, per-notebook backup and a wipe-everything action.
  *
  * Notebook naming and the destructive actions never use native browser
  * dialogs: create/rename swap in place to an inline input, and delete /
@@ -1109,11 +1106,6 @@ export default {
     font-weight: 600;
     color: var(--bs-body-text-secondary);
     margin-bottom: 0.5rem;
-
-    .badge {
-      background-color: var(--bs-body-bg-accent);
-      color: #fff !important;
-    }
   }
 
   &__page {
