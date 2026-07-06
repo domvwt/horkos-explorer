@@ -30,6 +30,29 @@ describe("internal-field filter", () => {
     expect(names).not.toContain("quality_concerns");
   });
 
+  it("hides source-system/source-records fields (duplicated by the provenance panel)", () => {
+    const props = [
+      { name: "name", value: "Acme" },
+      { name: "source_systems", value: "['companies_house', 'psc']" },
+      { name: "source_records", value: "['companies-house:1', 'psc:2']" },
+      { name: "id", value: "c1" },
+    ];
+    const out = hideInternalProperties(props);
+    const names = out.map((p) => p.name);
+    expect(names).toEqual(["name", "id"]);
+    expect(names).not.toContain("source_systems");
+    expect(names).not.toContain("source_records");
+  });
+
+  it("does not hide unrelated properties that merely mention 'source'", () => {
+    const props = [
+      { name: "name", value: "Acme" },
+      { name: "source_systems", value: "['psc']" },
+    ];
+    const out = hideInternalProperties(props);
+    expect(out.map((p) => p.name)).toEqual(["name"]);
+  });
+
   it("keeps the synthetic type/label row by default (hover tooltip behaviour)", () => {
     const props = [
       { name: "Entity Type", value: "Company", isLabel: true },
@@ -64,6 +87,8 @@ describe("internal-field filter", () => {
   it("exposes the internal field list and quality-level constant", () => {
     expect(INTERNAL_FIELD_NAMES).toContain("quality_level");
     expect(INTERNAL_FIELD_NAMES).toContain("quality_concerns");
+    expect(INTERNAL_FIELD_NAMES).toContain("source_systems");
+    expect(INTERNAL_FIELD_NAMES).toContain("source_records");
     expect(QUALITY_LEVEL_FIELD).toBe("quality_level");
   });
 });

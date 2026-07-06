@@ -15,11 +15,20 @@
 /**
  * Internal/technical property names written onto entities by the resolver that
  * must NEVER be shown as raw property rows in the UI. They are surfaced through
- * purpose-built widgets instead (e.g. the confidence chip reads `quality_level`).
+ * purpose-built widgets instead (e.g. the confidence chip reads `quality_level`;
+ * `source_systems`/`source_records` are read by the "Sources & Matching"
+ * provenance panel). Those widgets take the entity's raw property list as their
+ * own input (not the output of `hideInternalProperties`), so hiding these names
+ * from the general list does not affect them.
  *
  * This is the allowlist-of-what-to-hide that every surface filters against.
  */
-export const INTERNAL_FIELD_NAMES = ["quality_level", "quality_concerns"];
+export const INTERNAL_FIELD_NAMES = [
+  "quality_level",
+  "quality_concerns",
+  "source_systems",
+  "source_records",
+];
 
 /**
  * The property name carrying the resolver's merge-quality band, read by the
