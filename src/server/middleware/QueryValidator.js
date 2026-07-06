@@ -109,7 +109,8 @@ class QueryValidator {
    * replacing each comment with a single space so tokens that were separated
    * only by a comment are not merged. STRING-LITERAL-SAFE: a `//` or `/*` that
    * appears inside a single- or double-quoted string literal (honouring
-   * backslash escapes) is left untouched.
+   * backslash escapes) or inside a Kuzu backtick-quoted identifier is left
+   * untouched.
    *
    * This runs BEFORE splitStatements so a comment can never hide a statement
    * separator or a forbidden construct from the validator's view (the ANTLR
@@ -126,6 +127,7 @@ class QueryValidator {
     let out = '';
     let inString = false;
     let stringChar = null;
+    let inBacktick = false;
     let escaped = false;
     let i = 0;
 
@@ -143,6 +145,25 @@ class QueryValidator {
       if (char === '\\' && inString) {
         out += char;
         escaped = true;
+        i++;
+        continue;
+      }
+
+      // Track Kuzu backtick-quoted identifiers. A backtick opens an identifier
+      // and the next backtick closes it; INSIDE, a `'` `"` `(` `//` `/*` etc.
+      // are literal identifier characters, not string/comment delimiters. This
+      // must be handled BEFORE the quote/comment logic so a lone apostrophe
+      // inside a backtick identifier cannot flip the scanner into fake
+      // in-string mode. Backticks inside a real quoted string are literal, so
+      // this branch is skipped while inString.
+      if (char === '`' && !inString) {
+        inBacktick = !inBacktick;
+        out += char;
+        i++;
+        continue;
+      }
+      if (inBacktick) {
+        out += char;
         i++;
         continue;
       }
@@ -211,6 +232,7 @@ class QueryValidator {
     let currentStatement = '';
     let inString = false;
     let stringChar = null;
+    let inBacktick = false;
     let escaped = false;
 
     for (let i = 0; i < query.length; i++) {
@@ -224,6 +246,19 @@ class QueryValidator {
 
       if (char === '\\') {
         escaped = true;
+        currentStatement += char;
+        continue;
+      }
+
+      // Track Kuzu backtick-quoted identifiers so a `'`/`"`/`;` inside one is
+      // literal (not a string delimiter or statement separator). Must run
+      // before the quote/`;` logic. Skipped inside a real quoted string.
+      if (char === '`' && !inString) {
+        inBacktick = !inBacktick;
+        currentStatement += char;
+        continue;
+      }
+      if (inBacktick) {
         currentStatement += char;
         continue;
       }
@@ -262,11 +297,15 @@ class QueryValidator {
    * Cheap O(n) parse-DoS guard: rejects a statement whose bracket-nesting depth
    * exceeds MAX_NESTING_DEPTH, WITHOUT invoking the expensive ANTLR parser.
    *
-   * Brackets inside string literals and comments are ignored, using the same
-   * string-aware scanning (single/double quotes, backslash escapes) and
-   * comment handling (line comments and block comments) as the rest of this
-   * validator, so brackets that appear inside a quoted string literal or inside
-   * a comment are NOT counted and do NOT cause a false rejection.
+   * Brackets inside string literals, comments and Kuzu backtick-quoted
+   * identifiers are ignored, using the same string-aware scanning
+   * (single/double quotes, backslash escapes, backtick identifiers) and comment
+   * handling (line comments and block comments) as the rest of this validator,
+   * so brackets that appear inside a quoted string literal, a comment or a
+   * backtick identifier are NOT counted and do NOT cause a false rejection.
+   * Backtick-awareness is SECURITY-CRITICAL: without it a lone apostrophe
+   * inside a `` `...` `` identifier flips the scanner into fake in-string mode,
+   * hiding every subsequent `(` from the depth count and bypassing this guard.
    *
    * @param {string} statement - A single Cypher statement
    * @throws {Error} If nesting depth exceeds the bound.
@@ -275,6 +314,7 @@ class QueryValidator {
     let depth = 0;
     let inString = false;
     let stringChar = null;
+    let inBacktick = false;
     let escaped = false;
     let i = 0;
 
@@ -290,6 +330,21 @@ class QueryValidator {
 
       if (char === '\\' && inString) {
         escaped = true;
+        i++;
+        continue;
+      }
+
+      // Track Kuzu backtick-quoted identifiers. Brackets AND a lone `'`/`"`
+      // inside a backtick identifier are literal, so they must not be counted
+      // and must not flip the scanner into fake in-string mode (the DoS bypass
+      // this guard closes). Must run before the quote/comment/bracket logic;
+      // skipped inside a real quoted string, where a backtick is literal.
+      if (char === '`' && !inString) {
+        inBacktick = !inBacktick;
+        i++;
+        continue;
+      }
+      if (inBacktick) {
         i++;
         continue;
       }
