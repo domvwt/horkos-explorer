@@ -44,6 +44,10 @@ import {
   restoreViewThroughCell,
   selectEntityThroughCell,
 } from "@/utils/NotebookSidebarLogic";
+import {
+  buildDemoQuery,
+  hasSchemaForDemo,
+} from "@/utils/DemoQueryLogic";
 export default {
   name: "ShellMainView",
   components: {
@@ -199,37 +203,20 @@ export default {
         this.shellCell.unshift(cell);
       }
     },
-    // Build a demo query from the loaded schema so it targets a single,
-    // concrete relationship type. A wildcard `MATCH (a)-[r]->(b) RETURN *`
-    // spanning every relationship table can fail on graphs where different
-    // rel tables have divergent property (STRUCT) shapes, since Kuzu then
-    // has to cast/union them into one result shape. Deriving the query from
-    // the first relationship table in the schema avoids that entirely, and
-    // keeps the demo schema-agnostic (no hardcoded rel type name). If no
-    // schema/relTables are available yet, fall back to a node-only query,
-    // which can never hit the cross-type cast.
+    // Demo-query derivation lives in @/utils/DemoQueryLogic (pure and unit
+    // tested there): a curated Horkos example when the schema contains the
+    // Person/Company node tables and the PersonOwnership rel table, else a
+    // query derived from the schema's first relationship table, else the
+    // node-only fallback when no usable schema is loaded yet.
     buildDemoQuery() {
-      const relType = this.schema && this.schema.relTables && this.schema.relTables[0]
-        ? this.schema.relTables[0].name
-        : null;
-      // Only build the single-type query when the first rel table actually
-      // has a non-empty name; a malformed schema payload would otherwise
-      // produce `[r:undefined]`. In that case fall back to the node-only
-      // query, which can never hit the cross-type cast either.
-      if (relType) {
-        return `// Query to retrieve 5 "${relType}" relationships from the graph.
-// ▶️ Run this query by clicking the play button or pressing Shift + Enter.
-MATCH (a)-[r:${relType}]->(b) RETURN a, r, b LIMIT 5;`;
-      }
-      return `// Query to retrieve 5 nodes from the graph.
-// ▶️ Run this query by clicking the play button or pressing Shift + Enter.
-MATCH (n) RETURN n LIMIT 5;`;
+      return buildDemoQuery(this.schema);
     },
-    // Whether the schema is loaded enough to derive the single-rel-type demo
-    // query (as opposed to the node-only fallback). Used to decide when the
-    // demo query is final and no further upgrade is needed.
+    // Whether the schema is loaded enough to derive a final demo query (the
+    // curated Horkos example or the single-rel-type derivation, as opposed
+    // to the node-only fallback). Used to decide when the demo query is
+    // final and no further schema-arrival upgrade is needed.
     hasSchemaForDemo() {
-      return !!(this.schema && this.schema.relTables && this.schema.relTables[0] && this.schema.relTables[0].name);
+      return hasSchemaForDemo(this.schema);
     },
     // Read the demo cell's current editor buffer, or null if unavailable.
     // There is no higher-level getter for a single cell's live text, so we
