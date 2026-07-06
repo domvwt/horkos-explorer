@@ -46,9 +46,6 @@
           <small class="text-muted">
             <i class="fa-solid fa-info-circle" />
             {{ exportCodeLength }} characters
-            <span v-if="hiddenCount > 0">
-              | {{ hiddenCount }} hidden elements
-            </span>
           </small>
         </div>
       </div>
@@ -78,10 +75,6 @@ export default {
       required: true,
     },
     exportCodeLength: {
-      type: Number,
-      required: true,
-    },
-    hiddenCount: {
       type: Number,
       required: true,
     },

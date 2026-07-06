@@ -10,21 +10,13 @@ import LZString from 'lz-string';
  * Format:
  * - Nodes as arrays: [label, pk, x, y]
  * - Edges as arrays: [label, pk]
- * - Hidden elements keyed by stable identifiers: "Label|pk"
  */
 
 const STATE_VERSION = 1;
 
 /**
- * Create a stable key for hidden element tracking.
- * Format: "Label|pk"
- */
-function createStableKey(label, pk) {
-  return `${label}|${pk}`;
-}
-
-/**
  * Parse a stable key back to label and pk.
+ * Format: "Label|pk"
  */
 export function parseStableKey(key) {
   const separatorIndex = key.indexOf('|');
@@ -58,44 +50,11 @@ function serializeState(state) {
     edge.data?.properties?.id || null,
   ]);
 
-  // Convert hidden element keys from G6 IDs to stable format
-  const hiddenNodes = {};
-  const hiddenEdges = {};
-
-  if (state.hiddenElements?.nodes) {
-    Object.keys(state.hiddenElements.nodes).forEach(g6Id => {
-      if (!state.hiddenElements.nodes[g6Id]) return;
-      const node = nodes.find(n => n.id === g6Id);
-      if (node?.data?.properties) {
-        const label = node.data.properties._label;
-        const pk = node.data.properties.id;
-        if (label && pk) {
-          hiddenNodes[createStableKey(label, pk)] = true;
-        }
-      }
-    });
-  }
-
-  if (state.hiddenElements?.edges) {
-    Object.keys(state.hiddenElements.edges).forEach(g6Id => {
-      if (!state.hiddenElements.edges[g6Id]) return;
-      const edge = edges.find(e => e.id === g6Id);
-      if (edge?.data?.properties) {
-        const label = edge.data.properties._label;
-        const pk = edge.data.properties.id;
-        if (label && pk) {
-          hiddenEdges[createStableKey(label, pk)] = true;
-        }
-      }
-    });
-  }
-
   const stateObj = {
     v: STATE_VERSION,
     q: state.queries?.[0]?.query || '',
     n: compactNodes,
     e: compactEdges,
-    h: { nodes: hiddenNodes, edges: hiddenEdges },
   };
 
   return LZString.compressToBase64(JSON.stringify(stateObj));
@@ -142,7 +101,6 @@ function deserializeState(compressed) {
       queries: state.q ? [{ query: state.q }] : [],
       minimalNodes,
       minimalEdges,
-      hiddenElements: state.h || { nodes: {}, edges: {} },
     };
   } catch (error) {
     console.error('[InvestigationState] Failed to deserialize investigation state:', error);

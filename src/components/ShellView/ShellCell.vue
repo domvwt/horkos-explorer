@@ -290,7 +290,6 @@ export default {
      * @param {Object} state - Investigation state from InvestigationState.deserializeState()
      * @param {Array} state.queries - Array of query objects (used to extract queryInfo)
      * @param {Object} state.graphData - Complete graph data passed to ResultGraph
-     * @param {Object} state.hiddenElements - Hidden element state passed to ResultGraph
      * @param {Object} [state.viewport] - Viewport state passed to ResultGraph
      * @returns {Promise<void>}
      */

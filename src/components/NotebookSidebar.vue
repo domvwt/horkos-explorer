@@ -423,7 +423,6 @@
       :visible="showShareModal"
       :export-code="shareExportCode"
       :export-code-length="shareExportCodeLength"
-      :hidden-count="shareHiddenCount"
       @close="showShareModal = false"
     />
     <!-- Open a shared view: "Open now" restores into the active cell,
@@ -442,7 +441,6 @@ import { mapStores } from "pinia";
 import { useNotebookStore } from "../store/NotebookStore";
 import ShareModal from "./ShellView/ShareModal.vue";
 import ImportModal from "./ShellView/ImportModal.vue";
-import { parseExportCode } from "../utils/InvestigationState";
 import {
   commitPageDraft,
   decideCreateCommit,
@@ -516,7 +514,6 @@ export default {
       showShareModal: false,
       shareExportCode: "",
       shareExportCodeLength: 0,
-      shareHiddenCount: 0,
       showImportModal: false,
       // Transient status line for delegated actions that couldn't run (e.g.
       // no graph open to save a view from). Auto-clears after a few seconds.
@@ -810,18 +807,12 @@ export default {
 
     // ---- Share / open a shared view --------------------------------------
     // A saved view's `state` IS its HKS share code, so sharing a row just hands
-    // that code to the share modal (parsing it back only to count hidden
-    // elements for the info line).
+    // that code straight to the share modal.
     shareView(view) {
       if (!view || !view.state) return;
       const code = view.state;
       this.shareExportCode = code;
       this.shareExportCodeLength = code.length;
-      const parsed = parseExportCode(code);
-      const hidden = parsed && parsed.hiddenElements ? parsed.hiddenElements : null;
-      this.shareHiddenCount = hidden
-        ? Object.keys(hidden.nodes || {}).length + Object.keys(hidden.edges || {}).length
-        : 0;
       this.showShareModal = true;
     },
     openImportModal() {

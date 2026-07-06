@@ -70,9 +70,9 @@
         >
           <button
             class="btn btn-sm btn-outline-secondary"
-            @click="hideNode()"
+            @click="removeNode()"
           >
-            <i class="fa-solid fa-eye-slash" /> Hide Node
+            <i class="fa-solid fa-trash" /> Remove Node
           </button>
 
           <button
@@ -343,14 +343,6 @@
             class="result-graph__actions"
           >
             <button
-              v-if="numHiddenNodes > 0"
-              class="btn btn-sm btn-outline-secondary"
-              @click="showAllNodesRels()"
-            >
-              <i class="fa-solid fa-eye" />
-              Show All
-            </button>
-            <button
               v-if="hasUnexpandedNodes"
               class="btn btn-sm btn-outline-secondary"
               @click="expandOneMoreHop()"
@@ -377,10 +369,7 @@
           <!-- Node Counts -->
           <div v-if="counters.total.node > 0">
             <p class="result-graph__count-summary">
-              Showing
-              <span v-if="numHiddenNodes > 0">
-                {{ counters.total.node - numHiddenNodes }}/</span>{{ counters.total.node }} nodes
-              <span v-if="numHiddenNodes > 0"> ({{ numHiddenNodes }} hidden)</span>
+              Showing {{ counters.total.node }} nodes
             </p>
             <table class="table table-sm table-borderless result-graph__overview-table">
               <tbody>
@@ -403,10 +392,7 @@
           <!-- Rel Counts -->
           <div v-if="counters.total.rel > 0">
             <p class="result-graph__count-summary">
-              Showing
-              <span v-if="numHiddenRels > 0">
-                {{ counters.total.rel - numHiddenRels }}/</span>{{ counters.total.rel }} rels
-              <span v-if="numHiddenRels > 0"> ({{ numHiddenRels }} hidden)</span>
+              Showing {{ counters.total.rel }} rels
             </p>
             <table class="table table-sm table-borderless result-graph__overview-table">
               <tbody>
@@ -536,7 +522,7 @@ import {
 } from "../../utils/DisplayPolicy";
 import Axios from "@/utils/AxiosWrapper";
 import { createGraphConfig, getLayoutConfig } from "./graphConfig";
-import { parseStableKey, generateExportCode, parseExportCode } from "@/utils/InvestigationState";
+import { generateExportCode, parseExportCode } from "@/utils/InvestigationState";
 
 export default {
   name: "ResultGraph",
@@ -599,10 +585,6 @@ export default {
     sidebarWidth: 350,
     graphWidth: 0,
     borderWidth: UI_SIZE.DEFAULT_BORDER_WIDTH,
-    hiddenElements: {
-      nodes: {},
-      edges: {}
-    },
     clickedProperties: [],
     clickedId: null,
     clickedLabel: "",
@@ -769,12 +751,6 @@ export default {
         return isNode ? "#ffffff" : "#ffffff";
       };
     },
-    numHiddenNodes() {
-      return Object.keys(this.hiddenElements.nodes).length;
-    },
-    numHiddenRels() {
-      return Object.keys(this.hiddenElements.edges).length;
-    },
     entityTypeBadgeClass() {
       if (!this.displayLabel) {
         return 'bg-primary';
@@ -939,6 +915,19 @@ export default {
         e.preventDefault();
         this.redo();
       }
+      // Delete (NOT Backspace) removes the currently-selected node, but only
+      // when the graph has focus context — never hijack Delete while the user
+      // is typing in an input/textarea/contenteditable or the Cypher editor.
+      // The isGraphVisible() gate matters because multiple ResultGraph
+      // instances stay mounted at once (hidden Table/Code tabs, other notebook
+      // cells) and each keeps its own live global keydown listener + clickedId;
+      // without it a Delete would silently remove a node from a graph the user
+      // isn't even looking at.
+      if (e.key === 'Delete' && !this.isTypingContext() && this.isGraphVisible() &&
+          this.clickedId && this.isNodeOnCanvas(this.clickedId)) {
+        e.preventDefault();
+        this.removeNodeById(this.clickedId);
+      }
     };
     window.addEventListener('keydown', this.handleKeydown);
   },
@@ -996,17 +985,6 @@ export default {
       if (button) {
         button.style.opacity = '0';
       }
-    },
-    async setElementVisibility(elements) {
-      if (!this.g6Graph) {
-        return;
-      }
-      if (this.drawPromise) {
-        await this.drawPromise;
-      }
-      this.drawPromise = this.g6Graph.setElementVisibility(elements);
-      await this.drawPromise;
-      this.drawPromise = null;
     },
     async render() {
       if (!this.g6Graph) {
@@ -1255,25 +1233,103 @@ export default {
       });
     },
 
-    hideNode() {
-      const nodeId = this.clickedId;
-      const edges = this.g6Graph.getEdgeData();
-      const relatedEdges = edges.filter((edge) => {
-        return edge.source === nodeId || edge.target === nodeId;
+    removeNode() {
+      return this.removeNodeById(this.clickedId);
+    },
+
+    /**
+     * True when a node with this ID is currently on the canvas.
+     */
+    isNodeOnCanvas(nodeId) {
+      if (!this.g6Graph || !nodeId) return false;
+      return (this.g6Graph.getNodeData() || []).some((n) => n.id === nodeId);
+    },
+
+    /**
+     * True when this graph's container is actually visible on screen.
+     * offsetParent is null for a display:none element (what v-show sets on a
+     * hidden Table/Code tab or off-screen cell), so a mounted-but-hidden
+     * ResultGraph reports false here — used to keep the global Delete listener
+     * from acting on a graph the user isn't looking at.
+     */
+    isGraphVisible() {
+      return !!(this.$refs.graph && this.$refs.graph.offsetParent !== null);
+    },
+
+    /**
+     * Permanently remove a node and its incident edges from the graph. Mirrors
+     * the collapse removal path (removeFromGraph + nodeIntroducedBy/expansions
+     * cleanup) so a removed node cannot resurface via expand paths and isn't
+     * counted as unexpanded. Undoable via the 'remove' history entry.
+     */
+    async removeNodeById(nodeId) {
+      if (!this.g6Graph || !nodeId) return;
+
+      const currentNodes = this.g6Graph.getNodeData() || [];
+      const removedNode = currentNodes.find((n) => n.id === nodeId);
+      if (!removedNode) return;
+
+      const currentEdges = this.g6Graph.getEdgeData() || [];
+      const relatedEdges = currentEdges.filter(
+        (edge) => edge.source === nodeId || edge.target === nodeId
+      );
+
+      const nodeIdsToRemove = new Set([nodeId]);
+      const edgeIdsToRemove = new Set(relatedEdges.map((e) => e.id));
+
+      // Capture full node/edge data BEFORE removal so undo can restore it.
+      const removedNodes = [removedNode];
+      const removedEdges = relatedEdges;
+
+      // Capture nodeIntroducedBy entries and any expansion keyed on this node
+      // so undo can restore them (and so the removed node can't be re-expanded).
+      // We capture BOTH the removed node's own entry (who introduced it) and any
+      // orphaned back-pointers where the removed node is the VALUE — children it
+      // introduced stay on canvas, but their "introduced by" pointer would now
+      // dangle at a gone node, so clean those too (captured for a faithful undo).
+      const removedNodeIntroducedBy = {};
+      Object.keys(this.nodeIntroducedBy).forEach((key) => {
+        if (key === nodeId || this.nodeIntroducedBy[key] === nodeId) {
+          removedNodeIntroducedBy[key] = this.nodeIntroducedBy[key];
+        }
       });
-      const autoHiddenEdgeIds = relatedEdges.map(e => e.id);
+      const removedExpansions = this.expansions.filter((e) => e.id === nodeId);
+
+      await this.removeFromGraph(nodeIdsToRemove, edgeIdsToRemove);
+
+      // Clean up tracking for the removed node and its dangling back-pointers.
+      Object.keys(removedNodeIntroducedBy).forEach((key) => {
+        delete this.nodeIntroducedBy[key];
+      });
+      this.expansions = this.expansions.filter((e) => e.id !== nodeId);
 
       // Record command for undo/redo
       this.historyManager.push({
-        type: 'hide',
-        data: { nodeId, autoHiddenEdgeIds }
+        type: 'remove',
+        data: {
+          removedNodes: JSON.parse(JSON.stringify(removedNodes)),
+          removedEdges: JSON.parse(JSON.stringify(removedEdges)),
+          removedNodeIntroducedBy,
+          removedExpansions: JSON.parse(JSON.stringify(removedExpansions)),
+        }
       });
 
-      this.hiddenElements.nodes[nodeId] = 'hidden';
       this.deselectAll();
-      relatedEdges.forEach((edge) => this.hiddenElements.edges[edge.id] = 'hidden');
-      const combined = { ...this.hiddenElements.nodes, ...this.hiddenElements.edges };
-      return this.setElementVisibility(combined);
+      this.$nextTick(() => this.updateNeighborCounts());
+    },
+
+    /**
+     * True when the user is typing in a form field or the Cypher editor, so
+     * keyboard shortcuts (e.g. Delete-to-remove) must not be hijacked.
+     */
+    isTypingContext() {
+      const el = document.activeElement;
+      if (!el) return false;
+      const tag = el.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return true;
+      if (el.isContentEditable) return true;
+      if (el.closest && el.closest('.monaco-editor')) return true;
+      return false;
     },
 
     enableHighlightMode() {
@@ -1323,27 +1379,6 @@ export default {
       }
 
       this.setElementState(combined);
-    },
-
-    showAllNodesRels() {
-      // Capture previous hidden state before clearing
-      const previouslyHidden = JSON.parse(JSON.stringify(this.hiddenElements));
-
-      // Only record if there was something hidden
-      if (Object.keys(previouslyHidden.nodes).length > 0 || Object.keys(previouslyHidden.edges).length > 0) {
-        this.historyManager.push({
-          type: 'showAll',
-          data: { previouslyHidden }
-        });
-      }
-
-      const combined = { ...this.hiddenElements.nodes, ...this.hiddenElements.edges };
-      Object.keys(combined).forEach((key) => {
-        combined[key] = 'visible';
-      });
-      return this.setElementVisibility(combined).then(() => {
-        this.hiddenElements = { nodes: {}, edges: {} };
-      });
     },
 
     // Delegate to utility function for extracting G6 graph data from query results
@@ -2722,7 +2757,6 @@ export default {
       return {
         queries,
         graphData,
-        hiddenElements: this.hiddenElements,
         viewport: this.getViewportState(),
       };
     },
@@ -2806,8 +2840,7 @@ export default {
      * Select a pinned entity, always landing the user on it. A pin is a
      * promise: whatever the entity's state, clicking it in the notebook panel
      * takes you to it.
-     *   - On canvas & visible  -> select + move viewport to it.
-     *   - On canvas but hidden -> unhide, then select + focus.
+     *   - On canvas            -> select + move viewport to it.
      *   - Not on canvas        -> refetch by label+pk, add to the canvas with
      *                             any rels to existing canvas nodes, select +
      *                             focus, and record the addition for undo. On an
@@ -2832,27 +2865,11 @@ export default {
     async doSelectPinnedEntity(label, pk) {
       const match = this.findCanvasNodeByLabelPk(label, pk);
       if (match) {
-        // Case 2: on canvas but hidden -> unhide first so we don't "select" an
-        // invisible node, then select + focus. Also restore this node's edges to
-        // any still-visible neighbour so it doesn't reappear as an orphan.
-        if (this.hiddenElements.nodes[match.id]) {
-          delete this.hiddenElements.nodes[match.id];
-          const toShow = { [match.id]: 'visible' };
-          (this.g6Graph.getEdgeData() || []).forEach((edge) => {
-            const touchesMatch = edge.source === match.id || edge.target === match.id;
-            if (!touchesMatch || !this.hiddenElements.edges[edge.id]) return;
-            const other = edge.source === match.id ? edge.target : edge.source;
-            if (!this.hiddenElements.nodes[other]) {
-              delete this.hiddenElements.edges[edge.id];
-              toShow[edge.id] = 'visible';
-            }
-          });
-          await this.setElementVisibility(toShow);
-        }
+        // On canvas -> select + focus it.
         await this.selectAndFocusNode(match);
         return;
       }
-      // Case 3/4: not on canvas -> refetch and add, or report it's gone.
+      // Not on canvas -> refetch and add, or report it's gone.
       await this.fetchAndAddPinnedEntity(label, pk);
     },
 
@@ -3428,7 +3445,6 @@ export default {
 
       // Build G6 nodes from refetched data + saved positions
       const nodes = [];
-      const pkToG6Id = {};
 
       state.minimalNodes.forEach(minNode => {
         if (!minNode.pk) return;
@@ -3440,7 +3456,6 @@ export default {
         }
 
         const g6Id = encodeId(rawNode._id);
-        pkToG6Id[minNode.pk] = g6Id;
 
         const formattedLabel = formatNodeLabel(rawNode, this.schema, this.settingsStore);
         const g6Node = buildG6Node(g6Id, rawNode, this.settingsStore, {
@@ -3457,7 +3472,6 @@ export default {
 
       // Build G6 edges from refetched data
       const edges = [];
-      const edgePkToG6Id = {};
       const edgeCountBetweenNodes = {};
 
       state.minimalEdges.forEach(minEdge => {
@@ -3470,7 +3484,6 @@ export default {
         }
 
         const edgeG6Id = encodeId(rawRel._id);
-        edgePkToG6Id[minEdge.pk] = edgeG6Id;
 
         const srcG6Id = encodeId(rawRel._src);
         const tgtG6Id = encodeId(rawRel._dst);
@@ -3528,36 +3541,6 @@ export default {
         this.showToast('Import failed: none of the elements could be found in the database', 5000);
       }
 
-      // Convert hidden elements from stable keys to G6 IDs
-      this.hiddenElements = { nodes: {}, edges: {} };
-
-      if (state.hiddenElements) {
-        if (state.hiddenElements.nodes) {
-          Object.keys(state.hiddenElements.nodes).forEach(key => {
-            if (!state.hiddenElements.nodes[key]) return;
-            const { pk } = parseStableKey(key);
-            const g6Id = pkToG6Id[pk];
-            if (g6Id) this.hiddenElements.nodes[g6Id] = true;
-          });
-        }
-
-        if (state.hiddenElements.edges) {
-          Object.keys(state.hiddenElements.edges).forEach(key => {
-            if (!state.hiddenElements.edges[key]) return;
-            const { pk } = parseStableKey(key);
-            const g6Id = edgePkToG6Id[pk];
-            if (g6Id) this.hiddenElements.edges[g6Id] = true;
-          });
-        }
-
-        Object.keys(this.hiddenElements.nodes).forEach(g6Id => {
-          this.hideGraphElement(g6Id, 'node');
-        });
-        Object.keys(this.hiddenElements.edges).forEach(g6Id => {
-          this.hideGraphElement(g6Id, 'edge');
-        });
-      }
-
       // Resize and fit
       this.$nextTick(() => {
         this.updateNeighborCounts();
@@ -3568,24 +3551,6 @@ export default {
       this.handleResize();
       await this.$nextTick();
       this.fitToView();
-    },
-
-    /**
-     * Helper to hide a graph element by ID
-     */
-    hideGraphElement(id, type) {
-      if (!this.g6Graph) return;
-
-      try {
-        if (type === 'node') {
-          this.g6Graph.hideNode(id);
-        } else if (type === 'edge') {
-          this.g6Graph.hideEdge(id);
-        }
-      } catch (e) {
-        // Element may not exist yet, that's okay
-        console.debug(`Failed to hide ${type} ${id}:`, e);
-      }
     },
 
     /**
@@ -3794,11 +3759,8 @@ export default {
           case 'collapse':
             await this.undoCollapse(cmd.data);
             break;
-          case 'hide':
-            await this.undoHide(cmd.data);
-            break;
-          case 'showAll':
-            await this.undoShowAll(cmd.data);
+          case 'remove':
+            await this.undoRemove(cmd.data);
             break;
           case 'add-connected-node':
             await this.undoAddConnectedNode(cmd.data);
@@ -3837,11 +3799,8 @@ export default {
           case 'collapse':
             await this.redoCollapse(cmd.data);
             break;
-          case 'hide':
-            await this.redoHide(cmd.data);
-            break;
-          case 'showAll':
-            await this.redoShowAll();
+          case 'remove':
+            await this.redoRemove(cmd.data);
             break;
           case 'add-connected-node':
             await this.redoAddConnectedNode(cmd.data);
@@ -3965,52 +3924,40 @@ export default {
     },
 
     /**
-     * Undo hide = show the element
+     * Undo remove = restore removed node/edges and their tracking
      */
-    async undoHide(data) {
-      delete this.hiddenElements.nodes[data.nodeId];
-      const combined = { [data.nodeId]: 'visible' };
+    async undoRemove(data) {
+      await this.restoreNodesAndEdges(data.removedNodes, data.removedEdges);
 
-      (data.autoHiddenEdgeIds || []).forEach(edgeId => {
-        delete this.hiddenElements.edges[edgeId];
-        combined[edgeId] = 'visible';
+      (data.removedExpansions || []).forEach(exp => this.expansions.push(exp));
+      Object.assign(this.nodeIntroducedBy, data.removedNodeIntroducedBy || {});
+
+      this.$nextTick(() => {
+        this.$refs.connectedEntitiesPanel?.refreshInGraphStatus();
+        this.updateNeighborCounts();
+      });
+    },
+
+    /**
+     * Redo remove = remove the node/edges again
+     */
+    async redoRemove(data) {
+      const nodeIdsToRemove = new Set(data.removedNodes.map(n => n.id));
+      const edgeIdsToRemove = new Set(data.removedEdges.map(e => e.id));
+
+      await this.removeFromGraph(nodeIdsToRemove, edgeIdsToRemove);
+
+      const expIdsToRemove = new Set((data.removedExpansions || []).map(e => e.id));
+      this.expansions = this.expansions.filter(e => !expIdsToRemove.has(e.id));
+
+      Object.keys(data.removedNodeIntroducedBy || {}).forEach(nodeId => {
+        delete this.nodeIntroducedBy[nodeId];
       });
 
-      await this.setElementVisibility(combined);
-    },
-
-    /**
-     * Redo hide = hide the element again
-     */
-    async redoHide(data) {
-      this.hiddenElements.nodes[data.nodeId] = 'hidden';
-      const combined = { [data.nodeId]: 'hidden' };
-
-      (data.autoHiddenEdgeIds || []).forEach(edgeId => {
-        this.hiddenElements.edges[edgeId] = 'hidden';
-        combined[edgeId] = 'hidden';
+      this.$nextTick(() => {
+        this.$refs.connectedEntitiesPanel?.refreshInGraphStatus();
+        this.updateNeighborCounts();
       });
-
-      await this.setElementVisibility(combined);
-    },
-
-    /**
-     * Undo showAll = re-hide previously hidden elements
-     */
-    async undoShowAll(data) {
-      this.hiddenElements = JSON.parse(JSON.stringify(data.previouslyHidden));
-      const combined = { ...this.hiddenElements.nodes, ...this.hiddenElements.edges };
-      await this.setElementVisibility(combined);
-    },
-
-    /**
-     * Redo showAll = show all again
-     */
-    async redoShowAll() {
-      const combined = { ...this.hiddenElements.nodes, ...this.hiddenElements.edges };
-      Object.keys(combined).forEach(key => combined[key] = 'visible');
-      await this.setElementVisibility(combined);
-      this.hiddenElements = { nodes: {}, edges: {} };
     },
 
     async undoAddConnectedNode(data) {
