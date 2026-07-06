@@ -17,6 +17,10 @@ if (process.env.NODE_ENV === "production") {
 }
 
 module.exports = defineConfig({
+  // Do not emit .map files in production builds. Vue CLI defaults this to true,
+  // which would ship readable source maps exposing the frontend source to any
+  // public visitor. This is a public read-only deployment, so disable them.
+  productionSourceMap: false,
   devServer: {
     onAfterSetupMiddleware: configureAPI,
     historyApiFallback: false,

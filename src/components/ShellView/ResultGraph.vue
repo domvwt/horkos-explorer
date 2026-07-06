@@ -3553,16 +3553,22 @@ export default {
 
       const results = {};
       for (const [label, pks] of Object.entries(nodesByLabel)) {
-        const pkList = pks.map(pk => `"${pk.replace(/"/g, '\\"')}"`).join(', ');
-        const query = `MATCH (n:${label}) WHERE n.id IN [${pkList}] RETURN n`;
+        // pks are attacker-supplied (share code). Bind them as a LIST parameter
+        // instead of string-building the IN list, so a hostile pk (e.g. one with
+        // a trailing backslash defeating a quote-only escape) cannot break out
+        // into injected Cypher. `label` is NOT parameterizable (it's a table
+        // identifier), but it is already allowlisted against the DB schema above
+        // via validLabels.has(node.label), so interpolating it is safe.
+        const query = `MATCH (n:${label}) WHERE n.id IN $pkList RETURN n`;
+        const queryParams = { pkList: pks };
 
         try {
           let response;
           if (this.modeStore.isWasm) {
             const Kuzu = (await import('@/utils/KuzuWasm')).default;
-            response = await Kuzu.query(query);
+            response = await Kuzu.query(query, queryParams);
           } else {
-            const res = await Axios.post('/api/cypher', { query, params: {}, updateHistory: false });
+            const res = await Axios.post('/api/cypher', { query, params: queryParams, updateHistory: false });
             response = res.data;
           }
           if (response?.rows) {
@@ -3608,16 +3614,21 @@ export default {
 
       const results = {};
       for (const [label, pks] of Object.entries(edgesByLabel)) {
-        const pkList = pks.map(pk => `"${pk.replace(/"/g, '\\"')}"`).join(', ');
-        const query = `MATCH ()-[r:${label}]->() WHERE r.id IN [${pkList}] RETURN r`;
+        // pks are attacker-supplied (share code). Bind them as a LIST parameter
+        // instead of string-building the IN list, so a hostile pk cannot break
+        // out into injected Cypher. `label` is a rel-table identifier and cannot
+        // be parameterized, but it is already allowlisted against the DB schema
+        // above via validLabels.has(edge.label), so interpolating it is safe.
+        const query = `MATCH ()-[r:${label}]->() WHERE r.id IN $pkList RETURN r`;
+        const queryParams = { pkList: pks };
 
         try {
           let response;
           if (this.modeStore.isWasm) {
             const Kuzu = (await import('@/utils/KuzuWasm')).default;
-            response = await Kuzu.query(query);
+            response = await Kuzu.query(query, queryParams);
           } else {
-            const res = await Axios.post('/api/cypher', { query, params: {}, updateHistory: false });
+            const res = await Axios.post('/api/cypher', { query, params: queryParams, updateHistory: false });
             response = res.data;
           }
           if (response?.rows) {

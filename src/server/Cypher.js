@@ -5,6 +5,7 @@ const MODES = require("./utils/Constants").MODES;
 const database = require("./utils/Database");
 const QueryValidator = require("./middleware/QueryValidator");
 const { sendErrorResponse } = require("./utils/errorResponse");
+const uuid = require("uuid");
 let sessionDb;
 const queryMap = new Map();
 try {
@@ -93,6 +94,17 @@ router.post("/", QueryValidator.middleware(database), async (req, res) => {
   if (params && !typeof params === "object") {
     return res.status(400).send({ error: "Params must be an object" });
   }
+  // uuid is client-controlled and used as a Map key (progress tracking) and as
+  // the history upsert key. Reject a non-string / non-UUID / over-long value
+  // BEFORE getConnection() (a rejected request must never leak the admission
+  // slot — see the note above). Only validate when uuid is actually provided:
+  // a normal non-progress query legitimately omits it.
+  const clientUuid = req.body.uuid;
+  if (clientUuid !== undefined && clientUuid !== null) {
+    if (typeof clientUuid !== "string" || !uuid.validate(clientUuid)) {
+      return res.status(400).send({ error: "uuid must be a valid UUID" });
+    }
+  }
   let conn;
   try {
     conn = database.getConnection();
@@ -117,9 +129,6 @@ router.post("/", QueryValidator.middleware(database), async (req, res) => {
     let result;
     if (!params || Object.keys(params).length === 0) {
       result = req.body.progress ? await conn.query(query, progressCallback) : await conn.query(query);
-      if (req.body.progress) {
-        queryMap.delete(req.body.uuid);
-      }
     } else {
       const preparedStatement = await conn.prepare(query);
       result = await conn.execute(preparedStatement, params);
@@ -175,6 +184,14 @@ router.post("/", QueryValidator.middleware(database), async (req, res) => {
       logContext: "Cypher query execution failed",
     });
   } finally {
+    // Always drop the progress entry, on every path (success, error, or an
+    // error after a progress tick). A progress query that emits a tick then
+    // throws would otherwise leak its queryMap entry until restart. delete is
+    // idempotent, so this is a no-op when no entry was ever set. Guard on the
+    // progress flag so non-progress queries never touch the map.
+    if (req.body.progress) {
+      queryMap.delete(req.body.uuid);
+    }
     database.releaseConnection(conn);
   }
 });

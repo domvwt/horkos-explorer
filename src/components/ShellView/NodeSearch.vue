@@ -145,6 +145,20 @@
 import axios from "@/utils/AxiosWrapper";
 import AutocompleteDropdown from "./AutocompleteDropdown.vue";
 
+// The Limit dropdown offers exactly these values. resultLimit is interpolated
+// UNESCAPED into the LIMIT clause, and loadFromUrl auto-executes the search, so
+// a crafted ?limit=... link could otherwise inject Cypher with no click. Every
+// path that can set resultLimit is coerced back to one of these integers.
+const ALLOWED_LIMITS = [10, 25, 50, 100, 500];
+const DEFAULT_LIMIT = 25;
+
+// Coerce an arbitrary value (URL param, stored string) to one of the allowed
+// integer limits, falling back to the default for anything not whitelisted.
+function sanitizeLimit(value) {
+  const n = parseInt(value, 10);
+  return ALLOWED_LIMITS.includes(n) ? n : DEFAULT_LIMIT;
+}
+
 export default {
   name: "NodeSearch",
   components: {
@@ -263,7 +277,10 @@ export default {
       if (jurisdiction) this.filters.jurisdiction = jurisdiction;
       if (postCode) this.filters.postCode = postCode;
       if (city) this.filters.city = city;
-      if (limit) this.resultLimit = limit;
+      // Whitelist the URL-supplied limit: a non-allowed value (or injection
+      // payload like "1 UNION MATCH (m) RETURN m") falls back to the default
+      // rather than being stored and later interpolated into the query.
+      if (limit) this.resultLimit = String(sanitizeLimit(limit));
 
       // Restore node-id navigation from a shared/bookmarked suggestion pick
       const id = params.get('id');
@@ -411,7 +428,11 @@ export default {
       if (conditions.length > 0) {
         query += `\nWHERE ${conditions.join(' AND\n      ')}`;
       }
-      query += `\nRETURN n\nLIMIT ${this.resultLimit}`;
+      // Defence in depth: interpolate a sanitised integer, never the raw
+      // resultLimit. Even if resultLimit were somehow set to a hostile string,
+      // the LIMIT clause can only ever be one of the allowed integers.
+      const safeLimit = sanitizeLimit(this.resultLimit);
+      query += `\nRETURN n\nLIMIT ${safeLimit}`;
 
       return { query, params };
     },
