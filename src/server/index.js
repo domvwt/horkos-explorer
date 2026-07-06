@@ -231,6 +231,16 @@ logger.info(
   `Security headers enabled (helmet); CSP mode: ${CSP_REPORT_ONLY ? "report-only" : "enforce"}`
 );
 
+// Anti-indexing: this is a public deployment over real personal data. Tag every
+// response (HTML pages, static assets, and JSON API responses alike) so search
+// engines and the Internet Archive neither index nor cache/persist any content.
+// Paired with public/robots.txt (Disallow: /), this defends both crawl entry
+// points and any URL discovered out-of-band.
+app.use((req, res, next) => {
+  res.setHeader("X-Robots-Tag", "noindex, noarchive");
+  next();
+});
+
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 8000;
 // JSON request-body cap. This is a DoS guardrail, not a data path: the largest
 // legitimate JSON body is a Cypher query (already capped at 50KB by

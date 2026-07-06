@@ -152,7 +152,10 @@ describe("entity group labels", () => {
 
 describe("list-value parsing", () => {
   it("returns arrays untouched", () => {
-    expect(parseListValue(["psc", "icij"])).toEqual(["psc", "icij"]);
+    expect(parseListValue(["psc", "companies_house"])).toEqual([
+      "psc",
+      "companies_house",
+    ]);
   });
 
   it("strips brackets/quotes and splits string representations", () => {
@@ -222,7 +225,6 @@ describe("source-system record counting", () => {
   it("maps normalised system ids to display names", () => {
     expect(sourceSystemDisplayName("companies_house")).toBe("Companies House");
     expect(sourceSystemDisplayName("psc")).toBe("PSC Register");
-    expect(sourceSystemDisplayName("icij")).toBe("ICIJ Offshore Leaks");
   });
 
   it("passes unknown systems through as their raw value", () => {
@@ -234,12 +236,10 @@ describe("source-system record counting", () => {
       "companies-house:123",
       "companies-house:456",
       "psc:789",
-      "icij:001",
     ];
     expect(countRecordsBySystem(records)).toEqual({
       companies_house: 2,
       psc: 1,
-      icij: 1,
     });
   });
 

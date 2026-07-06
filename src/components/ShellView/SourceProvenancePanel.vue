@@ -88,9 +88,6 @@ export default {
         } else if (type === 'PSC Register') {
           color = '#17a2b8'; // Blue
           order = 2;
-        } else if (type === 'ICIJ Offshore Leaks') {
-          color = '#ffc107'; // Yellow
-          order = 3;
         }
 
         return {

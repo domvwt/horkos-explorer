@@ -226,7 +226,6 @@ export function extractOwnershipShare(rel) {
 export const SOURCE_SYSTEM_DISPLAY_NAMES = {
   companies_house: "Companies House",
   psc: "PSC Register",
-  icij: "ICIJ Offshore Leaks",
 };
 
 export function sourceSystemDisplayName(system) {
