@@ -515,43 +515,93 @@ export default {
       }, 300);
     },
     async fetchSuggestions(query) {
-      // Increment request ID to track this request
+      // One request id per keystroke. BOTH staged requests (fast + rank) are
+      // tagged with it, and every response - fast OR rank - is dropped unless
+      // its id still matches the latest keystroke. This is what stops a slow
+      // keystroke-N rank response from overwriting keystroke-(N+1)'s
+      // suggestions (AC#4): typing again bumps autocompleteRequestId, so any
+      // in-flight staged response for the old keystroke is discarded on arrival.
       const requestId = ++this.autocompleteRequestId;
 
+      // Stage 1 (fast): cheap LIKE-prefix query. Rendered immediately so the
+      // dropdown never lags behind typing while BM25 runs. Blocks stage 2 on
+      // failure/404, so a broken endpoint disables autocomplete just as before.
+      const fastOk = await this.fetchSuggestionStage(query, "fast", requestId);
+      if (!fastOk) {
+        return;
+      }
+
+      // Stage 2 (rank): BM25 upgrade, fired only if this keystroke is still the
+      // latest one. Superseding rather than queueing bounds the number of
+      // in-flight BM25 scans on DuckDB's single shared connection - a burst of
+      // keystrokes issues at most one rank query for the final keystroke.
+      if (requestId !== this.autocompleteRequestId) {
+        return;
+      }
+      await this.fetchSuggestionStage(query, "rank", requestId);
+    },
+    /**
+     * Fetch one suggestion stage and, if it is still the latest keystroke,
+     * merge its rows into the dropdown.
+     *
+     * The `rank` stage is an upgrade: an empty rank result (no BM25 matches
+     * beyond what the fast stage already showed) leaves the fast suggestions
+     * in place rather than blanking the dropdown. The `fast` stage always
+     * applies its result (it is the baseline).
+     *
+     * @returns {Promise<boolean>} false if the endpoint is unavailable/errored
+     *   for a still-current request (caller should stop staging), true otherwise.
+     */
+    async fetchSuggestionStage(query, stage, requestId) {
       try {
         const response = await axios.get("/api/suggest", {
           params: {
             q: query,
             type: this.selectedType,
             limit: 10,
+            stage,
           },
         });
 
-        // Ignore stale responses from earlier requests
+        // Drop stale responses: a newer keystroke has superseded this one.
         if (requestId !== this.autocompleteRequestId) {
-          return;
+          return false;
         }
 
-        this.suggestions = (response.data || []).map((item) => ({
+        const mapped = (response.data || []).map((item) => ({
           name: item.name,
           clusterId: item.cluster_id || null,
           canonicalName: item.canonical_name || null,
           detail: this.suggestionDetail(item),
         }));
+
+        // A rank upgrade with no rows keeps the fast baseline visible.
+        if (stage === "rank" && mapped.length === 0) {
+          return true;
+        }
+
+        this.suggestions = mapped;
         this.showSuggestions = this.suggestions.length > 0;
         this.selectedSuggestionIndex = -1;
+        return true;
       } catch (err) {
-        // Ignore errors from stale requests
+        // Ignore errors from stale requests.
         if (requestId !== this.autocompleteRequestId) {
-          return;
+          return false;
         }
 
         if (err.response?.status === 404) {
-          // Autocomplete not available - disable future requests
+          // Autocomplete not available - disable future requests.
           this.autocompleteAvailable = false;
         }
-        this.suggestions = [];
-        this.showSuggestions = false;
+
+        // A failed rank upgrade must not clear the fast baseline already shown;
+        // only the fast (baseline) stage blanks the dropdown on error.
+        if (stage !== "rank") {
+          this.suggestions = [];
+          this.showSuggestions = false;
+        }
+        return false;
       }
     },
     /**

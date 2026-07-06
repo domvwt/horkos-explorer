@@ -33,13 +33,21 @@ const CONTRACT_COLUMNS = ["doc_id", "cluster_id", "canonical_name"];
  *
  * BM25 scores are only comparable within one table, so queries are
  * strictly per-type.
+ *
+ * `conjunctive := 1` requires every query term to appear in a document
+ * for it to score (AND semantics). This matches the "all typed words
+ * must be present" intent of multi-token autocomplete and is materially
+ * cheaper than the default disjunctive scan, because far fewer documents
+ * survive the term intersection. This match_bm25 scan is the ~0.6-1.7s
+ * national-scale cost that the /api/suggest staging (stage=fast vs
+ * stage=rank) keeps out of the keystroke path.
  */
 function buildRankedSql(config) {
   const disambiguatorCols = config.disambiguators.join(", ");
   return `
     WITH scored AS (
       SELECT s.*,
-             fts_search_${config.table}.match_bm25(doc_id, ?) AS fts_score,
+             fts_search_${config.table}.match_bm25(doc_id, ?, conjunctive := 1) AS fts_score,
              (s.name_normalized LIKE ? OR s.name_normalized LIKE ?) AS prefix_match
       FROM search.${config.table} s
     )
@@ -60,6 +68,10 @@ function buildRankedSql(config) {
  * LIKE-only fallback for files whose search tables carry the contract
  * columns but no usable FTS index (extension failed to load, or index
  * schemas absent). Same response shape as the ranked query, score 0.
+ *
+ * This cheap prefix/word-boundary scan (~30ms) is also the `stage=fast`
+ * path: /api/suggest serves it immediately so typing is never blocked on
+ * match_bm25, with the ranked query following as an asynchronous upgrade.
  */
 function buildLikeSql(config) {
   const disambiguatorCols = config.disambiguators.join(", ");
@@ -127,10 +139,25 @@ function toSuggestion(row, config) {
  * LIKE-only when the FTS extension or index schemas are unavailable,
  * and to name-only suggestions on pre-contract DuckDB files.
  *
+ * Staged responsiveness: the match_bm25 scan is ~0.6-1.7s at national
+ * scale, so the client stages it out of the keystroke path via the
+ * `stage` parameter:
+ *   - stage=fast : cheap LIKE-prefix/word query only (~30ms) so typing is
+ *                  never blocked on BM25. Served immediately.
+ *   - stage=rank : the full BM25-ranked query, fired as an asynchronous
+ *                  upgrade and merged into the dropdown when it arrives.
+ *   - (absent)   : today's capability-driven behaviour (ranked when FTS is
+ *                  available, else LIKE, else legacy) - preserved for
+ *                  back-compat and the legacy pre-contract path.
+ * A stage=rank failure is isolated: it does NOT flip the process-wide FTS
+ * capability flag, so one slow/timed-out upgrade cannot disable ranking
+ * for every user for the process lifetime.
+ *
  * Query Parameters:
  *   - q: Search query (required, min 2 characters)
  *   - type: Entity type - "Company" | "Person" | "Address" (required)
  *   - limit: Maximum results to return (default: 10, max: 50)
+ *   - stage: "fast" | "rank" (optional; omit for capability-driven behaviour)
  *
  * Returns:
  *   - 200: Array of suggestion objects:
@@ -140,7 +167,7 @@ function toSuggestion(row, config) {
  *   - 404: Search not available (no DuckDB file or no search tables)
  *   - 500: Query error
  */
-router.get("/", async (req, res) => {
+async function handleSuggest(req, res) {
   if (!duckdb.isEnabled()) {
     return res.status(404).json({ error: "Search not available" });
   }
@@ -160,6 +187,14 @@ router.get("/", async (req, res) => {
 
   const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
 
+  const stage = req.query.stage;
+  if (stage !== undefined && stage !== "fast" && stage !== "rank") {
+    return res.status(400).json({
+      error: "Invalid stage",
+      valid: ["fast", "rank"],
+    });
+  }
+
   const capabilities = await duckdb.getCapabilities();
   const tableCaps = capabilities.tables[config.table];
   if (!tableCaps) {
@@ -177,8 +212,45 @@ router.get("/", async (req, res) => {
 
   const hasContractColumns = CONTRACT_COLUMNS.every((c) => tableCaps.columns.has(c));
 
+  // stage=rank: BM25 upgrade only. Requires the contract columns and a
+  // usable FTS index; otherwise there is no ranked query to run, so the
+  // client's fast stage already carries the best result and we return an
+  // empty upgrade rather than re-running LIKE. Failures here are isolated:
+  // a rank-stage error/timeout must NOT flip the process-wide FTS flag
+  // (unlike the non-staged path below), because rapid typing can time a
+  // single upgrade out without FTS being genuinely broken.
+  if (stage === "rank") {
+    if (!(hasContractColumns && tableCaps.fts)) {
+      return res.json([]);
+    }
+    try {
+      const rows = await duckdb.query(
+        buildRankedSql(config), query, startPattern, wordPattern, limit
+      );
+      return res.json(rows.map((r) => toSuggestion(r, config)));
+    } catch (err) {
+      logger.error(`Ranked suggest upgrade failed (${err.message}) - keeping fast results`);
+      return res.status(500).json({ error: "Search failed" });
+    }
+  }
+
+  // stage=fast: cheap LIKE-only path so typing is never blocked on BM25.
+  // Falls through to legacy for pre-contract tables that have no cluster ids.
+  if (stage === "fast" && hasContractColumns) {
+    try {
+      const rows = await duckdb.query(
+        buildLikeSql(config), startPattern, startPattern, wordPattern, limit
+      );
+      return res.json(rows.map((r) => toSuggestion(r, config)));
+    } catch (err) {
+      logger.error(`Fast suggest query failed: ${err.message}`);
+      return res.status(500).json({ error: "Search failed" });
+    }
+  }
+
+  // No stage (capability-driven default) or stage=fast on a legacy table.
   try {
-    if (hasContractColumns && tableCaps.fts) {
+    if (stage === undefined && hasContractColumns && tableCaps.fts) {
       try {
         const rows = await duckdb.query(
           buildRankedSql(config), query, startPattern, wordPattern, limit
@@ -213,6 +285,16 @@ router.get("/", async (req, res) => {
     logger.error(`Suggest query failed: ${err.message}`);
     return res.status(500).json({ error: "Search failed" });
   }
-});
+}
+
+router.get("/", handleSuggest);
 
 module.exports = router;
+// Additive named exports for unit testing the staged builders and route
+// logic without breaking the default router export above.
+module.exports.handleSuggest = handleSuggest;
+module.exports.buildRankedSql = buildRankedSql;
+module.exports.buildLikeSql = buildLikeSql;
+module.exports.buildLegacySql = buildLegacySql;
+module.exports.toSuggestion = toSuggestion;
+module.exports.ENTITY_TYPES = ENTITY_TYPES;
