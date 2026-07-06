@@ -4,7 +4,7 @@ import { MODES } from "../utils/Constants";
 export const useModeStore = defineStore("mode", {
   state: () => ({
     currentMode: "READ_WRITE",
-    theme: "vs-dark",
+    theme: "vs-light",
   }),
 
   getters: {

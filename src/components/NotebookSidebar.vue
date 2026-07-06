@@ -1100,7 +1100,7 @@ export default {
   &__note-preview {
     display: block;
     font-size: 0.72rem;
-    color: var(--bs-body-text-secondary);
+    color: var(--bs-body-text);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
