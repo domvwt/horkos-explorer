@@ -5,18 +5,21 @@
 #
 # ── HOW TO RUN (single invocation, greens every section) ─────────────────────
 #
-# 1. Start the PRODUCTION API server (node src/server/index.js), NOT the webpack
-#    dev server. This suite exercises the full security middleware stack, and
-#    ONLY the production server (index.js) mounts it:
+# 1. Start the API server. Both entry points now mount the full app-level
+#    security stack via the shared middleware/AppSecurity.js, so the header and
+#    XFF sections pass against EITHER:
 #      - helmet security headers   (test_security_headers)
 #      - trust-proxy / right-most XFF resolution  (per-section rate-limit keys,
 #        test_xff_spoofing, and the per-IP row budget ALL depend on this)
-#    The dev server (Configure.js, via `npm run serve`) mounts none of these, so
-#    it ignores X-Forwarded-For entirely — every request collapses onto one
-#    socket-IP key and the sections cascade. The production server's default
-#    unmatched-/api 404 is text/html, so the /api/session/* JSON-404 handler
-#    (added under DISABLE_SESSION_DB=true) is what keeps that section green here
-#    too. Start it with:
+#    the production server (node src/server/index.js) AND the webpack dev server
+#    (Configure.js, via `npm run serve`) both apply helmet, trust-proxy and
+#    X-Robots-Tag identically. The PRODUCTION server is still RECOMMENDED for a
+#    single clean invocation, because `npm run serve` sets NODE_ENV=development,
+#    which relaxes the default rate limits and row budget (you would then have to
+#    pass the explicit env values below to make the sections assert correctly).
+#    The production server's default unmatched-/api 404 is text/html, so the
+#    /api/session/* JSON-404 handler (added under DISABLE_SESSION_DB=true) is what
+#    keeps that section green here too. Start the production server with:
 #
 #      MODE=READ_ONLY \
 #      DISABLE_SESSION_DB=true \
@@ -118,7 +121,8 @@ check_server() {
         fi
     else
         print_fail "Server is not responding at $SERVER_URL"
-        echo -e "\nPlease start the production server (node src/server/index.js) with the"
+        echo -e "\nPlease start the server (production node src/server/index.js recommended;"
+        echo -e "both entry points now mount the app-level security stack) with the"
         echo -e "env recipe in the HOW TO RUN header of scripts/test-security.sh\n"
         exit 1
     fi
