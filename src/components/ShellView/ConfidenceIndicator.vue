@@ -12,6 +12,10 @@
     >
       <span class="confidence-chip__dot" />
       <span class="confidence-chip__text">Confidence: {{ state.label }}</span>
+      <span
+        v-if="hasSharedAddressConcern"
+        class="confidence-chip__badge"
+      >Shared address</span>
       <i
         class="fa-solid confidence-chip__chevron"
         :class="expanded ? 'fa-chevron-up' : 'fa-chevron-down'"
@@ -26,6 +30,13 @@
         {{ state.summary }}
       </p>
 
+      <p
+        v-if="hasSharedAddressConcern"
+        class="confidence-indicator__shared-address"
+      >
+        This address is shared by many entities — a common registered office, not a weak merge.
+      </p>
+
       <p class="confidence-indicator__nudge">
         Always confirm an identity against the underlying source filing, registered address,
         or other identifiers before relying on it.
@@ -35,7 +46,7 @@
 </template>
 
 <script>
-import { QUALITY_LEVEL_FIELD } from "../../utils/DisplayPolicy";
+import { QUALITY_LEVEL_FIELD, QUALITY_CONCERNS_FIELD, parseListValue } from "../../utils/DisplayPolicy";
 
 export default {
   name: "ConfidenceIndicator",
@@ -63,6 +74,14 @@ export default {
         return null;
       }
       return String(value).toUpperCase();
+    },
+    // Non-defect quality annotation from the resolver (e.g. a legitimately
+    // shared registered/agent address). Distinct from `band` — this never
+    // downgrades confidence, it just surfaces a fact alongside it.
+    hasSharedAddressConcern() {
+      const prop = this.properties.find(p => p.name === QUALITY_CONCERNS_FIELD);
+      const value = prop ? prop.value : null;
+      return parseListValue(value).includes('shared address');
     },
     // One of five explicit display states. An unrecognised band is treated as
     // unknown rather than silently implying HIGH.
@@ -140,6 +159,18 @@ export default {
       color: var(--bs-body-text-secondary);
     }
 
+    // Non-defect annotation (e.g. legitimately shared registered address).
+    // Deliberately neutral styling — distinct from the band dot/colour so it
+    // never reads as a confidence signal.
+    &__badge {
+      padding: 0.05rem 0.4rem;
+      border-radius: 0.75rem;
+      background-color: var(--bs-body-inactive);
+      color: var(--bs-body-text-secondary);
+      font-size: 0.68rem;
+      font-weight: 600;
+    }
+
     // Absent band — keep it visible (never implied-HIGH) but quiet.
     &--quiet {
       color: var(--bs-body-text-secondary);
@@ -164,6 +195,13 @@ export default {
     font-size: 0.8rem;
     line-height: 1.4;
     color: var(--bs-body-text);
+  }
+
+  &__shared-address {
+    margin-bottom: 0.5rem;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--bs-body-text-secondary);
   }
 
   &__nudge {

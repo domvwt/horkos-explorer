@@ -39,6 +39,14 @@ export const INTERNAL_FIELD_NAMES = [
 export const QUALITY_LEVEL_FIELD = "quality_level";
 
 /**
+ * The property name carrying the resolver's non-defect quality annotations
+ * (e.g. "shared address"), read by the confidence indicator. Exposed as a
+ * named constant so the one surface that legitimately consumes this internal
+ * field references the shared policy rather than re-typing the literal.
+ */
+export const QUALITY_CONCERNS_FIELD = "quality_concerns";
+
+/**
  * Remove internal/technical fields from a beautified property list.
  *
  * @param {Array<{name: string, isLabel?: boolean}>} properties
