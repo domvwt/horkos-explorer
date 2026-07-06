@@ -7,6 +7,7 @@
       :is-maximizable="isMaximizable"
       :is-loading="isLoading"
       @evaluate-cypher="evaluateCypher"
+      @select-entity="handleSelectEntity"
       @remove="removeCell"
       @toggle-maximize="toggleMaximize"
       @editor-resize="handleEditorResize"
@@ -47,6 +48,7 @@ import { useModeStore } from "../../store/ModeStore";
 import { mapStores } from "pinia";
 import Kuzu from "@/utils/KuzuWasm";
 import { LOADING_STATUS } from "@/utils/Constants";
+import { selectEntityThroughCell } from "@/utils/NotebookSidebarLogic";
 
 // Constants for investigation restoration timing
 const RESTORATION_INITIAL_DELAY_MS = 100;
@@ -367,6 +369,75 @@ export default {
 
       // Restore the investigation state (will create and populate the graph)
       await resultGraph.restoreInvestigationState(state);
+    },
+
+    // A picked search suggestion is additive: route it to this cell's own
+    // ResultGraph.handleSelectPinnedEntity (same handler a pin click uses), so
+    // the entity is added to / focused on the existing canvas instead of
+    // replacing it. On a cell where no query has run yet there is no graph
+    // mounted, so seed an empty one first (same stub-mount the saved-view
+    // restore uses) and let handleSelectPinnedEntity populate it.
+    async handleSelectEntity(target) {
+      // A query is in flight: queryResults was just reset and the pending
+      // response will replace it, so a stub-mount here would race that write
+      // (stub clobbering real results, or results landing mid-setup). Drop the
+      // pick, matching the pin path's semantics while the canvas is visibly
+      // loading - the window is transient.
+      if (this.isLoading) {
+        return;
+      }
+      if (!target || !target.label || target.pk == null) {
+        return;
+      }
+      const resultGraph = await this.ensureResultGraph();
+      selectEntityThroughCell(resultGraph, target);
+    },
+
+    // Resolve this cell's ResultGraph, mounting an empty one if the cell has no
+    // results yet. Mirrors loadSavedGraphData's stub-mount + retry so a picked
+    // suggestion can seed a fresh canvas. Returns the ResultGraph or null.
+    async ensureResultGraph() {
+      const existing = this.$refs[this.getRefName(0)]?.[0]?.$refs?.resultGraph;
+      if (existing) {
+        return existing;
+      }
+      // Mount an empty graph container (one dummy row, no columns - the same
+      // shape the saved-view restore uses to avoid extraction errors).
+      this.queryResults = [{
+        rows: [{}],
+        columns: [],
+      }];
+      this.isEvaluated = true;
+
+      await this.$nextTick();
+      await new Promise(resolve => setTimeout(resolve, RESTORATION_INITIAL_DELAY_MS));
+
+      const resultContainer = this.$refs[this.getRefName(0)];
+      if (!resultContainer || !resultContainer[0]) {
+        return null;
+      }
+
+      await this.$nextTick();
+      resultContainer[0].schema = this.schema;
+      resultContainer[0].queryResult = this.queryResults[0];
+      resultContainer[0].queryInfo = null;
+      resultContainer[0].errorMessage = "";
+      resultContainer[0].showGraph = true;
+      resultContainer[0].showTable = false;
+      resultContainer[0].showCode = false;
+      resultContainer[0].updateContainerHeight();
+
+      await this.$nextTick();
+      await new Promise(resolve => setTimeout(resolve, RESTORATION_GRAPH_MOUNT_DELAY_MS));
+
+      let resultGraph = resultContainer[0].$refs.resultGraph;
+      let retries = 0;
+      while (!resultGraph && retries < RESTORATION_MAX_RETRIES) {
+        await new Promise(resolve => setTimeout(resolve, RESTORATION_RETRY_DELAY_MS));
+        resultGraph = resultContainer[0].$refs.resultGraph;
+        retries++;
+      }
+      return resultGraph || null;
     },
   },
 }

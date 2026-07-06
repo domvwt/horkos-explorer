@@ -1,5 +1,9 @@
 <template>
   <div class="node-search__wrapper">
+    <GraphToast
+      :message="toastMessage"
+      @dismiss="dismissToast"
+    />
     <div class="node-search__form" @keydown.enter.prevent="executeSearch">
       <!-- Name Filter and Entity Type -->
       <div class="row g-2 mb-1">
@@ -144,6 +148,8 @@
 <script>
 import axios from "@/utils/AxiosWrapper";
 import AutocompleteDropdown from "./AutocompleteDropdown.vue";
+import GraphToast from "./GraphToast.vue";
+import { planSuggestionSelect } from "@/utils/NodeSearchLogic";
 
 // The Limit dropdown offers exactly these values. resultLimit is interpolated
 // UNESCAPED into the LIMIT clause, and loadFromUrl auto-executes the search, so
@@ -163,8 +169,9 @@ export default {
   name: "NodeSearch",
   components: {
     AutocompleteDropdown,
+    GraphToast,
   },
-  emits: ["executeQuery"],
+  emits: ["executeQuery", "select-entity"],
   data() {
     return {
       selectedType: "Person",
@@ -192,6 +199,9 @@ export default {
       selectedSuggestion: null,
       // Viewport coordinates for the body-teleported dropdown
       dropdownPosition: { top: 0, left: 0, width: 0, maxHeight: 260 },
+      // Input-feedback toast (same GraphToast surface the graph canvas uses)
+      toastMessage: null,
+      toastTimeout: null,
     };
   },
   computed: {
@@ -249,6 +259,9 @@ export default {
   beforeUnmount() {
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
+    }
+    if (this.toastTimeout) {
+      clearTimeout(this.toastTimeout);
     }
     window.removeEventListener("scroll", this.onViewportChange, true);
     window.removeEventListener("resize", this.onViewportChange);
@@ -567,23 +580,44 @@ export default {
       return parts.join(" · ");
     },
     onSuggestionSelect(suggestion) {
-      if (suggestion.clusterId) {
-        // Navigate by node id - unambiguous even when many entities share
-        // the picked name
-        this.filters.name = suggestion.name;
-        this.selectedSuggestion = suggestion;
-      } else {
-        // Legacy search tables carry no cluster id - fall back to quoted
-        // exact-name match
-        const escaped = suggestion.name.replace(/"/g, '\\"');
-        this.filters.name = `"${escaped}"`;
-        this.selectedSuggestion = null;
-      }
+      const plan = planSuggestionSelect(suggestion, this.selectedType);
       this.suggestions = [];
       this.showSuggestions = false;
       this.selectedSuggestionIndex = -1;
-      // Picking a suggestion is an explicit choice - search right away
-      this.executeSearch();
+      if (plan.mode === "select") {
+        // Additive navigation: route the picked entity to the active cell's
+        // graph so it is added to / focused on the existing canvas (like a pin
+        // click) instead of replacing it. Navigating by node id is unambiguous
+        // even when many entities share the picked name.
+        this.filters.name = suggestion.name;
+        this.selectedSuggestion = suggestion;
+        this.$emit("select-entity", { label: plan.label, pk: plan.pk });
+        return;
+      }
+      // A suggestion without a cluster id (legacy pre-contract search tables)
+      // cannot be navigated to. Surface input feedback and do nothing else -
+      // same guard pattern as the graph's connection picker. The Search button
+      // and Enter-to-search remain available for plain name searches.
+      this.selectedSuggestion = null;
+      this.showToast("Couldn't identify the selected entity.", 4000);
+    },
+    // Same minimal auto-dismiss pattern as ResultGraph's showToast, rendered
+    // through the shared GraphToast component.
+    showToast(message, duration = 5000) {
+      if (this.toastTimeout) {
+        clearTimeout(this.toastTimeout);
+      }
+      this.toastMessage = message;
+      this.toastTimeout = setTimeout(() => {
+        this.dismissToast();
+      }, duration);
+    },
+    dismissToast() {
+      this.toastMessage = null;
+      if (this.toastTimeout) {
+        clearTimeout(this.toastTimeout);
+        this.toastTimeout = null;
+      }
     },
     onNameKeydown(event) {
       if (!this.showSuggestions || this.suggestions.length === 0) {
@@ -649,6 +683,7 @@ export default {
 
 <style lang="scss" scoped>
 .node-search__wrapper {
+  position: relative;
   padding: 0.5rem 0.75rem;
   height: 100%;
   overflow-y: auto;

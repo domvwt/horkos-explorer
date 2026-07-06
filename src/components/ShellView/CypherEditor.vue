@@ -49,7 +49,10 @@
             v-show="activeMode === 'search'"
             class="mode-content"
           >
-            <NodeSearch @executeQuery="handleSearchQuery" />
+            <NodeSearch
+              @executeQuery="handleSearchQuery"
+              @select-entity="handleSelectEntity"
+            />
           </div>
           <div
             v-show="activeMode === 'cypher'"
@@ -119,7 +122,7 @@ export default {
       default: false,
     },
   },
-  emits: ['remove', 'evaluateCypher', 'toggleMaximize', 'editorResize'],
+  emits: ['remove', 'evaluateCypher', 'selectEntity', 'toggleMaximize', 'editorResize'],
   data: () => {
     return {
       name: "CypherEditor",
@@ -311,6 +314,12 @@ export default {
       } else {
         this.$emit("evaluateCypher", queryData.query, queryData.params);
       }
+    },
+    handleSelectEntity(target) {
+      // Picking a search suggestion is additive - route the entity up to the
+      // cell so it lands on the existing canvas (like a pin click) instead of
+      // running a canvas-replacing query.
+      this.$emit("selectEntity", target);
     },
     setEditorContent(content) {
       this.editor.setValue(content);
