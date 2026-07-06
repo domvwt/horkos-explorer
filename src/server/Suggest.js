@@ -115,17 +115,58 @@ function toSuggestion(row, config) {
   for (const col of config.disambiguators) {
     const value = row[col];
     if (value === null || value === undefined) continue;
-    // DuckDB returns BIGINT columns (e.g. record_count) as JS bigint,
-    // which JSON.stringify rejects
-    disambiguators[col] = typeof value === "bigint" ? Number(value) : value;
+    // DuckDB returns BIGINT columns (e.g. record_count) as JS bigint and DECIMAL
+    // as a wrapper object, neither of which JSON.stringify accepts. Coerce those
+    // numeric wire-types to a plain number, but leave string disambiguators
+    // (birth_date, nationality, …) untouched — Number("British") would be NaN.
+    disambiguators[col] =
+      typeof value === "bigint" || isDuckDbNumericWrapper(value)
+        ? Number(value)
+        : value;
   }
   return {
     name: row.name,
     cluster_id: row.cluster_id,
     canonical_name: row.canonical_name,
     disambiguators,
-    score: row.score,
+    // The LIKE/fast path selects `0.0 AS score`, which @duckdb/node-api returns
+    // as a DuckDBDecimalValue wrapper object backed by a bigint (the ranked path
+    // returns a plain DOUBLE number). JSON.stringify walks into the wrapper,
+    // hits the bigint and throws "Do not know how to serialize a BigInt",
+    // failing the whole response. Coerce to a plain JS number: a number passes
+    // through unchanged, the decimal wrapper resolves to its numeric value.
+    score: coerceNumber(row.score),
   };
+}
+
+/**
+ * Coerce a DuckDB numeric cell to a plain JS number for JSON serialization.
+ * @duckdb/node-api returns BIGINT as JS bigint and DECIMAL as a
+ * DuckDBDecimalValue wrapper (backed by a bigint) — neither is JSON-serializable
+ * as-is. Number() unwraps both via their numeric valueOf/toString; a value that
+ * is already a number is returned unchanged. null/undefined pass through.
+ */
+function coerceNumber(value) {
+  if (value === null || value === undefined) return value;
+  if (typeof value === "number") return value;
+  return Number(value);
+}
+
+/**
+ * True for the wrapper objects @duckdb/node-api uses to represent exact numeric
+ * types (DECIMAL, and the wide-integer HUGEINT/UBIGINT family). These carry a
+ * bigint internally, so they must be unwrapped to a plain number before JSON
+ * serialization. Matched by constructor name so genuine strings/dates are left
+ * alone. A plain number/bigint is NOT a wrapper (callers test those first).
+ */
+function isDuckDbNumericWrapper(value) {
+  if (value === null || typeof value !== "object") return false;
+  const name = value.constructor && value.constructor.name;
+  return (
+    name === "DuckDBDecimalValue" ||
+    name === "DuckDBHugeIntValue" ||
+    name === "DuckDBUHugeIntValue"
+  );
 }
 
 /**
