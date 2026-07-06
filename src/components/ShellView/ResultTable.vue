@@ -72,18 +72,35 @@
               :key="j"
               :style="{ 'white-space': 'pre-wrap' }"
             >
-              <ul
+              <div
                 v-if="Array.isArray(cell)"
-                class="list-group"
+                class="result-table__node-cell"
               >
-                <li
-                  v-for="(item, k) in cell"
-                  :key="k"
-                  class="list-group-item"
+                <ul class="list-group">
+                  <li
+                    v-for="(item, k) in cell"
+                    :key="k"
+                    class="list-group-item"
+                  >
+                    <b>{{ item.name }}:</b> {{ item.value }}
+                  </li>
+                </ul>
+                <button
+                  v-if="pinMetaFor(i, j)"
+                  type="button"
+                  class="result-table__pin-toggle"
+                  :class="{ 'result-table__pin-toggle--pinned': isCellPinned(pinMetaFor(i, j)) }"
+                  :aria-label="isCellPinned(pinMetaFor(i, j)) ? 'Unpin entity' : 'Pin entity'"
+                  :aria-pressed="isCellPinned(pinMetaFor(i, j)) ? 'true' : 'false'"
+                  :title="isCellPinned(pinMetaFor(i, j)) ? 'Unpin from notebook' : 'Pin to notebook'"
+                  @click="togglePin(pinMetaFor(i, j))"
                 >
-                  <b>{{ item.name }}:</b> {{ item.value }}
-                </li>
-              </ul>
+                  <i
+                    class="fa-star"
+                    :class="isCellPinned(pinMetaFor(i, j)) ? 'fa-solid' : 'fa-regular'"
+                  />
+                </button>
+              </div>
               <div
                 v-else-if="isColumnRecursiveRel(j)"
                 class="result-table__recursive-rel__wrapper"
@@ -122,6 +139,8 @@
 import ValueFormatter from "../../utils/ValueFormatter";
 import { UI_SIZE, DATA_TYPES } from "../../utils/Constants";
 import { useSettingsStore } from "../../store/SettingsStore";
+import { useNotebookStore } from "../../store/NotebookStore";
+import { nodeCellPinMeta } from "../../utils/NodeCellPin";
 import { mapStores } from 'pinia'
 export default {
   name: "ResultTable",
@@ -146,6 +165,11 @@ export default {
     page: 1,
     maxLength: 8,
     rows: [],
+    // Parallel to `rows`: pin metadata { label, pk, name } for NODE cells,
+    // null for every other cell. Rides alongside the displayed value so the
+    // rendered cell text stays byte-identical while carrying the label+pk a
+    // pin toggle needs.
+    rowMeta: [],
     tableHeaders: [],
     tableWidth: 0,
   }),
@@ -189,7 +213,7 @@ export default {
     itemsPerPage() {
       return this.settingsStore && this.settingsStore.tableView ? this.settingsStore.tableView.rowsPerPage : 10;
     },
-    ...mapStores(useSettingsStore),
+    ...mapStores(useSettingsStore, useNotebookStore),
   },
   watch: {
     page() {
@@ -216,12 +240,31 @@ export default {
     isColumnRecursiveRel(columnIndex) {
       return this.tableHeaders[columnIndex].type === DATA_TYPES.RECURSIVE_REL;
     },
+    // Pin metadata { label, pk, name } for the cell at (rowIndex, columnIndex),
+    // or null when the cell is not a pinnable node.
+    pinMetaFor(rowIndex, columnIndex) {
+      const rowMeta = this.rowMeta[rowIndex];
+      return rowMeta ? rowMeta[columnIndex] || null : null;
+    },
+    // Reactive derivation from the store, so pins made elsewhere (graph panel,
+    // notebook sidebar) light up the table's star immediately, and unpinning
+    // there clears it.
+    isCellPinned(meta) {
+      return meta ? this.notebookStore.isPinned(meta.label, meta.pk) : false;
+    },
+    togglePin(meta) {
+      if (!meta) {
+        return;
+      }
+      this.notebookStore.togglePin(meta.label, meta.pk, meta.name);
+    },
     renderTable() {
       if (!this.queryResult) {
         return;
       }
       this.tableHeaders = [];
       this.rows = [];
+      this.rowMeta = [];
       if (this.queryResult.rows.length === 0) {
         return;
       }
@@ -238,24 +281,39 @@ export default {
       const end = Math.min(start + this.itemsPerPage, numRows);
       const rowsForPage = this.queryResult.rows.slice(start, end);
       rowsForPage.forEach((row) => {
-        this.rows.push([]);
+        const cells = [];
+        const meta = [];
         for (let key in row) {
           if (row[key] === null || row[key] === undefined) {
-            this.rows[this.rows.length - 1].push('NULL');
+            cells.push('NULL');
+            meta.push(null);
           }
           else if (tableTypes[key] === DATA_TYPES.RECURSIVE_REL) {
             // Value is a recursive relationship
-            this.rows[this.rows.length - 1].push(ValueFormatter.beautifyRecursiveRelValue(row[key], this.schema));
+            cells.push(ValueFormatter.beautifyRecursiveRelValue(row[key], this.schema));
+            meta.push(null);
           }
           else if (tableTypes[key] === DATA_TYPES.NODE || tableTypes[key] === DATA_TYPES.REL) {
             // Value is a node or relationship
-            this.rows[this.rows.length - 1].push(ValueFormatter.filterAndBeautifyProperties(row[key], this.schema));
+            const beautified = ValueFormatter.filterAndBeautifyProperties(row[key], this.schema);
+            cells.push(beautified);
+            // Only NODE cells are pinnable; the raw value carries the `_label`
+            // the beautified list keeps only as a display name, so derive pin
+            // metadata from the raw value here.
+            meta.push(
+              tableTypes[key] === DATA_TYPES.NODE
+                ? nodeCellPinMeta(row[key], beautified)
+                : null
+            );
           }
           else {
             // Value is a primitive type
-            this.rows[this.rows.length - 1].push(ValueFormatter.beautifyValue(row[key], tableTypes[key]));
+            cells.push(ValueFormatter.beautifyValue(row[key], tableTypes[key]));
+            meta.push(null);
           }
         }
+        this.rows.push(cells);
+        this.rowMeta.push(meta);
       });
     },
 
@@ -295,6 +353,48 @@ export default {
       margin-bottom: 0;
     }
   }
+}
+
+.result-table__node-cell {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+.result-table__node-cell .list-group {
+  flex: 1;
+  min-width: 0;
+}
+
+.result-table__pin-toggle {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--bs-body-inactive);
+  cursor: pointer;
+  line-height: 1;
+  /* Hidden until the row is hovered; the pinned state overrides this below so a
+     pinned entity's star is always visible. */
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+tr:hover .result-table__pin-toggle {
+  opacity: 1;
+}
+
+.result-table__pin-toggle:hover,
+.result-table__pin-toggle:focus-visible {
+  opacity: 1;
+  color: var(--bs-warning, #d5b441);
+}
+
+.result-table__pin-toggle--pinned {
+  opacity: 1;
+  color: var(--bs-warning, #d5b441);
 }
 
 .result-table__table__wrapper {
