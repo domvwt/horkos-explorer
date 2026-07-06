@@ -56,6 +56,25 @@ module.exports = defineConfig({
           @import "~/node_modules/bootstrap/scss/_functions.scss";
           @import "~/node_modules/bootstrap/scss/_variables.scss";
           `,
+        sassOptions: {
+          // Bootstrap 5.3.8's SCSS (pulled in via the prelude above) still uses
+          // deprecated global Sass built-ins (mix(), map-get(), unit(), …) and
+          // @import, and sass-loader 13 drives Dart Sass through its own
+          // deprecated legacy JS API. None of that is fixable from this repo, so
+          // silence exactly those dependency-origin deprecation channels. Our
+          // own SCSS emits no deprecations, so this does not mask anything we
+          // could act on; remove ids here if/when Bootstrap and sass-loader are
+          // upgraded. quietDeps additionally quiets any other dependency-origin
+          // deprecation without silencing our own code.
+          quietDeps: true,
+          silenceDeprecations: [
+            "legacy-js-api",
+            "global-builtin",
+            "import",
+            "color-functions",
+            "if-function",
+          ],
+        },
       },
     },
   },
