@@ -325,6 +325,108 @@ class NeighborsFetcher {
     return this._mergeResults(results);
   }
 
+  // Build one query per relationship type that can connect `tableA` to
+  // `tableB`, matching in EITHER direction. BOTH endpoint sets are bound as
+  // lists ($pksA / $pksB) via nested UNWIND so every edge whose endpoints both
+  // fall inside the two pk lists is fetched in a single request per rel type.
+  // Each query projects only the relationship `r` — a single concrete type has
+  // one property shape, so the divergent-STRUCT binding hazard never arises.
+  //
+  // Pure over its inputs (no I/O), so it is unit-testable without a DB.
+  _buildRelsAmongPkListsQueries({
+    tableA,
+    pkNameA,
+    tableB,
+    pkNameB,
+    relTables,
+  }) {
+    if (!Array.isArray(relTables)) {
+      throw new Error("_buildRelsAmongPkListsQueries requires relTables (schema.relTables)");
+    }
+    const escapedA = DataDefinitionLanguage._escapeName(tableA);
+    const escapedB = DataDefinitionLanguage._escapeName(tableB);
+    const escapedPkA = DataDefinitionLanguage._escapeName(pkNameA);
+    const escapedPkB = DataDefinitionLanguage._escapeName(pkNameB);
+
+    // Connectivity is matched on the raw table names; only escaped names are
+    // interpolated into queries. A rel type is relevant if it connects the two
+    // tables in either direction.
+    return relTables
+      .filter(t =>
+        (t.connectivity || []).some(
+          c =>
+            (c.src === tableA && c.dst === tableB) ||
+            (c.src === tableB && c.dst === tableA)
+        )
+      )
+      .map(t =>
+        `UNWIND $pksA AS a_pk UNWIND $pksB AS b_pk MATCH (a:${escapedA}) -[r:${DataDefinitionLanguage._escapeName(t.name)}]- (b:${escapedB}) WHERE a.${escapedPkA} = a_pk AND b.${escapedPkB} = b_pk RETURN r;`
+      );
+  }
+
+  // All edges AMONG a set of nodes — i.e. every edge whose BOTH endpoints are
+  // inside the batch. `nodes` is an array of
+  // { table, primaryKeyName, primaryKeyValues } — one entry per distinct
+  // (table, pk-column) among the batch nodes (the same shape as `others` in
+  // fetchRelsBetweenNodeAndMany). Returns a merged result of the shape
+  // `{ rows: [{ r }], dataTypes }` (or null if nothing connects), matching
+  // fetchRelsBetween/fetchRelsBetweenNodeAndMany so callers reuse the same
+  // row-handling path.
+  //
+  // Requests scale with (rel types per table pairing) x (unordered table
+  // pairings, including each table with itself), NOT with the number of batch
+  // nodes: one query binds two whole pk lists via nested UNWIND. Each unordered
+  // table pair is visited once (self-pairs handle same-table edges), and the
+  // undirected `-[r]-` match catches both stored directions, so no pairing is
+  // queried twice.
+  async fetchRelsAmongNodes({
+    nodes,
+    relTables,
+    isWasm = false,
+  }) {
+    if (!Array.isArray(nodes)) {
+      throw new Error("fetchRelsAmongNodes requires a nodes array");
+    }
+    // Keep only entries that actually carry bindable pk values.
+    const groups = nodes
+      .map(node => ({
+        table: node.table,
+        primaryKeyName: node.primaryKeyName,
+        primaryKeyValues: (node.primaryKeyValues || [])
+          .map(v => this._unwrapPrimaryKeyValue(v))
+          .filter(v => v !== undefined && v !== null),
+      }))
+      .filter(group => group.primaryKeyValues.length > 0);
+
+    const requests = [];
+    // Visit each unordered pairing (i <= j) exactly once. j === i is the
+    // self-pairing that fetches edges between two nodes of the same table.
+    for (let i = 0; i < groups.length; i += 1) {
+      for (let j = i; j < groups.length; j += 1) {
+        const a = groups[i];
+        const b = groups[j];
+        const queries = this._buildRelsAmongPkListsQueries({
+          tableA: a.table,
+          pkNameA: a.primaryKeyName,
+          tableB: b.table,
+          pkNameB: b.primaryKeyName,
+          relTables,
+        });
+        queries.forEach(query => {
+          requests.push(
+            this._runQuery(query, { pksA: a.primaryKeyValues, pksB: b.primaryKeyValues }, isWasm)
+          );
+        });
+      }
+    }
+
+    if (requests.length === 0) {
+      return null;
+    }
+    const results = await Promise.all(requests);
+    return this._mergeResults(results);
+  }
+
   // All edges between two specific nodes, in either direction. Undirected
   // per-type matches are safe: a single bound type has one property shape.
   async fetchRelsBetween({

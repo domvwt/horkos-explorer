@@ -1410,13 +1410,18 @@ export default {
       }
 
       const rawNode = entity.rawNode;
+      // Pin the source node NOW: the user can select another node while the
+      // fetch/add below are awaited, and the history entry must attribute the
+      // add to the node it actually expanded (it is used to invalidate that
+      // node's neighbour count on undo).
+      const sourceNodeId = this.clickedId;
       const nodesBefore = new Set((this.g6Graph.getNodeData() || []).map(n => n.id));
       const edgesBefore = new Set((this.g6Graph.getEdgeData() || []).map(e => e.id));
 
       // Fetch all edges between the two nodes to add them in a single render
       const allRels = [entity.rawRel];
       try {
-        const currentNodeData = this.g6Graph.getNodeData(this.clickedId);
+        const currentNodeData = this.g6Graph.getNodeData(sourceNodeId);
         const { tableName, primaryKeyName, primaryKeyValue } = this.getInfoForExpansion(currentNodeData);
         const newNodeTableName = rawNode._label;
         const newNodeSchema = this.schema.nodeTables.find(t => t.name === newNodeTableName);
@@ -1465,7 +1470,7 @@ export default {
         this.historyManager.push({
           type: 'add-connected-node',
           data: {
-            sourceNodeId: this.clickedId,
+            sourceNodeId,
             addedNodes: JSON.parse(JSON.stringify(addedNodes)),
             addedEdges: JSON.parse(JSON.stringify(addedEdges)),
           }
@@ -1540,6 +1545,25 @@ export default {
             });
             if (result && result.rows) {
               result.rows.forEach(row => {
+                if (row.r && row.r._id) {
+                  relsById.set(encodeId(row.r._id), row.r);
+                }
+              });
+            }
+
+            // Edges BETWEEN two entities added in the SAME batch are not
+            // incident to the focus node, so the focus<->many fetch above never
+            // sees them. Fetch them once here (all-pairs among the batch tables)
+            // so they render in the same data-add instead of only appearing
+            // after a later expansion. Query count stays bounded: one query per
+            // (rel type x unordered table pairing), independent of batch size.
+            const amongResult = await NeighborsFetcher.fetchRelsAmongNodes({
+              nodes: others,
+              relTables: this.schema.relTables,
+              isWasm: this.modeStore.isWasm,
+            });
+            if (amongResult && amongResult.rows) {
+              amongResult.rows.forEach(row => {
                 if (row.r && row.r._id) {
                   relsById.set(encodeId(row.r._id), row.r);
                 }

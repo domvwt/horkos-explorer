@@ -483,6 +483,175 @@ describe("fetchRelsBetweenNodeAndMany", () => {
   });
 });
 
+describe("_buildRelsAmongPkListsQueries", () => {
+  it("emits one query per rel type that connects the two tables, in either direction", () => {
+    // Person<->Company is connected only by Directorship among the set.
+    const queries = NeighborsFetcher._buildRelsAmongPkListsQueries({
+      tableA: "Person",
+      pkNameA: "id",
+      tableB: "Company",
+      pkNameB: "id",
+      relTables,
+    });
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toContain("-[r:`Directorship`]-");
+  });
+
+  it("binds both endpoint sets as UNWIND $pksA / $pksB lists", () => {
+    const queries = NeighborsFetcher._buildRelsAmongPkListsQueries({
+      tableA: "Person",
+      pkNameA: "id",
+      tableB: "Company",
+      pkNameB: "id",
+      relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
+    });
+    expect(queries[0]).toBe(
+      "UNWIND $pksA AS a_pk UNWIND $pksB AS b_pk MATCH (a:`Person`) -[r:`Directorship`]- (b:`Company`) WHERE a.`id` = a_pk AND b.`id` = b_pk RETURN r;"
+    );
+  });
+
+  it("matches undirected so a same-table self-pairing finds edges regardless of stored direction", () => {
+    const queries = NeighborsFetcher._buildRelsAmongPkListsQueries({
+      tableA: "Company",
+      pkNameA: "id",
+      tableB: "Company",
+      pkNameB: "id",
+      relTables: [{ name: "CorporateOwnership", connectivity: [{ src: "Company", dst: "Company" }] }],
+    });
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toContain("(a:`Company`) -[r:`CorporateOwnership`]- (b:`Company`)");
+  });
+
+  it("escapes identifiers and returns no queries for an unconnected table pair", () => {
+    expect(
+      NeighborsFetcher._buildRelsAmongPkListsQueries({
+        tableA: "Person",
+        pkNameA: "id",
+        tableB: "Address",
+        pkNameB: "id",
+        relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
+      })
+    ).toHaveLength(0);
+
+    const escaped = NeighborsFetcher._buildRelsAmongPkListsQueries({
+      tableA: "Weird Table",
+      pkNameA: "pk name",
+      tableB: "Other Table",
+      pkNameB: "other pk",
+      relTables: [{ name: "Rel Type", connectivity: [{ src: "Weird Table", dst: "Other Table" }] }],
+    });
+    expect(escaped[0]).toContain("(a:`Weird Table`)");
+    expect(escaped[0]).toContain("(b:`Other Table`)");
+    expect(escaped[0]).toContain("a.`pk name` = a_pk");
+    expect(escaped[0]).toContain("b.`other pk` = b_pk");
+    expect(escaped[0]).toContain("-[r:`Rel Type`]-");
+  });
+
+  it("throws when relTables is not an array", () => {
+    expect(() =>
+      NeighborsFetcher._buildRelsAmongPkListsQueries({
+        tableA: "Person",
+        pkNameA: "id",
+        tableB: "Company",
+        pkNameB: "id",
+      })
+    ).toThrow();
+  });
+});
+
+describe("fetchRelsAmongNodes", () => {
+  it("visits each unordered table pairing once (incl. self-pairs) and merges rows", async () => {
+    const rel1 = { _id: { table: 5, offset: 1 }, _label: "Directorship" };
+    const rel2 = { _id: { table: 7, offset: 3 }, _label: "CorporateOwnership" };
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValue({ rows: [], dataTypes: { r: "REL" } });
+    // Person-Person self-pair: no rel type connects Person<->Person -> 0 queries.
+    // Person-Company pair: Directorship -> 1 query.
+    // Company-Company self-pair: CorporateOwnership -> 1 query.
+    runSpy
+      .mockResolvedValueOnce({ rows: [{ r: rel1 }], dataTypes: { r: "REL" } })
+      .mockResolvedValueOnce({ rows: [{ r: rel2 }], dataTypes: { r: "REL" } });
+
+    const merged = await NeighborsFetcher.fetchRelsAmongNodes({
+      nodes: [
+        { table: "Person", primaryKeyName: "id", primaryKeyValues: ["p1", "p2"] },
+        { table: "Company", primaryKeyName: "id", primaryKeyValues: ["c1", "c2", "c3"] },
+      ],
+      relTables,
+    });
+
+    // Pairings: Person-Person (0), Person-Company (Directorship, 1),
+    // Company-Company (CorporateOwnership, 1) -> 2 requests total. Crucially
+    // this is independent of the 5 pk values in the batch.
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    runSpy.mock.calls.forEach(([, params]) => {
+      expect(Array.isArray(params.pksA)).toBe(true);
+      expect(Array.isArray(params.pksB)).toBe(true);
+    });
+    expect(merged.rows.map(row => encodeId(row.r._id)).sort()).toEqual(["5_1", "7_3"]);
+    runSpy.mockRestore();
+  });
+
+  it("keeps query count bounded and independent of the number of nodes", async () => {
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValue({ rows: [], dataTypes: { r: "REL" } });
+
+    const makeNodes = n => [
+      {
+        table: "Person",
+        primaryKeyName: "id",
+        primaryKeyValues: Array.from({ length: n }, (_, i) => `p${i}`),
+      },
+      {
+        table: "Company",
+        primaryKeyName: "id",
+        primaryKeyValues: Array.from({ length: n }, (_, i) => `c${i}`),
+      },
+    ];
+
+    await NeighborsFetcher.fetchRelsAmongNodes({ nodes: makeNodes(3), relTables });
+    const callsForSmall = runSpy.mock.calls.length;
+    runSpy.mockClear();
+
+    await NeighborsFetcher.fetchRelsAmongNodes({ nodes: makeNodes(500), relTables });
+    const callsForLarge = runSpy.mock.calls.length;
+
+    // Same two tables, same rel-type connectivity: the request count must not
+    // grow with the batch size (no per-entity or per-pair query burst).
+    expect(callsForLarge).toBe(callsForSmall);
+    // Concretely: Person-Person (0) + Person-Company (Directorship, 1) +
+    // Company-Company (CorporateOwnership, 1) = 2 requests, regardless of N.
+    expect(callsForLarge).toBe(2);
+    runSpy.mockRestore();
+  });
+
+  it("skips node entries with an empty pk list and makes no request when nothing connects", async () => {
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValue({ rows: [], dataTypes: { r: "REL" } });
+    const merged = await NeighborsFetcher.fetchRelsAmongNodes({
+      nodes: [
+        { table: "Person", primaryKeyName: "id", primaryKeyValues: [] },
+        { table: "Address", primaryKeyName: "id", primaryKeyValues: ["a1"] },
+      ],
+      relTables,
+    });
+    // Person dropped (no pks); only the Address self-pair remains, and no rel
+    // type connects Address<->Address -> no requests, null result.
+    expect(runSpy).not.toHaveBeenCalled();
+    expect(merged).toBeNull();
+    runSpy.mockRestore();
+  });
+
+  it("throws when nodes is not an array", async () => {
+    await expect(
+      NeighborsFetcher.fetchRelsAmongNodes({ relTables })
+    ).rejects.toThrow();
+  });
+});
+
 // The "new neighbours only" count is a pure function of a neighbour-node list
 // and the set of node ids already on the canvas. This mirrors the component's
 // countNewNeighborNodes: encode each neighbour to its {table}_{offset} g6 id,
