@@ -69,6 +69,19 @@
           class="result-graph__actions"
         >
           <button
+            class="btn btn-sm"
+            :class="clickedNodePinned ? 'btn-warning' : 'btn-outline-secondary'"
+            :title="clickedNodePinned ? 'Unpin this entity' : 'Pin this entity to your notebook'"
+            @click="togglePinClickedNode()"
+          >
+            <i
+              class="fa-star"
+              :class="clickedNodePinned ? 'fa-solid' : 'fa-regular'"
+            />
+            {{ clickedNodePinned ? 'Pinned' : 'Pin' }}
+          </button>
+
+          <button
             class="btn btn-sm btn-outline-secondary"
             @click="removeNode()"
           >
@@ -457,9 +470,6 @@
           <span>
             Connected in {{ connectionResult.hops }}
             {{ connectionResult.hops === 1 ? 'step' : 'steps' }}.
-            <span class="connection-result__hint">
-              Save it from your notebook (name ready).
-            </span>
           </span>
         </template>
         <template v-else-if="connectionResult.status === 'no-path'">
@@ -535,14 +545,6 @@ export default {
     ConfidenceIndicator,
     ResultDisclaimer,
     EntityPinPanel
-  },
-  // Provided by MainLayout: pre-fills the notebook sidebar's save-view input
-  // after a successful find-connection. Optional (default no-op) so the graph
-  // still works if rendered outside MainLayout, e.g. in isolation/tests.
-  inject: {
-    prefillSaveViewName: {
-      default: () => () => {},
-    },
   },
   props: {
     queryResult: {
@@ -716,6 +718,34 @@ export default {
       }
       const pk = this.clickedProperties.find(p => p.isPrimaryKey);
       return pk ? pk.value : nodeTypeDisplayName(this.clickedLabel);
+    },
+    // Cluster id of the clicked node (primary key; fall back to the "id"
+    // property). Mirrors EntityPinPanel.pk so the top-bar Pin button keys the
+    // notebook store the same way the mid-panel one does.
+    clickedPk() {
+      const pkProp = this.clickedProperties.find(p => p.isPrimaryKey);
+      if (pkProp && pkProp.value != null) return String(pkProp.value);
+      const idProp = this.clickedProperties.find(p => p.name === "id");
+      return idProp && idProp.value != null ? String(idProp.value) : null;
+    },
+    // Human-readable caption for the clicked node, resolved through the same
+    // per-entity-type label mapping EntityPinPanel.displayName uses; falls back
+    // to the raw pk for an unknown/virtual type or a missing caption property.
+    clickedDisplayName() {
+      const labelProp = this.settingsStore.settingsForLabel(this.clickedLabel)?.label;
+      if (labelProp) {
+        const named = this.clickedProperties.find(p => p.name === labelProp);
+        if (named && named.value != null && named.value !== "NULL") {
+          return String(named.value);
+        }
+      }
+      return this.clickedPk;
+    },
+    // Live pinned state of the clicked node (reactive off the notebook store),
+    // driving the top-bar Pin button's label/style.
+    clickedNodePinned() {
+      if (!this.clickedPk) return false;
+      return this.notebookStore.isPinned(this.clickedLabel, this.clickedPk);
     },
     // Several raw rel tables can share one display name (e.g. Person/Corporate
     // ownership both read "Ownership"); merge their overview counts.
@@ -3190,13 +3220,6 @@ export default {
         hops: result.hops,
         endpoints: [a, b],
       };
-
-      // One-click save: pre-fill the notebook sidebar's save-view input with a
-      // suggested name so the user just clicks Save. Names are truncated so a
-      // long entity name can't produce an unwieldy view name. Does not expand a
-      // collapsed sidebar (the draft waits for it to open).
-      const suggestedName = `${this.shortEndpointName(a)} ↔ ${this.shortEndpointName(b)}`;
-      this.prefillSaveViewName(suggestedName);
     },
 
     /**
@@ -3230,17 +3253,16 @@ export default {
       }
     },
 
-    // Short, length-capped human label for an endpoint, used to build the
-    // suggested save-view name. Falls back to pk then label.
-    shortEndpointName(endpoint) {
-      if (!endpoint) return '';
-      const raw = String(endpoint.name || endpoint.pk || '').trim() || String(endpoint.label || '');
-      const MAX = 24;
-      return raw.length > MAX ? `${raw.slice(0, MAX - 1)}…` : raw;
-    },
-
     dismissConnectionResult() {
       this.connectionResult = null;
+    },
+
+    // Pin/unpin the clicked node from the top action bar, keying the notebook
+    // store the same way EntityPinPanel does. The pinnedKeySignature watcher
+    // re-syncs the canvas star badges off the resulting store change.
+    togglePinClickedNode() {
+      if (!this.clickedPk) return;
+      this.notebookStore.togglePin(this.clickedLabel, this.clickedPk, this.clickedDisplayName);
     },
 
     // ---- Node-panel "Find connection to…" picker -----------------------
@@ -4768,13 +4790,6 @@ export default {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-  }
-
-  .connection-result__hint {
-    display: block;
-    font-size: 0.75rem;
-    color: var(--bs-body-text-secondary);
-    margin-top: 0.15rem;
   }
 
   .connection-result__close {
