@@ -54,7 +54,6 @@
         @select-entity="handleNotebookSelectEntity"
         @save-view="handleNotebookSaveView"
         @restore-view="handleNotebookRestoreView"
-        @find-connection="handleNotebookFindConnection"
       />
       <div class="main-layout__main-container">
         <div class="container-fluid">
@@ -589,11 +588,6 @@ export default {
     handleNotebookRestoreView(view) {
       this.notebookDelegate("restore-view", (shell) =>
         shell?.restoreNotebookView(view)
-      );
-    },
-    handleNotebookFindConnection(endpoints) {
-      this.notebookDelegate("find-connection", (shell) =>
-        shell?.findNotebookConnection(endpoints)
       );
     },
     // Handle share investigation from header button

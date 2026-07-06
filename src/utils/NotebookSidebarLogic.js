@@ -20,8 +20,6 @@
  *                   guards programmatic calls);
  *   - "no-view"     restore: malformed view (missing its state code);
  *   - "no-entity"   select: malformed target (missing label/pk);
- *   - "no-pair"     find-connection: one or both endpoints malformed;
- *   - "same-entity" find-connection: both endpoints are the same node;
  *   - "no-graph"    no mounted graph canvas to act on (table/code view, or no
  *                   cells) — the sidebar surfaces a hint for this one;
  *   - "empty-graph" save: a canvas exists but holds nothing to save —
@@ -141,38 +139,5 @@ export function selectEntityThroughCell(graph, target) {
     return { ok: false, reason: "no-graph" };
   }
   graph.handleSelectPinnedEntity({ label: target.label, pk: target.pk });
-  return { ok: true, reason: null };
-}
-
-/**
- * Route a "find connection" request between two entities to the cell's
- * shortest-path handler (ResultGraph.handleFindConnection — it runs the
- * parameterised path query, merges/highlights/focuses the path, toasts the hop
- * count or the no-path message, and records undo).
- *
- * Validates the two endpoints here so the sidebar can give feedback instead of
- * silently no-opping:
- *   - "no-pair"       one or both endpoints malformed (missing label/pk);
- *   - "same-entity"   both endpoints are the same node (no query is run);
- *   - "no-graph"      no mounted canvas to act on.
- * The async find itself (path/no-path/error) is handled and toasted inside
- * ResultGraph, so a dispatched find counts as ok here (same convention as
- * restoreViewThroughCell).
- */
-export function findConnectionThroughCell(graph, endpoints) {
-  const [a, b] = Array.isArray(endpoints) ? endpoints : [];
-  if (!a || !a.label || a.pk == null || !b || !b.label || b.pk == null) {
-    return { ok: false, reason: "no-pair" };
-  }
-  if (a.label === b.label && String(a.pk) === String(b.pk)) {
-    return { ok: false, reason: "same-entity" };
-  }
-  if (!graph || typeof graph.handleFindConnection !== "function") {
-    return { ok: false, reason: "no-graph" };
-  }
-  graph.handleFindConnection(
-    { label: a.label, pk: a.pk },
-    { label: b.label, pk: b.pk }
-  );
   return { ok: true, reason: null };
 }

@@ -7,7 +7,6 @@ import {
   saveViewThroughCell,
   restoreViewThroughCell,
   selectEntityThroughCell,
-  findConnectionThroughCell,
 } from "./NotebookSidebarLogic";
 
 // A minimal stand-in for the NotebookStore's page surface used by
@@ -49,10 +48,6 @@ function mockGraph({ empty = false, savedViews = [] } = {}) {
     },
     handleSelectPinnedEntity(target) {
       this.selectCalls.push(target);
-    },
-    findConnectionCalls: [],
-    handleFindConnection(a, b) {
-      this.findConnectionCalls.push([a, b]);
     },
   };
 }
@@ -261,62 +256,6 @@ describe("selectEntityThroughCell", () => {
     const result = selectEntityThroughCell(graph, { label: "Person", pk: "p1" });
     expect(result).toEqual({ ok: true, reason: null });
     expect(graph.selectCalls).toEqual([{ label: "Person", pk: "p1" }]);
-  });
-});
-
-describe("findConnectionThroughCell", () => {
-  it("rejects when the endpoints array is missing or malformed", () => {
-    const graph = mockGraph();
-    expect(findConnectionThroughCell(graph, null)).toEqual({
-      ok: false,
-      reason: "no-pair",
-    });
-    expect(findConnectionThroughCell(graph, [{ label: "Person", pk: "p1" }])).toEqual({
-      ok: false,
-      reason: "no-pair",
-    });
-    expect(
-      findConnectionThroughCell(graph, [
-        { label: "Person", pk: "p1" },
-        { label: "Company" },
-      ])
-    ).toEqual({ ok: false, reason: "no-pair" });
-    expect(graph.findConnectionCalls).toEqual([]);
-  });
-
-  it("rejects the same entity on both ends without querying", () => {
-    const graph = mockGraph();
-    expect(
-      findConnectionThroughCell(graph, [
-        { label: "Person", pk: "p1" },
-        { label: "Person", pk: "p1" },
-      ])
-    ).toEqual({ ok: false, reason: "same-entity" });
-    expect(graph.findConnectionCalls).toEqual([]);
-  });
-
-  it("reports no-graph when no canvas is mounted", () => {
-    expect(
-      findConnectionThroughCell(null, [
-        { label: "Person", pk: "p1" },
-        { label: "Company", pk: "c1" },
-      ])
-    ).toEqual({ ok: false, reason: "no-graph" });
-  });
-
-  it("routes two distinct endpoints to the graph's find-connection handler", () => {
-    const graph = mockGraph();
-    const result = findConnectionThroughCell(graph, [
-      { label: "Person", pk: "p1" },
-      { label: "Company", pk: "c1" },
-    ]);
-    expect(result).toEqual({ ok: true, reason: null });
-    expect(graph.findConnectionCalls).toEqual([
-      [
-        { label: "Person", pk: "p1" },
-        { label: "Company", pk: "c1" },
-      ],
-    ]);
   });
 });
 

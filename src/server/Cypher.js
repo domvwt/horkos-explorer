@@ -216,6 +216,16 @@ router.post("/", QueryValidator.middleware(database), async (req, res) => {
     responseBody = JSON.stringify(responseBody, int128Replacer);
     return res.send(responseBody);
   } catch (err) {
+    // A query interrupted by the per-connection wall-clock timeout surfaces as a
+    // Kuzu "interrupt" error. Classify it as 408 with a fixed body so the client
+    // (PathFinder) can distinguish a timeout from a generic failure. The message
+    // is a fixed string — the raw error text is never echoed (info-disclosure
+    // policy), it is only inspected here. This runs on an errored path, so (like
+    // every other error branch) the row budget is not debited.
+    if (err && typeof err.message === "string" && /interrupt/i.test(err.message)) {
+      logger.warn(`Cypher query timed out: ${err.message}`);
+      return res.status(408).send({ error: "Query timed out" });
+    }
     // Do not echo raw Kuzu/binder error text to public clients; log the full
     // detail server-side and return a generic message (info-disclosure policy).
     return sendErrorResponse(res, err, {

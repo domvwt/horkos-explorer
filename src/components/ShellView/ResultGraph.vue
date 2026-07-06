@@ -457,10 +457,9 @@
       @dismiss="dismissToast"
     />
 
-    <!-- Connection-result action bar: shown after a find. On a hit it confirms
-         the hop count and notes the save name is ready in the notebook; on a
-         miss it offers a deeper search. Kept separate from GraphToast so the
-         plain info toast stays action-free. -->
+    <!-- Connection-result banner: the SOLE surface for a find's outcome (no
+         accompanying toast). Four statuses — found / no-path / timeout / error.
+         Kept separate from GraphToast so the plain info toast stays action-free. -->
     <div
       v-if="connectionResult"
       class="result-graph__connection-result"
@@ -477,21 +476,20 @@
             </span>
           </span>
         </template>
-        <template v-else>
+        <template v-else-if="connectionResult.status === 'no-path'">
           <i class="fa-solid fa-circle-info" />
-          <span>No connection within {{ connectionResult.maxHops }} steps.</span>
+          <span>No connection within {{ MAX_HOPS }} steps.</span>
+        </template>
+        <template v-else-if="connectionResult.status === 'timeout'">
+          <i class="fa-solid fa-clock" />
+          <span>The search hit the time limit — no connection found.</span>
+        </template>
+        <template v-else>
+          <i class="fa-solid fa-triangle-exclamation" />
+          <span>The connection search failed — try again.</span>
         </template>
       </div>
       <div class="connection-result__actions">
-        <button
-          v-if="connectionResult.status === 'no-path' && connectionResult.canDeepen"
-          class="btn btn-sm btn-outline-secondary"
-          :disabled="findConnectionInFlight"
-          @click="searchConnectionDeeper()"
-        >
-          <i class="fa-solid fa-magnifying-glass-plus" />
-          Search deeper
-        </button>
         <button
           class="connection-result__close"
           title="Dismiss"
@@ -517,7 +515,7 @@ import {
   extractGraphFromQueryResult
 } from "../../utils/GraphResultExtractor";
 import NeighborsFetcher from "../../utils/NeighborsFetcher";
-import PathFinder, { DEFAULT_MAX_HOPS, HARD_MAX_HOPS } from "../../utils/PathFinder";
+import PathFinder, { MAX_HOPS } from "../../utils/PathFinder";
 import { useSettingsStore } from "../../store/SettingsStore";
 import { useModeStore } from "../../store/ModeStore";
 import { useNotebookStore } from "../../store/NotebookStore";
@@ -660,12 +658,16 @@ export default {
     connectionSearchTimer: null,
     connectionSearchRequestId: 0,
     connectionSearchUnavailable: false,
-    // Lightweight result bar shown after a find: hop count + one-click save
-    // and (for a miss) search-deeper. { status, hops, maxHops, endpoints,
-    // canDeepen } or null when nothing to show.
+    // Outcome banner shown after a find (the SOLE outcome surface — no toast).
+    // { status: 'found'|'no-path'|'timeout'|'error', hops, endpoints } or null
+    // when nothing to show.
     connectionResult: null,
   }),
   computed: {
+    // Exposed to the template so the no-path banner can name the hop ceiling.
+    MAX_HOPS() {
+      return MAX_HOPS;
+    },
     graphVizSettings() {
       return this.settingsStore.graphVizSettings;
     },
@@ -2875,39 +2877,78 @@ export default {
     },
 
     /**
+     * The single node primary-key column, asserted uniform across ALL node
+     * tables. The two-step find query projects one pk column that must be valid
+     * for every node table (true for the Horkos schema: every table keys on
+     * `id`). Returns the shared pk name, or null if the tables disagree or the
+     * schema is unavailable — in which case the caller surfaces the error banner
+     * rather than guessing a column.
+     */
+    uniformNodePrimaryKey() {
+      const tables = this.schema?.nodeTables || [];
+      if (tables.length === 0) {
+        return null;
+      }
+      let pkName = null;
+      for (const table of tables) {
+        const pkProp = (table.properties || []).find(p => p.isPrimaryKey);
+        if (!pkProp) {
+          return null;
+        }
+        if (pkName === null) {
+          pkName = pkProp.name;
+        } else if (pkName !== pkProp.name) {
+          // Node tables key on different columns — the single-column projection
+          // is unsafe; bail so the caller shows the error banner.
+          return null;
+        }
+      }
+      return pkName;
+    },
+
+    /**
      * Find the shortest connection between two entities and lay it on the
-     * canvas. Entry point for both the node-panel picker and the notebook
-     * sidebar's two-pin action; endpoints are { label, pk }.
+     * canvas. Sole entry point is the node side-panel "Find connection to…"
+     * picker; endpoints are { label, pk }.
      *
-     * Runs the parameterised, hop-bounded SHORTEST-path query (PathFinder),
-     * distinguishing three outcomes:
-     *   - a path was found  -> merge it additively, highlight + focus the whole
-     *     path, toast the hop count, pre-fill the sidebar's save-view name,
+     * Runs the two-step PathFinder query (discovery then hydration), setting the
+     * outcome banner (the sole outcome surface, no toast):
+     *   - a path was found -> merge it additively, highlight + focus the whole
+     *     path, banner the hop count, pre-fill the sidebar's save-view name,
      *     record undo;
-     *   - no path within N hops -> clear message with a "search deeper" option
-     *     (re-run at the hard max), and no deepen option once already at the max;
-     *   - a query/network error -> its own toast (never masquerades as no-path).
+     *   - no path within MAX_HOPS -> 'no-path' banner;
+     *   - a query timeout (HTTP 408) -> 'timeout' banner;
+     *   - any other query/network error -> 'error' banner (never masquerades as
+     *     no-path).
      *
      * @param {{label:string, pk:*}} a  first endpoint
      * @param {{label:string, pk:*}} b  second endpoint
-     * @param {number} [maxHops]  requested upper hop bound (defaults to 4)
      */
-    async handleFindConnection(a, b, maxHops = DEFAULT_MAX_HOPS) {
+    async handleFindConnection(a, b) {
       if (this.findConnectionInFlight) {
         return;
       }
-      // Same-entity guard: nothing to connect. (The sidebar path also guards
-      // this, but the picker path reaches here directly.)
+      // Same-entity guard: nothing to connect. Input feedback (not an outcome),
+      // so it stays a toast.
       if (a && b && a.label === b.label && String(a.pk) === String(b.pk)) {
         this.showToast("That's the same entity — pick a different one to connect to.", 4000);
         return;
       }
       // Both labels must be real node tables before we interpolate them (params
       // can't stand in for identifiers). Escaping in PathFinder keeps a stray
-      // value inert, but an unknown label can't produce a path anyway.
+      // value inert, but an unknown label can't produce a path anyway. Input
+      // feedback, so it stays a toast.
       const validLabels = this.getValidNodeLabels();
       if (!a || !b || !validLabels.has(a.label) || !validLabels.has(b.label)) {
         this.showToast("Couldn't find a connection: unknown entity type.", 5000);
+        return;
+      }
+      // The two-step query projects a single pk column valid for every node
+      // table; if the schema doesn't offer one, surface the error banner rather
+      // than guessing.
+      const pkName = this.uniformNodePrimaryKey();
+      if (!pkName) {
+        this.connectionResult = { status: 'error', hops: 0, endpoints: [a, b] };
         return;
       }
 
@@ -2925,32 +2966,30 @@ export default {
             labelB: b.label,
             pkNameB: this.primaryKeyNameForLabel(b.label),
             pkValueB: b.pk,
-            maxHops,
+            pkName,
+            nodeLabelSet: this.getValidNodeLabels(),
+            relLabelSet: this.getValidEdgeLabels(),
+            maxHops: MAX_HOPS,
             isWasm: this.modeStore.isWasm,
           });
         } catch (e) {
-          // A DB / network error must never be reported as "no connection".
+          // A DB / network error must never be reported as "no connection". A
+          // 408 (query timeout) gets its own banner status; anything else is a
+          // generic error. WASM has no query timeout, so it never yields 408.
           console.warn('Find-connection query failed:', e);
-          this.connectionResult = null;
-          this.showToast("Couldn't run the connection search — try again.", 5000);
+          const status = (e && e.response && e.response.status === 408)
+            ? 'timeout'
+            : 'error';
+          this.connectionResult = { status, hops: 0, endpoints: [a, b] };
           return;
         }
 
         if (!result.found) {
-          // No path within the searched bound. Offer a deeper search unless we
-          // are already at the hard ceiling.
-          const canDeepen = result.maxHops < HARD_MAX_HOPS;
           this.connectionResult = {
             status: 'no-path',
             hops: 0,
-            maxHops: result.maxHops,
             endpoints: [a, b],
-            canDeepen,
           };
-          this.showToast(
-            `No connection found within ${result.maxHops} steps.`,
-            canDeepen ? 6000 : 5000
-          );
           return;
         }
 
@@ -2961,11 +3000,12 @@ export default {
     },
 
     /**
-     * Merge a found path onto the canvas, highlight and focus it, toast the hop
+     * Merge a found path onto the canvas, highlight and focus it, banner the hop
      * count, record undo, and pre-fill the sidebar's save-view name so the path
-     * can be saved in one click. The path row is a RECURSIVE_REL (_nodes/_rels),
-     * which the existing graph extractor already handles — so it flows through
-     * addDataWithQueryResult exactly like any other result, additively.
+     * can be saved in one click. The hydration row is plain NODE / REL columns
+     * (n0, r0, n1, …) with full properties, which the existing graph extractor
+     * already handles — so it flows through addDataWithQueryResult exactly like
+     * any other result, additively.
      */
     async addPathToCanvas(result, a, b) {
       // Seed an empty canvas if no query has ever run (same idiom as the pin
@@ -2979,8 +3019,8 @@ export default {
       const nodesBefore = new Set((this.g6Graph?.getNodeData() || []).map(n => n.id));
       const edgesBefore = new Set((this.g6Graph?.getEdgeData() || []).map(e => e.id));
 
-      // The recursive-path row keyed on the RETURN alias 'p'; the extractor
-      // keys on dataTypes[column] === 'RECURSIVE_REL'.
+      // The hydration row is plain NODE / REL columns; the extractor keys on
+      // dataTypes[column] === 'NODE' / 'REL' and materializes each directly.
       const queryResult = { rows: [result.row], dataTypes: result.dataTypes };
       await this.addDataWithQueryResult(queryResult);
 
@@ -3033,12 +3073,8 @@ export default {
       this.connectionResult = {
         status: 'found',
         hops: result.hops,
-        maxHops: result.maxHops,
         endpoints: [a, b],
-        canDeepen: false,
       };
-      const stepWord = result.hops === 1 ? 'step' : 'steps';
-      this.showToast(`Connected in ${result.hops} ${stepWord}.`, 5000);
 
       // One-click save: pre-fill the notebook sidebar's save-view input with a
       // suggested name so the user just clicks Save. Names are truncated so a
@@ -3049,15 +3085,18 @@ export default {
     },
 
     /**
-     * Encoded G6 element ids (nodes + rels) of a recursive-path row, in path
-     * order. Pure over the row so highlight/focus target exactly the path.
+     * Encoded G6 element ids of a hydration row's NODE / REL columns (n0, r0,
+     * n1, …). Pure over the row so highlight/focus target exactly the path.
      */
     pathElementIds(row) {
-      const path = row && row.p;
-      if (!path) return [];
+      if (!row) return [];
       const ids = [];
-      (path._nodes || []).forEach(n => { if (n && n._id) ids.push(encodeId(n._id)); });
-      (path._rels || []).forEach(r => { if (r && r._id) ids.push(encodeId(r._id)); });
+      Object.keys(row).forEach(key => {
+        const col = row[key];
+        if (col && col._id) {
+          ids.push(encodeId(col._id));
+        }
+      });
       return ids;
     },
 
@@ -3074,17 +3113,6 @@ export default {
           return false;
         }
       }
-    },
-
-    /**
-     * Re-run the last no-path find at the hard-max hop bound. Wired to the
-     * "Search deeper" affordance on the no-path result bar.
-     */
-    searchConnectionDeeper() {
-      const r = this.connectionResult;
-      if (!r || r.status !== 'no-path' || !r.canDeepen) return;
-      const [a, b] = r.endpoints;
-      this.handleFindConnection(a, b, HARD_MAX_HOPS);
     },
 
     // Short, length-capped human label for an endpoint, used to build the
