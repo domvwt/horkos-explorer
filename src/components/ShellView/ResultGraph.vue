@@ -301,7 +301,6 @@
             :settings-store="settingsStore"
             @select-node="handleConnectedNodeClick"
             @add-node="handleAddConnectedNode"
-            @add-nodes="handleAddConnectedNodes"
           />
 
           <!-- External Resource Links -->
@@ -1461,6 +1460,13 @@ export default {
       };
       await this.addDataWithQueryResult(queryResult);
 
+      // Complete the edge set among EVERY node now on the canvas — not just the
+      // focus<->new-node edges above — so an edge between this new node and some
+      // other pre-existing node is drawn immediately. Runs before the diff so
+      // the among-edges fold into THIS operation's addedEdges and undo removes
+      // both together.
+      await this.completeEdgesAmongCurrentNodes();
+
       const nodesAfter = this.g6Graph.getNodeData() || [];
       const edgesAfter = this.g6Graph.getEdgeData() || [];
       const addedNodes = nodesAfter.filter(n => !nodesBefore.has(n.id));
@@ -1479,131 +1485,68 @@ export default {
     },
 
     /**
-     * Batched counterpart of handleAddConnectedNode for the panel's
-     * "add all" action: one before-snapshot, ONE batched rel fetch
-     * (fetchRelsBetweenNodeAndMany binds every entity's pk in a single query
-     * per rel type x table pairing), one data add, one after-diff, and ONE
-     * history entry — so undo removes exactly this batch, and the query count
-     * stays constant in the number of entities added.
+     * Draw every edge whose BOTH endpoints already exist on the canvas but
+     * that isn't yet drawn — the "complete-edge" pass shared by every
+     * expand/add path so growing the graph never leaves inter-node edges
+     * undrawn (the core reason the "Fully Expanded" state used to be a lie).
+     *
+     * Groups the current canvas nodes by (table, pk column), and asks the
+     * fetcher for all edges AMONG those nodes in one bounded pass
+     * (fetchRelsAmongNodes issues one query per rel-type x unordered table
+     * pairing — constant in node count). Adds only edges: the node set already
+     * exists, so addData skips the nodes and nodeIntroducedBy is untouched.
+     *
+     * Returns the edge objects it added (already on the canvas), so the caller
+     * can fold them into the triggering operation's history entry. Callers that
+     * compute their addedEdges diff AFTER awaiting this get the widened set for
+     * free.
      */
-    async handleAddConnectedNodes(entities) {
-      const valid = (entities || []).filter(e => e && e.rawNode && e.rawRel);
-      if (valid.length === 0) {
-        console.warn('Cannot add nodes: no entities with raw data');
-        return;
+    async completeEdgesAmongCurrentNodes() {
+      if (!this.g6Graph) {
+        return [];
       }
-
-      // Pin the source node NOW: the user can select another node while the
-      // batched fetch below is awaited, and the history entry must attribute
-      // the batch to the node it actually expanded.
-      const sourceNodeId = this.clickedId;
-
+      let addedEdges = [];
       try {
-        const nodesBefore = new Set((this.g6Graph.getNodeData() || []).map(n => n.id));
-        const edgesBefore = new Set((this.g6Graph.getEdgeData() || []).map(e => e.id));
+        // Group EVERY node currently on the canvas by (table, pk column) — the
+        // whole canvas, not just the focus node's fresh neighbours, is what lets
+        // the edge engine see inter-node edges the focus->neighbour fetch never
+        // asks for.
+        const others = this.groupCanvasNodesByTable();
+        if (others.length === 0) {
+          return [];
+        }
 
-        // Each entity's first raw rel is the guaranteed baseline edge (as in
-        // the single-add path); the batched fetch below fills in any further
-        // edges. Keyed by rel id so the baseline and fetched sets merge
-        // without duplicates.
-        const relsById = new Map();
-        valid.forEach(entity => {
-          if (entity.rawRel._id) {
-            relsById.set(encodeId(entity.rawRel._id), entity.rawRel);
+        const amongResult = await NeighborsFetcher.fetchRelsAmongNodes({
+          nodes: others,
+          relTables: this.schema.relTables,
+          isWasm: this.modeStore.isWasm,
+        });
+        if (!amongResult || !amongResult.rows || amongResult.rows.length === 0) {
+          return [];
+        }
+
+        const rels = [];
+        amongResult.rows.forEach(row => {
+          if (row.r && row.r._id) {
+            rels.push(row.r);
           }
         });
-
-        // Fetch all edges between the focus node and the whole batch in one
-        // batched call, mirroring how fetchAndAddPinnedEntity gathers edges.
-        try {
-          const currentNodeData = this.g6Graph.getNodeData(sourceNodeId);
-          const { tableName, primaryKeyName, primaryKeyValue } = this.getInfoForExpansion(currentNodeData);
-
-          // Group the batch by (table, pk column) so one pk list binds per table.
-          const byTable = {};
-          valid.forEach(entity => {
-            const label = entity.rawNode._label;
-            if (!label) return;
-            const pkName = this.primaryKeyNameForLabel(label);
-            const pkValue = entity.rawNode[pkName];
-            if (pkValue === undefined || pkValue === null) return;
-            if (!byTable[label]) {
-              byTable[label] = { table: label, primaryKeyName: pkName, primaryKeyValues: [] };
-            }
-            byTable[label].primaryKeyValues.push(pkValue);
-          });
-          const others = Object.values(byTable);
-
-          if (others.length > 0) {
-            const result = await NeighborsFetcher.fetchRelsBetweenNodeAndMany({
-              focusTable: tableName,
-              focusPkName: primaryKeyName,
-              focusPkValue: primaryKeyValue,
-              others,
-              relTables: this.schema.relTables,
-              isWasm: this.modeStore.isWasm,
-            });
-            if (result && result.rows) {
-              result.rows.forEach(row => {
-                if (row.r && row.r._id) {
-                  relsById.set(encodeId(row.r._id), row.r);
-                }
-              });
-            }
-
-            // Edges BETWEEN two entities added in the SAME batch are not
-            // incident to the focus node, so the focus<->many fetch above never
-            // sees them. Fetch them once here (all-pairs among the batch tables)
-            // so they render in the same data-add instead of only appearing
-            // after a later expansion. Query count stays bounded: one query per
-            // (rel type x unordered table pairing), independent of batch size.
-            const amongResult = await NeighborsFetcher.fetchRelsAmongNodes({
-              nodes: others,
-              relTables: this.schema.relTables,
-              isWasm: this.modeStore.isWasm,
-            });
-            if (amongResult && amongResult.rows) {
-              amongResult.rows.forEach(row => {
-                if (row.r && row.r._id) {
-                  relsById.set(encodeId(row.r._id), row.r);
-                }
-              });
-            }
-          }
-        } catch (e) {
-          console.warn('Failed to fetch additional edges:', e);
+        if (rels.length === 0) {
+          return [];
         }
 
-        const rawNodes = valid.map(e => e.rawNode);
-        const allRels = Array.from(relsById.values());
-        const queryResult = {
-          rows: [[...rawNodes, ...allRels]],
-          dataTypes: [...rawNodes.map(() => 'NODE'), ...allRels.map(() => 'REL')],
-        };
-        await this.addDataWithQueryResult(queryResult);
-
-        const nodesAfter = this.g6Graph.getNodeData() || [];
-        const edgesAfter = this.g6Graph.getEdgeData() || [];
-        const addedNodes = nodesAfter.filter(n => !nodesBefore.has(n.id));
-        const addedEdges = edgesAfter.filter(e => !edgesBefore.has(e.id));
-
-        // ONE history entry for the whole batch; the established
-        // 'add-connected-node' command removes exactly these nodes/edges on undo.
-        if (addedNodes.length > 0 || addedEdges.length > 0) {
-          this.historyManager.push({
-            type: 'add-connected-node',
-            data: {
-              sourceNodeId,
-              addedNodes: JSON.parse(JSON.stringify(addedNodes)),
-              addedEdges: JSON.parse(JSON.stringify(addedEdges)),
-            }
-          });
-        }
-      } finally {
-        // Tell the panel the batch is over: re-syncs each row's in-graph
-        // state and releases its expand-all control for the next batch.
-        this.$refs.connectedEntitiesPanel?.refreshInGraphStatus();
+        const edgesBefore = new Set((this.g6Graph.getEdgeData() || []).map(e => e.id));
+        // REL-only row: extractGraphFromQueryResult keys on dataTypes[column],
+        // so no NODE columns means addData adds only the (new) edges.
+        await this.addDataWithQueryResult({
+          rows: [rels],
+          dataTypes: rels.map(() => 'REL'),
+        });
+        addedEdges = (this.g6Graph.getEdgeData() || []).filter(e => !edgesBefore.has(e.id));
+      } catch (e) {
+        console.warn('Failed to complete edges among current nodes:', e);
       }
+      return addedEdges;
     },
 
     togglePropertyExpansion(index) {
@@ -1810,7 +1753,13 @@ export default {
       const nodesBefore = new Set((this.g6Graph.getNodeData() || []).map(n => n.id));
       const edgesBefore = new Set((this.g6Graph.getEdgeData() || []).map(e => e.id));
 
-      this.addDataWithQueryResult(neighbors);
+      await this.addDataWithQueryResult(neighbors);
+
+      // Draw edges among ALL current nodes, not just focus->neighbour, so a
+      // newly-added leaf that also connects to another on-canvas node gets that
+      // edge immediately. Runs before the diff so those edges fold into this
+      // expand's addedEdges and undo removes them with the expansion.
+      await this.completeEdgesAmongCurrentNodes();
 
       // Capture added nodes/edges AFTER adding
       const nodesAfter = this.g6Graph.getNodeData() || [];
@@ -1959,8 +1908,8 @@ export default {
       const allNodeIntroducedByEntries = {};
 
       // Add normal nodes only
-      nodesToExpand.forEach(({ nodeId, neighbors }) => {
-        this.addDataWithQueryResult(neighbors);
+      for (const { nodeId, neighbors } of nodesToExpand) {
+        await this.addDataWithQueryResult(neighbors);
         const expansionEntry = { id: nodeId, neighbors };
         this.expansions.push(expansionEntry);
         allExpansionEntries.push(expansionEntry);
@@ -1975,7 +1924,14 @@ export default {
             }
           }
         });
-      });
+      }
+
+      // Complete edges among ALL nodes now on the canvas — the per-node
+      // fetchNeighbors above only draws focus->neighbour edges, so edges
+      // BETWEEN the newly-added leaves (or to other pre-existing nodes) would
+      // otherwise stay undrawn even once every node reports as expanded. Runs
+      // before the diff so those edges fold into this expansion's addedEdges.
+      await this.completeEdgesAmongCurrentNodes();
 
       // Capture added nodes/edges AFTER adding for undo
       const nodesAfter = this.g6Graph.getNodeData() || [];
