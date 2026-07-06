@@ -27,6 +27,12 @@ if (!isWasmMode) {
     if (!isSessionDisabled) {
         const session = require("./Session");
         router.use("/session", apiLimiter, session);
+    } else {
+        // Session storage disabled: answer every /session request with a JSON
+        // 404 (rationale in SessionDisabledRouter.js; pinned by
+        // SessionDisabled.test.js).
+        const { createSessionDisabledRouter } = require("./SessionDisabledRouter");
+        router.use("/session", apiLimiter, createSessionDisabledRouter());
     }
 
     router.use("/", apiLimiter, state);

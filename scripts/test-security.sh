@@ -1,18 +1,66 @@
 #!/bin/bash
 
 # Security Testing Script for Horkos Explorer
-# Tests query validation, rate limiting, and session storage security features
+# Tests query validation, rate limiting, session storage, and DoS-bound guards.
 #
-# Required server env for the per-IP row-budget section (test_row_budget):
-#   - Start the server with a TINY QUERY_ROW_BUDGET so a couple of paginated
-#     queries exhaust it, e.g. QUERY_ROW_BUDGET=5 (default is 100000 — far too
-#     large to trip in a test run). Keep the default 24h window
-#     (QUERY_ROW_BUDGET_WINDOW_MS) so the budget does not reset mid-test.
-#   - Relax the query rate limit so the ROW BUDGET (not the request rate limit)
-#     is what trips: QUERY_RATE_LIMIT_MAX_REQUESTS well above the number of
-#     paginated requests the section sends (e.g. 100). Otherwise a
-#     QUERY_RATE_LIMIT_EXCEEDED 429 could fire first and mask the row-budget 429.
-#   - Use a database with at least a few Person rows so each query ships >0 rows.
+# ── HOW TO RUN (single invocation, greens every section) ─────────────────────
+#
+# 1. Start the PRODUCTION API server (node src/server/index.js), NOT the webpack
+#    dev server. This suite exercises the full security middleware stack, and
+#    ONLY the production server (index.js) mounts it:
+#      - helmet security headers   (test_security_headers)
+#      - trust-proxy / right-most XFF resolution  (per-section rate-limit keys,
+#        test_xff_spoofing, and the per-IP row budget ALL depend on this)
+#    The dev server (Configure.js, via `npm run serve`) mounts none of these, so
+#    it ignores X-Forwarded-For entirely — every request collapses onto one
+#    socket-IP key and the sections cascade. The production server's default
+#    unmatched-/api 404 is text/html, so the /api/session/* JSON-404 handler
+#    (added under DISABLE_SESSION_DB=true) is what keeps that section green here
+#    too. Start it with:
+#
+#      MODE=READ_ONLY \
+#      DISABLE_SESSION_DB=true \
+#      QUERY_RATE_LIMIT_MAX_REQUESTS=30 \
+#      QUERY_ROW_BUDGET=50 \
+#      PORT=8080 \
+#      KUZU_DIR=/path/to/dir KUZU_FILE=<dev graph>.kuzu \
+#      node src/server/index.js
+#
+#    (Do NOT set NODE_ENV=development: it relaxes the default rate limits and
+#     the default row budget. The explicit env values above are what the
+#     sections below assert against.)
+#
+# 2. Once it is listening on http://localhost:8080, run:  npm run test-security
+#
+# Why these env values (one invocation is enough — no second profile needed):
+#   - QUERY_RATE_LIMIT_MAX_REQUESTS=30: test_rate_limiting must TRIP the query
+#     rate limit within the 35 requests it sends, and test_xff_spoofing only
+#     RUNS when the effective limit is <= 60 (otherwise it SKIPs). 30 satisfies
+#     both, and the ~28 requests test_query_validation sends on its own isolated
+#     key stay under it, leaving that section headroom.
+#   - QUERY_ROW_BUDGET=50: chosen to straddle two needs on DIFFERENT keys.
+#     test_query_validation's legitimate allowed queries ship ~16 rows total on
+#     its key (203.0.113.20), so a budget of 50 lets them all through; meanwhile
+#     test_row_budget ships 5 rows per paginated request on its own key
+#     (198.51.100.7), so 50/5 = 10 full pages and request 11 trips the budget —
+#     well within the 40 requests it sends — and the ROW_BUDGET 429 fires before
+#     the rate limit. Keep the default 24h window so the budget does not reset
+#     mid-run. (A budget of 5 would be too small: it would 429 the query-
+#     validation section's own legitimate reads.)
+#   - The dev graph needs a few thousand Person rows so pagination ships >0 rows.
+#   - RESTART the server before re-running the suite: limiter and row-budget
+#     state is in-process and the budget window is 24h, so leftover per-key
+#     debits (e.g. the 10000-row cartesian in test_resource_guards) turn a
+#     repeat run against the same process red.
+#
+# Cross-section isolation: every section that ships rows or trips a limiter sends
+# its OWN X-Forwarded-For. With trust-proxy=1 (production default) Express uses
+# the right-most XFF entry as req.ip => the per-IP rate-limit / row-budget key.
+# Distinct keys mean one section's request volume can never cascade-fail a later
+# section with 429s. Keys in use:
+#   test_query_validation -> 203.0.113.20     test_rate_limiting -> 203.0.113.30
+#   test_row_budget       -> 198.51.100.7/.8  test_xff_spoofing  -> 10.0.0.1 (right-most)
+#   test_resource_guards  -> 203.0.113.40
 
 set -e
 
@@ -70,8 +118,8 @@ check_server() {
         fi
     else
         print_fail "Server is not responding at $SERVER_URL"
-        echo -e "\nPlease start the server with:"
-        echo -e "  npm run serve\n"
+        echo -e "\nPlease start the production server (node src/server/index.js) with the"
+        echo -e "env recipe in the HOW TO RUN header of scripts/test-security.sh\n"
         exit 1
     fi
 }
@@ -80,10 +128,18 @@ check_server() {
 test_query_validation() {
     print_header "Testing Query Validation"
 
+    # Per-section rate-limit key. Every /api/cypher request in this section sends
+    # this X-Forwarded-For so they all share ONE query-rate-limit bucket that no
+    # other section touches. Without isolation, this section's ~30 requests plus
+    # the rate-limit section's burst pile onto the same socket-IP bucket and
+    # later sections cascade-fail with 429s. TEST-NET-3 (RFC 5737) is unroutable.
+    local SECTION_XFF="203.0.113.20"
+
     # Test 1: Block CREATE statement
     print_test "Block CREATE statement"
     response=$(curl -s -X POST "$SERVER_URL/api/cypher" \
         -H "Content-Type: application/json" \
+        -H "X-Forwarded-For: ${SECTION_XFF}" \
         -d '{"query": "CREATE (n:Test {name: \"malicious\"}) RETURN n"}')
 
     if echo "$response" | jq -e '.code == "QUERY_VALIDATION_FAILED"' > /dev/null 2>&1; then
@@ -97,6 +153,7 @@ test_query_validation() {
     print_test "Block DROP statement"
     response=$(curl -s -X POST "$SERVER_URL/api/cypher" \
         -H "Content-Type: application/json" \
+        -H "X-Forwarded-For: ${SECTION_XFF}" \
         -d '{"query": "DROP TABLE users"}')
 
     if echo "$response" | jq -e '.code == "QUERY_VALIDATION_FAILED"' > /dev/null 2>&1; then
@@ -109,6 +166,7 @@ test_query_validation() {
     print_test "Block DELETE statement"
     response=$(curl -s -X POST "$SERVER_URL/api/cypher" \
         -H "Content-Type: application/json" \
+        -H "X-Forwarded-For: ${SECTION_XFF}" \
         -d '{"query": "MATCH (n) DELETE n"}')
 
     if echo "$response" | jq -e '.code == "QUERY_VALIDATION_FAILED"' > /dev/null 2>&1; then
@@ -121,6 +179,7 @@ test_query_validation() {
     print_test "Block multi-statement query with DROP"
     response=$(curl -s -X POST "$SERVER_URL/api/cypher" \
         -H "Content-Type: application/json" \
+        -H "X-Forwarded-For: ${SECTION_XFF}" \
         -d '{"query": "MATCH (n) RETURN n LIMIT 1; DROP TABLE users;"}')
 
     if echo "$response" | jq -e '.code == "QUERY_VALIDATION_FAILED" and (.error | contains("Statement 2"))' > /dev/null 2>&1; then
@@ -133,6 +192,7 @@ test_query_validation() {
     print_test "Block comment bypass with /* */"
     response=$(curl -s -X POST "$SERVER_URL/api/cypher" \
         -H "Content-Type: application/json" \
+        -H "X-Forwarded-For: ${SECTION_XFF}" \
         -d '{"query": "/* comment */ CREATE (n:Test) RETURN n"}')
 
     if echo "$response" | jq -e '.code == "QUERY_VALIDATION_FAILED"' > /dev/null 2>&1; then
@@ -145,6 +205,7 @@ test_query_validation() {
     print_test "Allow legitimate MATCH query"
     response=$(curl -s -X POST "$SERVER_URL/api/cypher" \
         -H "Content-Type: application/json" \
+        -H "X-Forwarded-For: ${SECTION_XFF}" \
         -d '{"query": "MATCH (n:Person) RETURN n.name LIMIT 1"}')
 
     if echo "$response" | jq -e '.rows' > /dev/null 2>&1; then
@@ -162,7 +223,9 @@ test_query_validation() {
     # BLOCKED = validator returns code QUERY_VALIDATION_FAILED (query not executed).
     # ALLOWED = query executes and the response contains rows.
 
-    # Helper: assert a query is BLOCKED by the validator.
+    # Helper: assert a query is BLOCKED by the validator. Carries this section's
+    # X-Forwarded-For so all validation requests share ONE rate-limit key that no
+    # other section touches (see SECTION_XFF at the top of this function).
     assert_blocked() {
         local label="$1"
         local query="$2"
@@ -170,6 +233,7 @@ test_query_validation() {
         local response
         response=$(curl -s -X POST "$SERVER_URL/api/cypher" \
             -H "Content-Type: application/json" \
+            -H "X-Forwarded-For: ${SECTION_XFF}" \
             -d "$(jq -n --arg q "$query" '{query: $q}')")
         if echo "$response" | jq -e '.code == "QUERY_VALIDATION_FAILED"' > /dev/null 2>&1; then
             print_pass "$label blocked"
@@ -179,7 +243,8 @@ test_query_validation() {
         fi
     }
 
-    # Helper: assert a query is ALLOWED (executes, returns rows).
+    # Helper: assert a query is ALLOWED (executes, returns rows). Carries this
+    # section's X-Forwarded-For for the same rate-limit isolation as assert_blocked.
     assert_allowed() {
         local label="$1"
         local query="$2"
@@ -187,6 +252,7 @@ test_query_validation() {
         local response
         response=$(curl -s -X POST "$SERVER_URL/api/cypher" \
             -H "Content-Type: application/json" \
+            -H "X-Forwarded-For: ${SECTION_XFF}" \
             -d "$(jq -n --arg q "$query" '{query: $q}')")
         if echo "$response" | jq -e '.rows' > /dev/null 2>&1; then
             print_pass "$label allowed"
@@ -254,10 +320,20 @@ test_query_validation() {
         "MATCH (n) RETURN n LIMIT 1 // just a note"
     assert_allowed "legitimate inline block comment between tokens" \
         "MATCH (n) /* mid */ RETURN n LIMIT 1"
-    # A '//'/'*/' sequence INSIDE a string literal must be preserved, not
-    # treated as a comment.
+    # A comment-like sequence INSIDE a string literal must be preserved, not
+    # treated as a comment. The comment stripper (QueryValidator.stripComments)
+    # is string-aware: it tracks quoted-string and backtick-identifier state, so
+    # the '/*y*/' inside this string literal is NOT stripped and the query is
+    # correctly ALLOWED. (This is the string-awareness that makes the assertion
+    # pass; do NOT change the stripper's string handling without an adversarial
+    # test pass — a lone apostrophe inside a backtick identifier once defeated
+    # the paren-nesting DoS guard, so its scanners are security-sensitive.)
+    #
+    # We RETURN the literal directly (rather than filter on a node property) so
+    # the query is schema-independent and executes on any graph, and so the
+    # returned row PROVES the '/*y*/' bytes survived comment-stripping intact.
     assert_allowed "comment-like sequence inside a string literal" \
-        "MATCH (n) WHERE n.url = 'http://x/*y*/' RETURN n LIMIT 1"
+        "RETURN 'http://x/*y*/' AS url"
 
     # Parse-DoS guard: a deeply nested-parenthesis payload (~1KB) must be
     # REJECTED QUICKLY by the O(n) nesting-depth guard, so the expensive ANTLR
@@ -272,6 +348,7 @@ test_query_validation() {
     start_ms=$(date +%s%3N)
     dos_response=$(curl -s -X POST "$SERVER_URL/api/cypher" \
         -H "Content-Type: application/json" \
+        -H "X-Forwarded-For: ${SECTION_XFF}" \
         -d "$dos_payload")
     end_ms=$(date +%s%3N)
     elapsed_ms=$((end_ms - start_ms))
@@ -299,9 +376,16 @@ test_rate_limiting() {
     local limit_hit=false
     local requests_sent=0
 
+    # Per-section rate-limit key: this section deliberately trips the query rate
+    # limit, so it must run on a bucket no other section has touched (otherwise
+    # leftover requests from an earlier section would make it trip early — or
+    # exhaust the bucket for a later section). TEST-NET-3 (RFC 5737), unroutable.
+    local SECTION_XFF="203.0.113.30"
+
     for i in {1..35}; do
         response=$(curl -s -X POST "$SERVER_URL/api/cypher" \
             -H "Content-Type: application/json" \
+            -H "X-Forwarded-For: ${SECTION_XFF}" \
             -d '{"query": "MATCH (n:Person) RETURN count(n)"}')
 
         requests_sent=$i
@@ -330,8 +414,9 @@ test_rate_limiting() {
 # out across requests. RowBudget.js debits the rows actually shipped per IP and
 # rejects once the QUERY_ROW_BUDGET window is exhausted.
 #
-# REQUIRES the server to be started with a tiny QUERY_ROW_BUDGET and a relaxed
-# query rate limit — see the env notes in this script's header. Each request
+# REQUIRES the server to be started with a tiny QUERY_ROW_BUDGET — see the env
+# notes in this script's header (the budget trips well inside the 30/min query
+# rate limit, so no rate-limit relaxation is needed). Each request
 # below carries a fixed X-Forwarded-For so it maps to one budget key; a DIFFERENT
 # X-Forwarded-For is a different key with a fresh budget (proves per-IP scoping
 # and that the trusted right-most XFF is the key, not spoofable left entries).
@@ -390,30 +475,44 @@ test_row_budget() {
 test_session_storage() {
     print_header "Testing Session Storage (should be disabled)"
 
-    # Test 1: Check session history endpoint returns empty
-    print_test "Session history endpoint returns empty"
-    response=$(curl -s "$SERVER_URL/api/session/history")
+    # With DISABLE_SESSION_DB=true the /api/session/* routes are not backed by
+    # the SQLite session store. The server mounts a stub that answers every
+    # session request with a JSON 404 ({ "error": ... }) instead of letting the
+    # request fall past the static handler to Express's default HTML 404 page
+    # ("Cannot GET ..."). The frontend is localStorage-only in this mode and
+    # already tolerates a failed session call (MainLayout.vue / ShellMainView.vue
+    # catch and fall back), so a JSON 404 is safe. We assert the machine-readable
+    # JSON 404 here and, critically, that the response is NOT HTML.
 
-    if [ "$response" = "[]" ] || [ "$response" = "{}" ]; then
-        print_pass "Session history is empty/disabled"
-    else
-        print_fail "Session history returned unexpected data: $response"
-    fi
+    # Helper: assert a session endpoint returns a JSON 404, not HTML.
+    assert_session_json_404() {
+        local label="$1"
+        local method="$2"
+        local path="$3"
+        print_test "$label returns JSON 404 (not the HTML page)"
+        local body code
+        body=$(curl -s -w "\n%{http_code}" -X "$method" "$SERVER_URL$path")
+        code=$(echo "$body" | tail -n1)
+        body=$(echo "$body" | sed '$d')
+        if [ "$code" != "404" ]; then
+            print_fail "$label returned HTTP $code (expected 404). Body: $body"
+            return
+        fi
+        # Must be a JSON object carrying an error key — a fallthrough would
+        # return Express's HTML 404 page, which is not valid JSON.
+        if echo "$body" | jq -e '.error' > /dev/null 2>&1; then
+            print_pass "$label -> 404 with JSON error body (session disabled)"
+        else
+            print_fail "$label returned non-JSON body (HTML fallthrough?): $body"
+        fi
+    }
 
-    # Test 2: Check session settings endpoint returns empty
-    print_test "Session settings endpoint returns empty"
-    response=$(curl -s "$SERVER_URL/api/session/settings")
-
-    if [ "$response" = "{}" ] || [ "$response" = "[]" ]; then
-        print_pass "Session settings is empty/disabled"
-    else
-        print_fail "Session settings returned unexpected data: $response"
-    fi
-
-    # Test 3: Verify DISABLE_SESSION_DB message in logs
-    print_test "Check for session disabled message in server logs"
-    print_info "Note: This requires checking server startup logs manually"
-    print_info "Expected: 'Server-side session storage is disabled (DISABLE_SESSION_DB=true)'"
+    assert_session_json_404 "Session history endpoint" "GET" "/api/session/history"
+    assert_session_json_404 "Session settings endpoint" "GET" "/api/session/settings"
+    # Writes and subpaths are stubbed for every method too, so a probe cannot
+    # mutate server-side state or slip through on a non-GET verb.
+    assert_session_json_404 "Session settings write" "POST" "/api/session/settings"
+    assert_session_json_404 "Session history delete" "DELETE" "/api/session/history/probe-uuid"
 }
 
 # Test Access Mode
@@ -509,7 +608,7 @@ print_summary() {
 # This test establishes its OWN fresh per-IP rate-limit bucket: because every
 # request carries "X-Forwarded-For: <spoofed>, 10.0.0.1", with 1 trusted hop the
 # limiter keys on the right-most 10.0.0.1 -- a DIFFERENT key from test_rate_limiting
-# (which sends no XFF and keys on the socket IP 127.0.0.1). It therefore does NOT
+# (which keys on its own XFF, 203.0.113.30). It therefore does NOT
 # share or depend on any prior test's budget and must send enough requests to
 # exceed the limit on the 10.0.0.1 key on its own. Do not shrink the loop below
 # the effective limit or the test will never trip.
@@ -659,6 +758,13 @@ test_security_headers() {
 test_resource_guards() {
     print_header "Testing Resource Guards (DoS bounds — TASK-105)"
 
+    # Per-section rate-limit key so the nested-DoS and cartesian probes below run
+    # on a query-rate-limit bucket and row-budget key no other section touches.
+    # (The oversized-body probe does not strictly need it — express.json 413s at
+    # app level, before the router's limiters — but sends it for uniformity.)
+    # TEST-NET-3 (RFC 5737), unroutable.
+    local SECTION_XFF="203.0.113.40"
+
     # 1. Validator nesting-depth cap: a deeply-nested-paren query must be
     #    REJECTED by the O(n) depth check BEFORE the expensive ANTLR parse,
     #    so it returns fast (a bare ANTLR parse of depth 300+ freezes the
@@ -669,6 +775,7 @@ test_resource_guards() {
     start=$(date +%s%3N)
     body=$(curl -s -X POST "$SERVER_URL/api/cypher" \
         -H "Content-Type: application/json" \
+        -H "X-Forwarded-For: ${SECTION_XFF}" \
         --data-binary "$(jq -nc --arg q "$nested" '{query:$q}')")
     end=$(date +%s%3N)
     elapsed_ms=$((end - start))
@@ -684,20 +791,41 @@ test_resource_guards() {
     local rows
     rows=$(curl -s -X POST "$SERVER_URL/api/cypher" \
         -H "Content-Type: application/json" \
+        -H "X-Forwarded-For: ${SECTION_XFF}" \
         --data-binary '{"query":"MATCH (a),(b) RETURN a.id, b.id"}' | jq -r '.rows | length' 2>/dev/null)
-    if [ -n "$rows" ] && [ "$rows" != "null" ] && [ "$rows" -le 10000 ]; then
+    # rows must be >0 as well as <=10000: a 429 (e.g. a leftover row-budget debit
+    # from a previous run against the same process) has no .rows, and jq maps
+    # that to 0 — without the lower bound the cap check would pass vacuously.
+    if [ -n "$rows" ] && [ "$rows" != "null" ] && [ "$rows" -gt 0 ] && [ "$rows" -le 10000 ]; then
         print_pass "Result capped at ${rows} rows (<= 10000)"
     else
-        print_fail "Result-size cap not enforced (rows=$rows)"
+        print_fail "Result-size cap not verified (rows=$rows; expected 1..10000)"
     fi
 
-    # 3. JSON body-size limit: a body over JSON_BODY_LIMIT (default 1mb) must
-    #    be rejected with 413 before the handler runs.
+    # 3. JSON body-size limit: a ~2MB body (comfortably over the default 1mb
+    #    JSON_BODY_LIMIT) must be rejected with 413 by the app-level express.json,
+    #    which short-circuits on the byte limit before the router — i.e. ahead of
+    #    the validator, the query rate limiter, and the row budget. The oversized
+    #    bytes live inside the JSON string value (a Cypher line comment), keeping
+    #    the payload valid JSON that only trips the size cap.
+    #
+    #    IMPORTANT: the payload is streamed into curl via a pipe, NOT built as a
+    #    shell argument. A ~2MB string passed as an argv value (e.g. jq --arg q
+    #    "<2MB>") overflows ARG_MAX and jq/curl silently receive a truncated or
+    #    empty body — the server then answers 403/empty-body, masking the 413.
+    #    Building the JSON with printf|tr keeps it off the command line entirely.
     print_test "Oversized JSON body rejected (413)"
+    # `|| true`: if the server resets the connection while curl is still mid-
+    # upload of the 2MB body (a 413 race), curl exits 55/56; -w has usually
+    # already captured the status by then, but without the guard `set -e` would
+    # abort the entire suite on that flake instead of failing this one test.
     local bigcode
-    bigcode=$(jq -nc --arg q "MATCH (n) RETURN n //$(printf 'A%.0s' $(seq 1 1200000))" '{query:$q}' \
+    bigcode=$( { printf '{"query":"MATCH (n) RETURN n //'; \
+                 head -c 2000000 /dev/zero | tr '\0' 'A'; \
+                 printf '"}'; } \
         | curl -s -o /dev/null -w "%{http_code}" -X POST "$SERVER_URL/api/cypher" \
-            -H "Content-Type: application/json" --data-binary @-)
+            -H "Content-Type: application/json" \
+            -H "X-Forwarded-For: ${SECTION_XFF}" --data-binary @-) || true
     if [ "$bigcode" = "413" ]; then
         print_pass "Oversized body rejected with HTTP 413"
     else
