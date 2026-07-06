@@ -5,18 +5,6 @@
   >
     <div class="entity-pin__header">
       <h6>Notebook</h6>
-      <button
-        class="btn btn-sm"
-        :class="pinned ? 'btn-warning' : 'btn-outline-secondary'"
-        :title="pinned ? 'Unpin this entity' : 'Pin this entity to your notebook'"
-        @click="togglePin"
-      >
-        <i
-          class="fa-star"
-          :class="pinned ? 'fa-solid' : 'fa-regular'"
-        />
-        {{ pinned ? 'Pinned' : 'Pin' }}
-      </button>
     </div>
 
     <div class="entity-pin__note">
@@ -95,9 +83,6 @@ export default {
       }
       return this.pk;
     },
-    pinned() {
-      return this.notebookStore.isPinned(this.entityType, this.pk);
-    },
     savedNote() {
       return this.notebookStore.noteFor(this.entityType, this.pk);
     },
@@ -124,10 +109,6 @@ export default {
     this.flushDraft();
   },
   methods: {
-    togglePin() {
-      if (!this.pk) return;
-      this.notebookStore.togglePin(this.entityType, this.pk, this.displayName);
-    },
     // Commit the current draft to the entity it was typed against.
     flushDraft() {
       const { entityType, pk } = this.draftEntity;
