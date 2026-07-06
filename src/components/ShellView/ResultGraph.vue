@@ -2932,6 +2932,14 @@ export default {
       };
       await this.addDataWithQueryResult(queryResult);
 
+      // Open the overview panel the first time a searched entity lands on the canvas
+      if (!this.isSidePanelOpen) {
+        this.$emit('requestSidebarToggle');
+        this.$nextTick(() => {
+          this.handleResize();
+        });
+      }
+
       const addedG6Id = encodeId(rawNode._id);
       const nodesAfter = this.g6Graph ? (this.g6Graph.getNodeData() || []) : [];
       const edgesAfter = this.g6Graph ? (this.g6Graph.getEdgeData() || []) : [];
