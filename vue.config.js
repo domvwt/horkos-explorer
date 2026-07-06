@@ -45,7 +45,7 @@ module.exports = defineConfig({
   pages: {
     index: {
       entry: "src/main.js",
-      title: "Kuzu Explorer",
+      title: "Horkos Explorer",
     },
   },
   css: {
