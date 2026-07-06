@@ -28,6 +28,56 @@
  *                   ResultGraph already shows its own toast for this.
  */
 
+/** Placeholder / fallback name for a notebook created with a blank input. */
+export const DEFAULT_NOTEBOOK_NAME = "Untitled notebook";
+
+/** Idle time (ms) after which a two-stage danger confirm reverts itself. */
+export const CONFIRM_AUTO_REVERT_MS = 5000;
+
+/**
+ * Decide what a "create notebook" inline input should do when its edit ends.
+ *
+ * Create semantics (design): committing new content is Enter-only; Esc and blur
+ * CANCEL — a blur must never accidentally create a notebook the user was only
+ * hovering over. An empty/whitespace input still COMMITS on Enter, falling back
+ * to the default name (the user asked for a notebook, just didn't name it).
+ *
+ * `trigger` is "enter" | "escape" | "blur". Returns:
+ *   - { commit: true, name }  create with this (trimmed, or default) name;
+ *   - { commit: false }       cancel — no notebook created.
+ */
+export function decideCreateCommit(draft, trigger) {
+  if (trigger !== "enter") {
+    return { commit: false };
+  }
+  const trimmed = typeof draft === "string" ? draft.trim() : "";
+  return { commit: true, name: trimmed || DEFAULT_NOTEBOOK_NAME };
+}
+
+/**
+ * Decide what a "rename notebook" inline input should do when its edit ends.
+ *
+ * Rename semantics (design): editing EXISTING content commits on Enter AND on
+ * blur (consistent with the note/page draft), and cancels on Esc. The store's
+ * renameNotebook already guards empty/whitespace, so a blank commit is a no-op
+ * there rather than an error here; we still surface commit:true so the caller
+ * simply closes the editor (and the store drops the empty rename).
+ *
+ * `trigger` is "enter" | "escape" | "blur". Returns:
+ *   - { commit: true, name }  rename to this (trimmed) name (store guards empty);
+ *   - { commit: false }       cancel — keep the current name.
+ */
+export function decideRenameCommit(draft, trigger) {
+  if (trigger === "escape") {
+    return { commit: false };
+  }
+  if (trigger === "enter" || trigger === "blur") {
+    const trimmed = typeof draft === "string" ? draft.trim() : "";
+    return { commit: true, name: trimmed };
+  }
+  return { commit: false };
+}
+
 /**
  * Commit a page draft to the store iff it differs from the stored page. Returns
  * true when a write happened. Used both on textarea blur and on unmount flush,

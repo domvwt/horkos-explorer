@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  DEFAULT_NOTEBOOK_NAME,
+  decideCreateCommit,
+  decideRenameCommit,
   commitPageDraft,
   saveViewThroughCell,
   restoreViewThroughCell,
@@ -53,6 +56,82 @@ function mockGraph({ empty = false, savedViews = [] } = {}) {
     },
   };
 }
+
+describe("decideCreateCommit (inline new-notebook input)", () => {
+  it("commits the trimmed name on Enter", () => {
+    expect(decideCreateCommit("  Acme research  ", "enter")).toEqual({
+      commit: true,
+      name: "Acme research",
+    });
+  });
+
+  it("commits the default name when Enter is pressed on an empty input", () => {
+    expect(decideCreateCommit("", "enter")).toEqual({
+      commit: true,
+      name: DEFAULT_NOTEBOOK_NAME,
+    });
+    expect(decideCreateCommit("   ", "enter")).toEqual({
+      commit: true,
+      name: DEFAULT_NOTEBOOK_NAME,
+    });
+  });
+
+  it("cancels on Esc (no create) even with text typed", () => {
+    expect(decideCreateCommit("Half-typed name", "escape")).toEqual({
+      commit: false,
+    });
+  });
+
+  it("cancels on blur (a blur must never accidentally create)", () => {
+    expect(decideCreateCommit("Acme research", "blur")).toEqual({
+      commit: false,
+    });
+    expect(decideCreateCommit("", "blur")).toEqual({ commit: false });
+  });
+
+  it("coerces a non-string draft to the default name on Enter", () => {
+    expect(decideCreateCommit(undefined, "enter")).toEqual({
+      commit: true,
+      name: DEFAULT_NOTEBOOK_NAME,
+    });
+  });
+});
+
+describe("decideRenameCommit (inline rename input)", () => {
+  it("commits the trimmed name on Enter", () => {
+    expect(decideRenameCommit("  New name  ", "enter")).toEqual({
+      commit: true,
+      name: "New name",
+    });
+  });
+
+  it("commits on blur (editing existing content commits, like the note draft)", () => {
+    expect(decideRenameCommit("New name", "blur")).toEqual({
+      commit: true,
+      name: "New name",
+    });
+  });
+
+  it("commits an empty name (the store guards empty; caller just closes)", () => {
+    expect(decideRenameCommit("   ", "enter")).toEqual({
+      commit: true,
+      name: "",
+    });
+  });
+
+  it("cancels on Esc (keep the current name)", () => {
+    expect(decideRenameCommit("New name", "escape")).toEqual({
+      commit: false,
+    });
+  });
+
+  it("coerces a non-string draft to empty on commit", () => {
+    expect(decideRenameCommit(undefined, "blur")).toEqual({
+      commit: true,
+      name: "",
+    });
+  });
+});
 
 describe("commitPageDraft (blur-commit draft pattern)", () => {
   it("writes the draft when it differs from the stored page", () => {

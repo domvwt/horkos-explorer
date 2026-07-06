@@ -46,6 +46,34 @@
       <div class="notebook-sidebar__scroll">
         <!-- Notebook switcher -->
         <div class="notebook-sidebar__section">
+          <!-- Active notebook name + inline rename affordance. When renaming,
+               the name swaps to an input pre-filled with the current name;
+               Enter/blur commit, Esc cancels. -->
+          <div class="notebook-sidebar__name-row">
+            <input
+              v-if="renaming"
+              ref="renameInput"
+              v-model="renameDraft"
+              type="text"
+              class="form-control form-control-sm"
+              :placeholder="activeName"
+              @keyup.enter="finishRename('enter')"
+              @keyup.esc="finishRename('escape')"
+              @blur="finishRename('blur')"
+            >
+            <template v-else>
+              <span class="notebook-sidebar__active-name">{{ activeName }}</span>
+              <button
+                ref="renameBtn"
+                class="notebook-sidebar__icon-btn"
+                title="Rename this notebook"
+                @click="startRename"
+              >
+                <i class="fa-solid fa-pen" />
+              </button>
+            </template>
+          </div>
+
           <div class="notebook-sidebar__switcher-row">
             <select
               class="form-select form-select-sm"
@@ -62,25 +90,64 @@
               </option>
             </select>
           </div>
+
+          <!-- Create: the "New" button swaps in place to an inline input.
+               Enter commits (empty commits the default name); Esc/blur cancel
+               (blur must never accidentally create). -->
           <div class="notebook-sidebar__switcher-actions">
+            <input
+              v-if="creating"
+              ref="createInput"
+              v-model="createDraft"
+              type="text"
+              class="form-control form-control-sm"
+              placeholder="Untitled notebook"
+              @keyup.enter="finishCreate('enter')"
+              @keyup.esc="finishCreate('escape')"
+              @blur="finishCreate('blur')"
+            >
             <button
+              v-else
+              ref="newBtn"
               class="btn btn-sm btn-outline-secondary"
               title="Create a new notebook"
-              @click="onNewNotebook"
+              @click="startCreate"
             >
               <i class="fa-solid fa-plus" /> New
             </button>
+
+            <!-- Delete: two-stage inline danger confirm (no modal). The button
+                 swaps in place to a danger-styled pair that auto-reverts after
+                 a few idle seconds. -->
+            <template v-if="confirmingDelete">
+              <div class="notebook-sidebar__confirm">
+                <span class="notebook-sidebar__confirm-msg">
+                  Delete “{{ activeName }}”? Pins, notes and saved views in it
+                  will be lost.
+                </span>
+                <div class="notebook-sidebar__confirm-actions">
+                  <button
+                    ref="deleteConfirmBtn"
+                    class="btn btn-sm btn-danger"
+                    @click="confirmDelete"
+                  >
+                    Delete
+                  </button>
+                  <button
+                    class="btn btn-sm btn-outline-secondary"
+                    @click="cancelDelete"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </template>
             <button
-              class="btn btn-sm btn-outline-secondary"
-              title="Rename this notebook"
-              @click="onRenameNotebook"
-            >
-              <i class="fa-solid fa-pen" /> Rename
-            </button>
-            <button
+              v-else
+              ref="deleteBtn"
               class="btn btn-sm btn-outline-secondary"
               title="Delete this notebook"
-              @click="onDeleteNotebook"
+              @click="startDelete"
             >
               <i class="fa-solid fa-trash" /> Delete
             </button>
@@ -318,12 +385,38 @@
           </p>
         </div>
 
-        <!-- Wipe everything -->
+        <!-- Wipe everything: two-stage inline danger confirm (no modal),
+             auto-reverting after a few idle seconds. -->
         <div class="notebook-sidebar__section">
+          <template v-if="confirmingWipe">
+            <div class="notebook-sidebar__confirm">
+              <span class="notebook-sidebar__confirm-msg">
+                Wipe everything? All notebooks will be erased from this browser —
+                pins, notes and saved views included.
+              </span>
+              <div class="notebook-sidebar__confirm-actions">
+                <button
+                  ref="wipeConfirmBtn"
+                  class="btn btn-sm btn-danger"
+                  @click="confirmWipe"
+                >
+                  Wipe everything
+                </button>
+                <button
+                  class="btn btn-sm btn-outline-secondary"
+                  @click="cancelWipe"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </template>
           <button
+            v-else
+            ref="wipeBtn"
             class="btn btn-sm btn-outline-danger w-100"
             title="Delete every notebook and start fresh"
-            @click="onWipeAll"
+            @click="startWipe"
           >
             <i class="fa-solid fa-eraser" />
             Wipe everything
@@ -347,16 +440,27 @@
 <script>
 import { mapStores } from "pinia";
 import { useNotebookStore } from "../store/NotebookStore";
-import { commitPageDraft } from "../utils/NotebookSidebarLogic";
+import {
+  commitPageDraft,
+  decideCreateCommit,
+  decideRenameCommit,
+  CONFIRM_AUTO_REVERT_MS,
+} from "../utils/NotebookSidebarLogic";
 
 const SIDEBAR_STATE_KEY = "notebookSidebarExpanded";
 const NOTE_PREVIEW_LENGTH = 60;
 
 /**
  * Left-docked, always-present, collapsible notebook rail owned by the app
- * shell (MainLayout). Collapsed it is a narrow icon rail with a pin-count
- * badge; expanded it shows the active notebook's page, pins, noted-but-unpinned
+ * shell (MainLayout). Collapsed it is a narrow icon rail (no counter badge);
+ * expanded it shows the active notebook's page, pins, noted-but-unpinned
  * entities, saved views, per-notebook backup and a wipe-everything action.
+ *
+ * Notebook naming and the destructive actions never use native browser
+ * dialogs: create/rename swap in place to an inline input, and delete /
+ * wipe-everything use a two-stage in-place danger confirm that auto-reverts
+ * after a few idle seconds. The commit/cancel decision logic lives in
+ * NotebookSidebarLogic so it lands under vitest.
  *
  * The sidebar reads/writes the client-side NotebookStore directly, but graph
  * actions (select an entity, save/restore a canvas view) need the live G6
@@ -384,6 +488,22 @@ export default {
       pageDraft: "",
       pageEntityId: null,
       newViewName: "",
+      // Inline create/rename input state. `creating`/`renaming` toggle the "New"
+      // button and the active-name span to an input in place; the drafts hold
+      // the in-progress text. `renameCommitted` guards against a Enter-then-blur
+      // double-commit on rename (Enter commits, then the blur that follows would
+      // fire finishRename again).
+      creating: false,
+      createDraft: "",
+      renaming: false,
+      renameDraft: "",
+      renameCommitted: false,
+      // Two-stage inline danger confirms (no modal). Each swaps its trigger
+      // button to a Delete/Cancel pair and auto-reverts after a few idle
+      // seconds via its own timer, cleared on unmount.
+      confirmingDelete: false,
+      confirmingWipe: false,
+      confirmTimer: null,
       importMessage: "",
       importOk: false,
       // Transient status line for delegated actions that couldn't run (e.g.
@@ -461,6 +581,9 @@ export default {
     if (this.feedbackTimer) {
       window.clearTimeout(this.feedbackTimer);
     }
+    if (this.confirmTimer) {
+      window.clearTimeout(this.confirmTimer);
+    }
   },
   methods: {
     // ---- Expand / collapse persistence ----------------------------------
@@ -535,38 +658,128 @@ export default {
     // ---- Notebook lifecycle ---------------------------------------------
     onSwitch(id) {
       this.flushPageDraft();
+      // Any open inline rename / danger confirm belongs to the outgoing
+      // notebook; drop it so it can't act on the newly-active one.
+      this.renaming = false;
+      this.cancelConfirms();
       // Pins belong to a notebook, so a two-pin selection can't carry across a
       // switch.
       this.clearPinSelection();
       this.notebookStore.switchNotebook(id);
     },
-    onNewNotebook() {
-      const name = window.prompt("Name for the new notebook:", "");
-      if (name === null) return; // cancelled
-      this.flushPageDraft();
-      this.notebookStore.createNotebook(name || "Untitled notebook");
+    // ---- Inline create -----------------------------------------------------
+    // The "New" button swaps to an inline input. Enter commits (empty commits
+    // the default name); Esc/blur cancel — a blur must never accidentally
+    // create. Cancelling returns focus to the "New" button.
+    startCreate() {
+      this.cancelConfirms();
+      this.createDraft = "";
+      this.creating = true;
+      this.$nextTick(() => this.$refs.createInput?.focus());
     },
-    onRenameNotebook() {
-      const current = this.notebookStore.activeNotebook?.name || "";
-      const name = window.prompt("Rename this notebook:", current);
-      if (name === null) return;
-      if (!name.trim()) return;
-      this.notebookStore.renameNotebook(this.notebookStore.activeId, name);
+    finishCreate(trigger) {
+      if (!this.creating) return;
+      const { commit, name } = decideCreateCommit(this.createDraft, trigger);
+      this.creating = false;
+      this.createDraft = "";
+      if (commit) {
+        this.flushPageDraft();
+        this.notebookStore.createNotebook(name);
+      } else if (trigger === "escape") {
+        // Return focus to the trigger only on an explicit Esc cancel; a blur
+        // cancel means the user already moved focus elsewhere — don't steal it.
+        this.$nextTick(() => this.$refs.newBtn?.focus());
+      }
     },
-    onDeleteNotebook() {
-      const name = this.notebookStore.activeNotebook?.name || "this notebook";
-      if (!window.confirm(`Delete "${name}"? Its pins, notes and saved views will be lost.`)) {
+
+    // ---- Inline rename -----------------------------------------------------
+    // A pencil next to the active name swaps it to an input pre-filled with the
+    // current name. Enter/blur commit (the store guards empty/whitespace); Esc
+    // cancels. renameCommitted stops an Enter-then-blur double fire; cancelling
+    // returns focus to the pencil.
+    startRename() {
+      this.cancelConfirms();
+      this.renameDraft = this.notebookStore.activeNotebook?.name || "";
+      this.renameCommitted = false;
+      this.renaming = true;
+      this.$nextTick(() => this.$refs.renameInput?.focus());
+    },
+    finishRename(trigger) {
+      if (!this.renaming) return;
+      // Enter fires first, then the blur it induces would re-enter here; ignore
+      // the trailing blur once a commit has already happened.
+      if (this.renameCommitted && trigger === "blur") {
+        this.renameCommitted = false;
         return;
       }
+      const { commit, name } = decideRenameCommit(this.renameDraft, trigger);
+      if (commit) {
+        this.renameCommitted = trigger === "enter";
+        this.renaming = false;
+        this.notebookStore.renameNotebook(this.notebookStore.activeId, name);
+      } else {
+        this.renaming = false;
+        this.$nextTick(() => this.$refs.renameBtn?.focus());
+      }
+    },
+
+    // ---- Inline delete confirm (two-stage, no modal) -----------------------
+    startDelete() {
+      this.cancelConfirms();
+      this.confirmingDelete = true;
+      this.armConfirmAutoRevert();
+      this.$nextTick(() => this.$refs.deleteConfirmBtn?.focus());
+    },
+    confirmDelete() {
+      this.clearConfirmTimer();
+      this.confirmingDelete = false;
       this.notebookStore.deleteNotebook(this.notebookStore.activeId);
     },
-    onWipeAll() {
-      if (!window.confirm(
-        "Wipe every notebook and start fresh? This deletes all pins, notes and saved views in this browser."
-      )) {
-        return;
-      }
+    cancelDelete() {
+      this.clearConfirmTimer();
+      this.confirmingDelete = false;
+      this.$nextTick(() => this.$refs.deleteBtn?.focus());
+    },
+
+    // ---- Inline wipe-everything confirm (two-stage, no modal) --------------
+    startWipe() {
+      this.cancelConfirms();
+      this.confirmingWipe = true;
+      this.armConfirmAutoRevert();
+      this.$nextTick(() => this.$refs.wipeConfirmBtn?.focus());
+    },
+    confirmWipe() {
+      this.clearConfirmTimer();
+      this.confirmingWipe = false;
       this.notebookStore.wipeAll();
+    },
+    cancelWipe() {
+      this.clearConfirmTimer();
+      this.confirmingWipe = false;
+      this.$nextTick(() => this.$refs.wipeBtn?.focus());
+    },
+
+    // Shared confirm helpers: only one danger confirm is ever open, and it
+    // auto-reverts to the idle button after a few idle seconds so a stray
+    // "Delete" can't linger armed. The timer is cleared on unmount.
+    armConfirmAutoRevert() {
+      this.clearConfirmTimer();
+      this.confirmTimer = window.setTimeout(() => {
+        this.confirmingDelete = false;
+        this.confirmingWipe = false;
+        this.confirmTimer = null;
+      }, CONFIRM_AUTO_REVERT_MS);
+    },
+    clearConfirmTimer() {
+      if (this.confirmTimer) {
+        window.clearTimeout(this.confirmTimer);
+        this.confirmTimer = null;
+      }
+    },
+    cancelConfirms() {
+      this.clearConfirmTimer();
+      this.confirmingDelete = false;
+      this.confirmingWipe = false;
     },
 
     // ---- Entities / notes -----------------------------------------------
@@ -841,6 +1054,29 @@ export default {
     }
   }
 
+  &__name-row {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin-bottom: 0.5rem;
+
+    .form-control {
+      flex: 1;
+      min-width: 0;
+    }
+  }
+
+  &__active-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--bs-body-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   &__switcher-row {
     margin-bottom: 0.5rem;
   }
@@ -849,6 +1085,38 @@ export default {
     display: flex;
     gap: 0.35rem;
     flex-wrap: wrap;
+
+    .btn {
+      flex: 1;
+      white-space: nowrap;
+    }
+
+    .form-control {
+      flex: 1 1 100%;
+      min-width: 0;
+    }
+  }
+
+  &__confirm {
+    flex: 1 1 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid var(--bs-danger, #e15759);
+    border-radius: 0.375rem;
+    background-color: var(--bs-body-bg);
+  }
+
+  &__confirm-msg {
+    font-size: 0.8rem;
+    line-height: 1.35;
+    color: var(--bs-body-text);
+  }
+
+  &__confirm-actions {
+    display: flex;
+    gap: 0.35rem;
 
     .btn {
       flex: 1;
