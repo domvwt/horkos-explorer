@@ -80,7 +80,7 @@ router.post("/", QueryValidator.middleware(database), async (req, res) => {
   // count) without a matching release — otherwise repeated 400s would leak the
   // in-flight slot until the server permanently sheds all load.
   const query = req.body.query;
-  if (!query || !typeof query === "string") {
+  if (!query || typeof query !== "string") {
     return res
       .status(400)
       .send({ error: "The query must be a string with length > 0" });
@@ -92,7 +92,7 @@ router.post("/", QueryValidator.middleware(database), async (req, res) => {
       .send({ error: "COPY command is not allowed in demo mode" });
   }
   const params = req.body.params;
-  if (params && !typeof params === "object") {
+  if (params && typeof params !== "object") {
     return res.status(400).send({ error: "Params must be an object" });
   }
   // uuid is client-controlled and used as a Map key (progress tracking) and as
