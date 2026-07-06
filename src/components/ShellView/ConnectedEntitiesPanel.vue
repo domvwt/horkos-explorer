@@ -48,7 +48,26 @@
           v-if="hasMore"
           class="has-more-notice"
         >
-          <small>Showing first {{ maxResults }} of {{ totalCount }}+ connections</small>
+          <small>Showing the first {{ totalCount }} connected entities. This entity has more connections than are shown.</small>
+        </div>
+        <div
+          v-if="hasExpandableEntities"
+          class="expand-all-row"
+        >
+          <button
+            type="button"
+            class="expand-all-button"
+            :disabled="expandAllInFlight"
+            @click.stop="handleExpandAll"
+          >
+            <i class="fa-solid fa-diagram-project" /> Add all to graph
+          </button>
+        </div>
+        <div
+          v-if="expandAllNotice"
+          class="expand-all-notice"
+        >
+          <small>{{ expandAllNotice }}</small>
         </div>
         <div
           v-for="group in groupedConnections"
@@ -73,7 +92,7 @@
           >
             <div
               v-for="entity in group.entities"
-              :key="entity.id + '::' + entity.edgeLabel"
+              :key="entity.id"
               class="entity-row"
               :class="{ 'entity-row--in-graph': entity.inGraph }"
               @click.stop="handleEntityClick(entity)"
@@ -82,9 +101,9 @@
                 class="entity-name"
                 :title="entity.displayName"
               >{{ entity.displayName }}</span>
-              <span class="entity-relationship">{{ entity.relationshipLabel }}<template
-                v-if="entity.ownershipShare"
-              > ({{ entity.ownershipShare }})</template></span>
+              <span class="entity-relationship">{{ entity.relationshipLabels.join(', ') }}<template
+                v-if="entity.ownershipShares.length"
+              > ({{ entity.ownershipShares.join(', ') }})</template></span>
               <button
                 v-if="!entity.inGraph"
                 class="add-button"
@@ -109,10 +128,11 @@
 <script>
 import NeighborsFetcher from "../../utils/NeighborsFetcher";
 import {
-  relationshipRoleLabel,
-  entityGroupLabel,
-  extractOwnershipShare,
-} from "../../utils/DisplayPolicy";
+  buildEdgeRows,
+  collapseByEntity,
+  selectEntitiesToExpand,
+} from "../../utils/ConnectedEntities";
+import { entityGroupLabel } from "../../utils/DisplayPolicy";
 
 export default {
   name: "ConnectedEntitiesPanel",
@@ -147,7 +167,7 @@ export default {
       required: true,
     },
   },
-  emits: ['selectNode', 'addNode'],
+  emits: ['selectNode', 'addNode', 'addNodes'],
   data() {
     return {
       isExpanded: false,
@@ -158,6 +178,9 @@ export default {
       hasFetched: false,
       hasMore: false,
       maxResults: 200,
+      expandAllNotice: null, // Inline notice after a capped "expand all"
+      expandAllBatchIds: [], // Ids the noticed batch added; used to spot undo
+      expandAllInFlight: false, // Blocks a second batch while one is running
       fetchId: 0, // Counter to detect stale responses from rapid node selection
     };
   },
@@ -176,12 +199,17 @@ export default {
         groups[entity.label].entities.push(entity);
       });
 
-      // Sort entities within each group alphabetically by name
+      // Sort entities within each group alphabetically by name, with an id
+      // tie-break so the display order is fully deterministic — the capped
+      // "add all" selection (selectEntitiesToExpand) uses the same
+      // (group label, name, id) comparator, and the two orders must agree.
       Object.values(groups).forEach(group => {
         group.entities.sort((a, b) => {
           const nameA = (a.displayName || '').toLowerCase();
           const nameB = (b.displayName || '').toLowerCase();
-          return nameA.localeCompare(nameB);
+          const byName = nameA.localeCompare(nameB);
+          if (byName !== 0) return byName;
+          return String(a.id).localeCompare(String(b.id));
         });
       });
 
@@ -190,6 +218,9 @@ export default {
     },
     totalCount() {
       return this.connectedEntities.length;
+    },
+    hasExpandableEntities() {
+      return this.connectedEntities.some(entity => !entity.inGraph);
     },
   },
   watch: {
@@ -201,6 +232,9 @@ export default {
         this.hasFetched = false;
         this.hasMore = false;
         this.error = null;
+        this.expandAllNotice = null;
+        this.expandAllBatchIds = [];
+        this.expandAllInFlight = false;
         // If panel is already expanded, fetch immediately
         if (this.isExpanded) {
           this.fetchConnectedEntities();
@@ -259,12 +293,16 @@ export default {
         }
 
         if (result && result.rows) {
-          const allEntities = this.parseNeighborResults(result);
+          // Collapse per-relationship rows so counts and the list reflect
+          // distinct entities, not edges.
+          const edgeRows = this.parseNeighborResults(result);
+          const allEntities = collapseByEntity(edgeRows);
 
-          // Check if there are more results than we're showing
-          this.hasMore = allEntities.length > this.maxResults;
-
-          // Only show up to maxResults
+          // Truncation must key off RAW edge rows (result.truncated), not the
+          // collapsed entity count: a full fetch window can collapse to fewer
+          // distinct entities than the cap while neighbours were never fetched.
+          this.hasMore = Boolean(result.truncated)
+            || allEntities.length > this.maxResults;
           this.connectedEntities = allEntities.slice(0, this.maxResults);
         } else {
           this.connectedEntities = [];
@@ -310,65 +348,21 @@ export default {
     },
 
     parseNeighborResults(result) {
-      const entities = [];
-      const seenKeys = new Set();
-
-      if (!result.rows) return entities;
-
-      result.rows.forEach((row) => {
-        // Rows are objects with named properties: {r: relationship, dst: node}
-        const rel = row.r;
-        const node = row.dst;
-
-        if (!node || !node._id) {
-          return;
-        }
-
-        // Create a unique ID for the node
-        const nodeId = `${node._id.table}_${node._id.offset}`;
-        const edgeLabel = rel._label || 'Connected';
-
-        // Skip duplicates per (node, relationship type) — a neighbor connected
-        // by several relationship types (e.g. ownership AND influence) gets one
-        // row per type, so type-specific detail like ownership share isn't lost
-        const seenKey = `${nodeId}::${edgeLabel}`;
-        if (seenKeys.has(seenKey)) return;
-        seenKeys.add(seenKey);
-
-        // Check direction: _src/_id hold numeric {table, offset} internal ids,
-        // so compare against the neighbor node — if the neighbor is the edge
-        // source, the clicked node is the target (reverse)
-        const neighborIsSource = rel._src
-          && rel._src.table === node._id.table
-          && rel._src.offset === node._id.offset;
-        const relationshipLabel = relationshipRoleLabel(edgeLabel, { reverse: neighborIsSource });
-
-        // Check if node is already in the graph
-        let inGraph = false;
-        if (this.g6Graph) {
+      // Rows are objects with named properties: {r: relationship, dst: node}.
+      // The pure row-shaping (per-type, direction-aware dedupe) lives in
+      // buildEdgeRows; only the display-environment lookups are supplied here.
+      return buildEdgeRows(result.rows, {
+        getDisplayName: node => this.getEntityDisplayName(node),
+        isInGraph: nodeId => {
+          if (!this.g6Graph) return false;
           try {
             this.g6Graph.getNodeData(nodeId);
-            inGraph = true;
+            return true;
           } catch (e) {
-            // Node not in graph
+            return false;
           }
-        }
-
-        entities.push({
-          id: nodeId,
-          edgeLabel,
-          displayName: this.getEntityDisplayName(node),
-          label: node._label || 'Unknown',
-          relationshipLabel,
-          ownershipShare: extractOwnershipShare(rel),
-          inGraph,
-          // Store raw data for adding to graph
-          rawNode: node,
-          rawRel: rel,
-        });
+        },
       });
-
-      return entities;
     },
 
     toggleGroup(label) {
@@ -413,16 +407,70 @@ export default {
         return;
       }
       this.$emit('addNode', entity);
-      // Optimistic UI update - the parent's addDataWithQueryResult is synchronous
-      // and always succeeds when rawNode/rawRel are present.
+      // Optimistic UI update - the parent's add path is async but always adds
+      // the node when rawNode/rawRel are present, and undo re-syncs the flag
+      // via refreshInGraphStatus.
       entity.inGraph = true;
     },
 
     /**
+     * Add every not-yet-added distinct connected entity to the graph in one
+     * action, bounded by the shared neighbour-expansion cap so a very
+     * high-degree node can't blow up the canvas. The whole selection is
+     * emitted as ONE batch event so the parent runs a single fetch + add +
+     * history flow instead of one per entity. When the number of distinct new
+     * neighbours exceeds the cap, the first (in display order) cap are added
+     * and an inline notice reports the shortfall.
+     */
+    handleExpandAll() {
+      // One batch at a time: the flag drops when the parent's post-add
+      // refreshInGraphStatus call signals the batch has completed.
+      if (this.expandAllInFlight) {
+        return;
+      }
+      const cap = this.settingsStore.performance.maxNumberOfNodesToExpand;
+      const { toAdd, totalCandidates, truncated } = selectEntitiesToExpand(
+        this.connectedEntities,
+        cap
+      );
+
+      // Same missing-raw-data guard as the single-add path, applied up front
+      // so the emitted batch only carries entities the parent can add.
+      const valid = toAdd.filter(entity => entity.rawNode && entity.rawRel);
+      if (valid.length < toAdd.length) {
+        console.warn('Skipping entities with missing raw data:', toAdd.length - valid.length);
+      }
+      if (valid.length > 0) {
+        this.expandAllInFlight = true;
+        this.$emit('addNodes', valid);
+        // Optimistic UI update, mirroring handleAddNode: the parent always
+        // adds the nodes when rawNode/rawRel are present.
+        valid.forEach(entity => {
+          entity.inGraph = true;
+        });
+      }
+
+      if (truncated) {
+        this.expandAllNotice = `Added ${valid.length.toLocaleString()} of ${totalCandidates.toLocaleString()} connected entities not yet on the canvas. Adjust the expansion limit in settings to add more at once.`;
+        // Remember what the noticed batch added, so an undo that removes the
+        // batch also retires the notice (see refreshInGraphStatus).
+        this.expandAllBatchIds = valid.map(entity => entity.id);
+      } else {
+        this.expandAllNotice = null;
+        this.expandAllBatchIds = [];
+      }
+    },
+
+    /**
      * Refresh inGraph status for all entities by checking against current graph.
-     * Called by parent after undo/redo operations.
+     * Called by parent after undo/redo operations and after a batch add
+     * completes.
      */
     refreshInGraphStatus() {
+      // The batch that set this flag has finished (or been undone/redone), so
+      // the expand-all control can accept another batch. Cleared before the
+      // graph guard so a missing graph can never wedge the button.
+      this.expandAllInFlight = false;
       if (!this.g6Graph) return;
       this.connectedEntities.forEach(entity => {
         try {
@@ -432,6 +480,19 @@ export default {
           entity.inGraph = false;
         }
       });
+      // If any node the noticed batch added has left the graph (undo), the
+      // notice describes nodes that are no longer there — retire it. After a
+      // successful add every recorded id is still present, so the parent's
+      // post-add refresh leaves the notice intact.
+      if (this.expandAllNotice && this.expandAllBatchIds.length > 0) {
+        const stillInGraph = new Set(
+          this.connectedEntities.filter(e => e.inGraph).map(e => e.id)
+        );
+        if (this.expandAllBatchIds.some(id => !stillInGraph.has(id))) {
+          this.expandAllNotice = null;
+          this.expandAllBatchIds = [];
+        }
+      }
     },
   },
 };
@@ -495,6 +556,45 @@ export default {
     color: var(--bs-body-inactive);
     font-size: 0.75rem;
     padding: 0.25rem 0 0.5rem;
+    font-style: italic;
+  }
+
+  .expand-all-row {
+    padding: 0.25rem 0 0.5rem;
+
+    .expand-all-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      background: none;
+      border: 1px solid var(--bs-body-inactive);
+      border-radius: 0.2rem;
+      padding: 0.2rem 0.5rem;
+      font-size: 0.75rem;
+      color: var(--bs-body-text);
+      cursor: pointer;
+      transition: border-color 0.15s, background-color 0.15s;
+
+      &:hover:not(:disabled) {
+        border-color: var(--bs-body-text);
+        background-color: var(--bs-body-bg-hover, rgba(0, 0, 0, 0.05));
+      }
+
+      &:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+
+      i {
+        font-size: 0.7rem;
+      }
+    }
+  }
+
+  .expand-all-notice {
+    color: var(--bs-body-inactive);
+    font-size: 0.75rem;
+    padding: 0 0 0.5rem;
     font-style: italic;
   }
 

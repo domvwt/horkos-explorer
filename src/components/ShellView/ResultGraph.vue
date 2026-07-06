@@ -301,6 +301,7 @@
             :settings-store="settingsStore"
             @select-node="handleConnectedNodeClick"
             @add-node="handleAddConnectedNode"
+            @add-nodes="handleAddConnectedNodes"
           />
 
           <!-- External Resource Links -->
@@ -1469,6 +1470,115 @@ export default {
             addedEdges: JSON.parse(JSON.stringify(addedEdges)),
           }
         });
+      }
+    },
+
+    /**
+     * Batched counterpart of handleAddConnectedNode for the panel's
+     * "add all" action: one before-snapshot, ONE batched rel fetch
+     * (fetchRelsBetweenNodeAndMany binds every entity's pk in a single query
+     * per rel type x table pairing), one data add, one after-diff, and ONE
+     * history entry — so undo removes exactly this batch, and the query count
+     * stays constant in the number of entities added.
+     */
+    async handleAddConnectedNodes(entities) {
+      const valid = (entities || []).filter(e => e && e.rawNode && e.rawRel);
+      if (valid.length === 0) {
+        console.warn('Cannot add nodes: no entities with raw data');
+        return;
+      }
+
+      // Pin the source node NOW: the user can select another node while the
+      // batched fetch below is awaited, and the history entry must attribute
+      // the batch to the node it actually expanded.
+      const sourceNodeId = this.clickedId;
+
+      try {
+        const nodesBefore = new Set((this.g6Graph.getNodeData() || []).map(n => n.id));
+        const edgesBefore = new Set((this.g6Graph.getEdgeData() || []).map(e => e.id));
+
+        // Each entity's first raw rel is the guaranteed baseline edge (as in
+        // the single-add path); the batched fetch below fills in any further
+        // edges. Keyed by rel id so the baseline and fetched sets merge
+        // without duplicates.
+        const relsById = new Map();
+        valid.forEach(entity => {
+          if (entity.rawRel._id) {
+            relsById.set(encodeId(entity.rawRel._id), entity.rawRel);
+          }
+        });
+
+        // Fetch all edges between the focus node and the whole batch in one
+        // batched call, mirroring how fetchAndAddPinnedEntity gathers edges.
+        try {
+          const currentNodeData = this.g6Graph.getNodeData(sourceNodeId);
+          const { tableName, primaryKeyName, primaryKeyValue } = this.getInfoForExpansion(currentNodeData);
+
+          // Group the batch by (table, pk column) so one pk list binds per table.
+          const byTable = {};
+          valid.forEach(entity => {
+            const label = entity.rawNode._label;
+            if (!label) return;
+            const pkName = this.primaryKeyNameForLabel(label);
+            const pkValue = entity.rawNode[pkName];
+            if (pkValue === undefined || pkValue === null) return;
+            if (!byTable[label]) {
+              byTable[label] = { table: label, primaryKeyName: pkName, primaryKeyValues: [] };
+            }
+            byTable[label].primaryKeyValues.push(pkValue);
+          });
+          const others = Object.values(byTable);
+
+          if (others.length > 0) {
+            const result = await NeighborsFetcher.fetchRelsBetweenNodeAndMany({
+              focusTable: tableName,
+              focusPkName: primaryKeyName,
+              focusPkValue: primaryKeyValue,
+              others,
+              relTables: this.schema.relTables,
+              isWasm: this.modeStore.isWasm,
+            });
+            if (result && result.rows) {
+              result.rows.forEach(row => {
+                if (row.r && row.r._id) {
+                  relsById.set(encodeId(row.r._id), row.r);
+                }
+              });
+            }
+          }
+        } catch (e) {
+          console.warn('Failed to fetch additional edges:', e);
+        }
+
+        const rawNodes = valid.map(e => e.rawNode);
+        const allRels = Array.from(relsById.values());
+        const queryResult = {
+          rows: [[...rawNodes, ...allRels]],
+          dataTypes: [...rawNodes.map(() => 'NODE'), ...allRels.map(() => 'REL')],
+        };
+        await this.addDataWithQueryResult(queryResult);
+
+        const nodesAfter = this.g6Graph.getNodeData() || [];
+        const edgesAfter = this.g6Graph.getEdgeData() || [];
+        const addedNodes = nodesAfter.filter(n => !nodesBefore.has(n.id));
+        const addedEdges = edgesAfter.filter(e => !edgesBefore.has(e.id));
+
+        // ONE history entry for the whole batch; the established
+        // 'add-connected-node' command removes exactly these nodes/edges on undo.
+        if (addedNodes.length > 0 || addedEdges.length > 0) {
+          this.historyManager.push({
+            type: 'add-connected-node',
+            data: {
+              sourceNodeId,
+              addedNodes: JSON.parse(JSON.stringify(addedNodes)),
+              addedEdges: JSON.parse(JSON.stringify(addedEdges)),
+            }
+          });
+        }
+      } finally {
+        // Tell the panel the batch is over: re-syncs each row's in-graph
+        // state and releases its expand-all control for the next batch.
+        this.$refs.connectedEntitiesPanel?.refreshInGraphStatus();
       }
     },
 

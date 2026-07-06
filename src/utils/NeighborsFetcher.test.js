@@ -534,3 +534,110 @@ describe("new-only neighbour count semantics", () => {
     expect(countNewNeighborNodes(neighbors, new Set())).toBe(1);
   });
 });
+
+describe("fetchNeighbors truncation flag", () => {
+  // Neighbour fixtures: a handful of DISTINCT nodes that many edge rows point
+  // at, so a full fetch window can collapse to far fewer entities.
+  const person1 = { _id: { table: 2, offset: 1 }, _label: "Person" };
+  const person2 = { _id: { table: 2, offset: 2 }, _label: "Person" };
+
+  const makeRows = (count, targets) =>
+    Array.from({ length: count }, (_, i) => ({
+      r: { _id: { table: 5, offset: i }, _label: "Directorship" },
+      dst: targets[i % targets.length],
+    }));
+
+  it("flags truncated when a direction fills the whole window, even if rows collapse to few distinct entities", async () => {
+    // 5 edge rows (= sizeLimit) over only 2 distinct neighbours: an
+    // entity-level consumer collapsing these lands well below any entity cap,
+    // but edges beyond the window were never fetched — truncated must be true.
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValueOnce({
+        rows: makeRows(5, [person1, person2]),
+        dataTypes: { r: "REL", dst: "NODE" },
+      });
+
+    const result = await NeighborsFetcher.fetchNeighbors({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValue: "c1",
+      relTables: [
+        { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
+      ],
+      sizeLimit: 5,
+    });
+
+    expect(result.rows).toHaveLength(5);
+    const distinct = new Set(result.rows.map(row => encodeId(row.dst._id)));
+    expect(distinct.size).toBe(2); // collapsed count is far below the window
+    expect(result.truncated).toBe(true);
+    runSpy.mockRestore();
+  });
+
+  it("does not flag truncated when both directions come back under the window", async () => {
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      // inbound Directorship: 2 rows, outbound RegisteredAddress: 1 row
+      .mockResolvedValueOnce({
+        rows: makeRows(2, [person1, person2]),
+        dataTypes: { r: "REL", dst: "NODE" },
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            r: { _id: { table: 6, offset: 0 }, _label: "RegisteredAddress" },
+            dst: { _id: { table: 1, offset: 9 }, _label: "Address" },
+          },
+        ],
+        dataTypes: { r: "REL", dst: "NODE" },
+      });
+
+    const result = await NeighborsFetcher.fetchNeighbors({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValue: "c1",
+      relTables: [
+        { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
+        { name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] },
+      ],
+      sizeLimit: 5,
+    });
+
+    expect(result.rows).toHaveLength(3);
+    expect(result.truncated).toBe(false);
+    runSpy.mockRestore();
+  });
+
+  it("flags truncated when only the OUTBOUND direction fills its window", async () => {
+    const addr = { _id: { table: 1, offset: 9 }, _label: "Address" };
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      // inbound Directorship: 1 row (under), outbound RegisteredAddress: 3 rows (at cap)
+      .mockResolvedValueOnce({
+        rows: makeRows(1, [person1]),
+        dataTypes: { r: "REL", dst: "NODE" },
+      })
+      .mockResolvedValueOnce({
+        rows: Array.from({ length: 3 }, (_, i) => ({
+          r: { _id: { table: 6, offset: i }, _label: "RegisteredAddress" },
+          dst: addr,
+        })),
+        dataTypes: { r: "REL", dst: "NODE" },
+      });
+
+    const result = await NeighborsFetcher.fetchNeighbors({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValue: "c1",
+      relTables: [
+        { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
+        { name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] },
+      ],
+      sizeLimit: 3,
+    });
+
+    expect(result.truncated).toBe(true);
+    runSpy.mockRestore();
+  });
+});

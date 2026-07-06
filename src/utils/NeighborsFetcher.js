@@ -108,12 +108,25 @@ class NeighborsFetcher {
     // the per-direction total.
     const inbound = this._mergeResults(inboundResults, sizeLimit);
     const outbound = this._mergeResults(outboundResults, sizeLimit);
+    // A direction whose merged rows fill the whole window may have had edges
+    // cut off by the per-type LIMITs or the merge cap, so the returned rows
+    // cannot be treated as the node's complete edge set. Surfaced as
+    // `truncated` because callers that derive ENTITY counts from these EDGE
+    // rows can collapse below any entity-level cap even when edges were
+    // dropped — raw row counts are the only honest truncation signal.
+    const truncated =
+      Boolean(inbound && inbound.rows.length >= sizeLimit) ||
+      Boolean(outbound && outbound.rows.length >= sizeLimit);
     if (!inbound) {
+      if (outbound) {
+        outbound.truncated = truncated;
+      }
       return outbound;
     }
     if (outbound) {
       inbound.rows.push(...outbound.rows);
     }
+    inbound.truncated = truncated;
     return inbound;
   }
 
