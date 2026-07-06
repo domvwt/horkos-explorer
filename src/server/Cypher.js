@@ -4,6 +4,7 @@ const logger = require("./utils/Logger");
 const MODES = require("./utils/Constants").MODES;
 const database = require("./utils/Database");
 const QueryValidator = require("./middleware/QueryValidator");
+const rowBudget = require("./middleware/RowBudget");
 const { sendErrorResponse } = require("./utils/errorResponse");
 const uuid = require("uuid");
 let sessionDb;
@@ -105,6 +106,28 @@ router.post("/", QueryValidator.middleware(database), async (req, res) => {
       return res.status(400).send({ error: "uuid must be a valid UUID" });
     }
   }
+  // Per-IP row-budget pre-check (anti-bulk-scrape). The per-response size cap
+  // bounds one response and the rate limiter bounds request COUNT, but neither
+  // bounds the CUMULATIVE rows one IP can paginate out across requests. This
+  // check is placed AFTER the synchronous validation early-returns and BEFORE
+  // getConnection() so a rejected (429) request never touches the admission
+  // counter / connection pool — preserving the same invariant as the 400 paths
+  // above. Debit happens in the success path only (rows actually shipped).
+  // Enforced for every mode except explicit READ_WRITE (fail closed).
+  const budgetKey = rowBudget.keyForRequest(req);
+  if (rowBudget.isEnforced(mode)) {
+    const budgetCheck = rowBudget.check(budgetKey);
+    if (!budgetCheck.allowed) {
+      const retryAfterSeconds = Math.ceil(budgetCheck.retryAfterMs / 1000);
+      logger.warn(`Row budget exceeded for IP: ${req.ip}`);
+      res.set("Retry-After", String(retryAfterSeconds));
+      return res.status(429).json({
+        error: "Row budget exceeded, please try again later.",
+        code: "ROW_BUDGET_EXCEEDED",
+        retryAfter: new Date(Date.now() + budgetCheck.retryAfterMs),
+      });
+    }
+  }
   let conn;
   try {
     conn = database.getConnection();
@@ -173,6 +196,22 @@ router.post("/", QueryValidator.middleware(database), async (req, res) => {
         responseBody.results.push(singleResultBody);
       }
       result.forEach((singleResult) => singleResult.close());
+    }
+    // Debit the per-IP row budget with the rows ACTUALLY shipped (post-cap),
+    // not getNumTuples() — we account for what left the server. Only debit when
+    // the budget is enforced (not READ_WRITE). This runs on the success path
+    // only; an errored / timed-out query throws before here and debits nothing.
+    if (rowBudget.isEnforced(mode)) {
+      let shippedRows;
+      if (responseBody.isMultiStatement) {
+        shippedRows = responseBody.results.reduce(
+          (sum, r) => sum + (r.rows ? r.rows.length : 0),
+          0
+        );
+      } else {
+        shippedRows = responseBody.rows ? responseBody.rows.length : 0;
+      }
+      rowBudget.debit(budgetKey, shippedRows);
     }
     responseBody = JSON.stringify(responseBody, int128Replacer);
     return res.send(responseBody);

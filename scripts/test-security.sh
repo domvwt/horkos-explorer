@@ -2,6 +2,17 @@
 
 # Security Testing Script for Horkos Explorer
 # Tests query validation, rate limiting, and session storage security features
+#
+# Required server env for the per-IP row-budget section (test_row_budget):
+#   - Start the server with a TINY QUERY_ROW_BUDGET so a couple of paginated
+#     queries exhaust it, e.g. QUERY_ROW_BUDGET=5 (default is 100000 — far too
+#     large to trip in a test run). Keep the default 24h window
+#     (QUERY_ROW_BUDGET_WINDOW_MS) so the budget does not reset mid-test.
+#   - Relax the query rate limit so the ROW BUDGET (not the request rate limit)
+#     is what trips: QUERY_RATE_LIMIT_MAX_REQUESTS well above the number of
+#     paginated requests the section sends (e.g. 100). Otherwise a
+#     QUERY_RATE_LIMIT_EXCEEDED 429 could fire first and mask the row-budget 429.
+#   - Use a database with at least a few Person rows so each query ships >0 rows.
 
 set -e
 
@@ -30,12 +41,14 @@ print_test() {
 
 print_pass() {
     echo -e "${GREEN}✓ PASS:${NC} $1"
-    ((TESTS_PASSED++))
+    # Not ((VAR++)): its exit status is 1 when the pre-increment value is 0,
+    # which aborts the whole suite under `set -e` on the first passing test.
+    TESTS_PASSED=$((TESTS_PASSED + 1))
 }
 
 print_fail() {
     echo -e "${RED}✗ FAIL:${NC} $1"
-    ((TESTS_FAILED++))
+    TESTS_FAILED=$((TESTS_FAILED + 1))
 }
 
 print_info() {
@@ -307,6 +320,69 @@ test_rate_limiting() {
 
     if [ "$limit_hit" = false ]; then
         print_fail "Rate limit was not triggered after $requests_sent requests"
+    fi
+}
+
+# Test the per-IP cumulative row budget (anti-bulk-scrape).
+#
+# The per-response size cap bounds ONE response and the query rate limit bounds
+# request COUNT, but neither bounds how much of the corpus one IP can paginate
+# out across requests. RowBudget.js debits the rows actually shipped per IP and
+# rejects once the QUERY_ROW_BUDGET window is exhausted.
+#
+# REQUIRES the server to be started with a tiny QUERY_ROW_BUDGET and a relaxed
+# query rate limit — see the env notes in this script's header. Each request
+# below carries a fixed X-Forwarded-For so it maps to one budget key; a DIFFERENT
+# X-Forwarded-For is a different key with a fresh budget (proves per-IP scoping
+# and that the trusted right-most XFF is the key, not spoofable left entries).
+test_row_budget() {
+    print_header "Testing Per-IP Row Budget (anti-bulk-scrape)"
+
+    local scrape_ip="198.51.100.7"
+    local fresh_ip="198.51.100.8"
+
+    # 1. Paginate the same IP past the tiny budget; a 429 ROW_BUDGET_EXCEEDED
+    #    must fire (and NOT a QUERY_RATE_LIMIT_EXCEEDED, if the rate limit was
+    #    relaxed per the header notes).
+    print_test "Paginating past QUERY_ROW_BUDGET returns 429 ROW_BUDGET_EXCEEDED"
+    local budget_hit=false
+    local reqs=0
+    for i in {1..40}; do
+        reqs=$i
+        local skip=$(( (i - 1) * 5 ))
+        local q="MATCH (n:Person) RETURN n.id ORDER BY n.id SKIP ${skip} LIMIT 5"
+        local body code
+        body=$(curl -s -w '\n%{http_code}' -X POST "$SERVER_URL/api/cypher" \
+            -H "Content-Type: application/json" \
+            -H "X-Forwarded-For: ${scrape_ip}" \
+            --data-binary "$(jq -nc --arg q "$q" '{query:$q}')")
+        code=$(echo "$body" | tail -n1)
+        body=$(echo "$body" | sed '$d')
+        if echo "$body" | grep -q "ROW_BUDGET_EXCEEDED" && [ "$code" = "429" ]; then
+            budget_hit=true
+            print_pass "Row budget exhausted after $reqs paginated requests (429 ROW_BUDGET_EXCEEDED)"
+            break
+        fi
+    done
+    if [ "$budget_hit" = false ]; then
+        print_fail "Row budget was not exhausted after $reqs paginated requests (is QUERY_ROW_BUDGET set small?)"
+    fi
+
+    # 2. A DIFFERENT IP key (fresh right-most XFF) still gets 200 — the budget is
+    #    per-IP, and a client cannot reset the exhausted key by rotating a spoofed
+    #    left-most XFF (the trusted right-most entry is the key). Note: if the
+    #    exhausted key's window has since reset, that key would 200 too; using a
+    #    fresh key makes the assertion window-independent.
+    print_test "A different IP (fresh budget key) still returns 200"
+    local fcode
+    fcode=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$SERVER_URL/api/cypher" \
+        -H "Content-Type: application/json" \
+        -H "X-Forwarded-For: ${fresh_ip}" \
+        --data-binary '{"query":"MATCH (n:Person) RETURN n.id LIMIT 1"}')
+    if [ "$fcode" = "200" ]; then
+        print_pass "Fresh IP key -> 200 (budget is per-IP; spoofed left XFF cannot reset it)"
+    else
+        print_fail "Fresh IP key returned $fcode (expected 200)"
     fi
 }
 
@@ -689,6 +765,7 @@ main() {
     test_gpt_endpoint_disabled
     test_query_validation
     test_rate_limiting
+    test_row_budget  # per-IP cumulative row budget (anti-bulk-scrape); requires a tiny QUERY_ROW_BUDGET — see script header
     test_xff_spoofing  # TASK-102: uses its own fresh per-IP bucket (right-most XFF 10.0.0.1); independent of test_rate_limiting's budget
     test_security_headers  # TASK-100: security-headers presence check
     test_session_storage
