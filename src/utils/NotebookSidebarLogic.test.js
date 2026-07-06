@@ -7,7 +7,27 @@ import {
   saveViewThroughCell,
   restoreViewThroughCell,
   selectEntityThroughCell,
+  validateImportCode,
+  buildSharedViewName,
+  SHARED_VIEW_BASE_NAME,
 } from "./NotebookSidebarLogic";
+import { generateExportCode } from "./InvestigationState";
+
+// Build a real HKS1 share code with a single node so validateImportCode's
+// success path (and the "no-data" guard) exercise the actual serializer rather
+// than a hard-coded string.
+function realCode({ withNode = true } = {}) {
+  const nodes = withNode
+    ? [
+        {
+          id: "n1",
+          data: { properties: { _label: "Person", id: "p1" } },
+          style: { x: 10, y: 20 },
+        },
+      ]
+    : [];
+  return generateExportCode({ graphData: { nodes, edges: [] }, queries: [] }).code;
+}
 
 // A minimal stand-in for the NotebookStore's page surface used by
 // commitPageDraft: a `page` value and a `setPage` action that records writes.
@@ -278,5 +298,62 @@ describe("save-view -> restore-view round-trip through the sidebar", () => {
     expect(restore.ok).toBe(true);
     // The very view that was saved is the one routed back to the cell.
     expect(graph.restoreCalls[0]).toBe(view);
+  });
+});
+
+describe("validateImportCode", () => {
+  it("rejects empty input", () => {
+    expect(validateImportCode("").reason).toBe("empty");
+    expect(validateImportCode("   ").reason).toBe("empty");
+    expect(validateImportCode(null).reason).toBe("empty");
+  });
+
+  it("flags an HKS1 code missing its end marker as truncated", () => {
+    const truncated = realCode().slice(0, -2); // drop the ":Z" marker
+    const result = validateImportCode(truncated);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("truncated");
+  });
+
+  it("rejects an unparseable code as invalid", () => {
+    const result = validateImportCode("HKS1:not-real-data:Z");
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("invalid");
+  });
+
+  it("rejects a valid code carrying no nodes as no-data", () => {
+    const result = validateImportCode(realCode({ withNode: false }));
+    expect(result.ok).toBe(false);
+    expect(result.reason).toBe("no-data");
+  });
+
+  it("accepts a well-formed code, returning the trimmed code and parsed state", () => {
+    const code = realCode();
+    const result = validateImportCode(`  ${code}  `);
+    expect(result.ok).toBe(true);
+    expect(result.reason).toBeNull();
+    expect(result.code).toBe(code); // trimmed
+    expect(result.state.minimalNodes).toHaveLength(1);
+  });
+});
+
+describe("buildSharedViewName", () => {
+  it("uses the base name when it is free", () => {
+    expect(buildSharedViewName([])).toBe(SHARED_VIEW_BASE_NAME);
+    expect(buildSharedViewName(["Beneficial owners"])).toBe(SHARED_VIEW_BASE_NAME);
+    expect(buildSharedViewName(null)).toBe(SHARED_VIEW_BASE_NAME);
+  });
+
+  it("suffixes with the first free (n) when the base is taken", () => {
+    expect(buildSharedViewName([SHARED_VIEW_BASE_NAME])).toBe(
+      `${SHARED_VIEW_BASE_NAME} (2)`
+    );
+    expect(
+      buildSharedViewName([
+        SHARED_VIEW_BASE_NAME,
+        `${SHARED_VIEW_BASE_NAME} (2)`,
+        `${SHARED_VIEW_BASE_NAME} (3)`,
+      ])
+    ).toBe(`${SHARED_VIEW_BASE_NAME} (4)`);
   });
 });

@@ -275,6 +275,16 @@
               Save
             </button>
           </div>
+          <div class="notebook-sidebar__save-row">
+            <button
+              class="btn btn-sm btn-outline-secondary w-100"
+              title="Open a shared view from a code"
+              @click="openImportModal"
+            >
+              <i class="fa-solid fa-file-import" />
+              Open a shared view
+            </button>
+          </div>
           <p
             v-if="notebookStore.savedViewCount === 0"
             class="notebook-sidebar__empty"
@@ -297,6 +307,13 @@
               >
                 <i class="fa-solid fa-diagram-project" />
                 {{ view.name }}
+              </button>
+              <button
+                class="notebook-sidebar__icon-btn"
+                title="Share this view"
+                @click="shareView(view)"
+              >
+                <i class="fa-solid fa-share-nodes" />
               </button>
               <button
                 class="notebook-sidebar__icon-btn"
@@ -403,16 +420,37 @@
         {{ feedback }}
       </div>
     </div>
+
+    <!-- Share a saved view: fixed-overlay modals rendered from the sidebar. -->
+    <ShareModal
+      :visible="showShareModal"
+      :export-code="shareExportCode"
+      :export-code-length="shareExportCodeLength"
+      :hidden-count="shareHiddenCount"
+      @close="showShareModal = false"
+    />
+    <!-- Open a shared view: "Open now" restores into the active cell,
+         "Save to notebook" files it as a saved view. -->
+    <ImportModal
+      :visible="showImportModal"
+      @close="showImportModal = false"
+      @open="handleSharedViewOpen"
+      @save="handleSharedViewSave"
+    />
   </div>
 </template>
 
 <script>
 import { mapStores } from "pinia";
 import { useNotebookStore } from "../store/NotebookStore";
+import ShareModal from "./ShellView/ShareModal.vue";
+import ImportModal from "./ShellView/ImportModal.vue";
+import { parseExportCode } from "../utils/InvestigationState";
 import {
   commitPageDraft,
   decideCreateCommit,
   decideRenameCommit,
+  buildSharedViewName,
   CONFIRM_AUTO_REVERT_MS,
 } from "../utils/NotebookSidebarLogic";
 
@@ -443,7 +481,11 @@ const NOTE_PREVIEW_LENGTH = 60;
  */
 export default {
   name: "NotebookSidebar",
-  emits: ["select-entity", "save-view", "restore-view", "toggle"],
+  components: {
+    ShareModal,
+    ImportModal,
+  },
+  emits: ["select-entity", "save-view", "restore-view", "open-shared-view", "toggle"],
   data() {
     return {
       expanded: false,
@@ -471,6 +513,14 @@ export default {
       confirmTimer: null,
       importMessage: "",
       importOk: false,
+      // Share/open-shared-view modals. Share carries a single saved view's HKS
+      // code; the open-shared-view modal accepts a pasted code and either opens
+      // it into the active cell or files it as a saved view.
+      showShareModal: false,
+      shareExportCode: "",
+      shareExportCodeLength: 0,
+      shareHiddenCount: 0,
+      showImportModal: false,
       // Transient status line for delegated actions that couldn't run (e.g.
       // no graph open to save a view from). Auto-clears after a few seconds.
       feedback: "",
@@ -759,6 +809,41 @@ export default {
     restoreView(view) {
       if (!view || !view.state) return;
       this.$emit("restore-view", view);
+    },
+
+    // ---- Share / open a shared view --------------------------------------
+    // A saved view's `state` IS its HKS share code, so sharing a row just hands
+    // that code to the share modal (parsing it back only to count hidden
+    // elements for the info line).
+    shareView(view) {
+      if (!view || !view.state) return;
+      const code = view.state;
+      this.shareExportCode = code;
+      this.shareExportCodeLength = code.length;
+      const parsed = parseExportCode(code);
+      const hidden = parsed && parsed.hiddenElements ? parsed.hiddenElements : null;
+      this.shareHiddenCount = hidden
+        ? Object.keys(hidden.nodes || {}).length + Object.keys(hidden.edges || {}).length
+        : 0;
+      this.showShareModal = true;
+    },
+    openImportModal() {
+      this.showImportModal = true;
+    },
+    // "Open now" from the shared-view modal: hand the parsed state up to
+    // MainLayout, which restores it into the active cell (same path as import).
+    handleSharedViewOpen(state) {
+      this.$emit("open-shared-view", state);
+    },
+    // "Save to notebook" from the shared-view modal: file the raw code as a
+    // saved view in the ACTIVE notebook without opening it. It appears in the
+    // saved-views list immediately (the store is reactive).
+    handleSharedViewSave(code) {
+      const name = buildSharedViewName(
+        this.notebookStore.savedViews.map((v) => v.name)
+      );
+      this.notebookStore.saveView(name, code);
+      this.showFeedback(`Saved "${name}" to this notebook.`);
     },
 
     // ---- Delegation feedback ---------------------------------------------

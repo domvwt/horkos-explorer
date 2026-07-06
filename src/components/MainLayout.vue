@@ -11,20 +11,6 @@
         </a>
 
         <div class="main-layout__header-actions">
-          <button
-            class="header-link"
-            @click="handleShare"
-          >
-            <i class="fa-solid fa-share-nodes" />
-            <span>Share</span>
-          </button>
-          <button
-            class="header-link"
-            @click="showImportInvestigationModal = true"
-          >
-            <i class="fa-solid fa-file-import" />
-            <span>Import</span>
-          </button>
           <a
             href="#privacy"
             class="header-link"
@@ -54,6 +40,7 @@
         @select-entity="handleNotebookSelectEntity"
         @save-view="handleNotebookSaveView"
         @restore-view="handleNotebookRestoreView"
+        @open-shared-view="handleOpenSharedView"
       />
       <div class="main-layout__main-container">
         <div class="container-fluid">
@@ -159,22 +146,6 @@
         </div>
       </div>
     </div>
-
-    <!-- Import Investigation Modal -->
-    <ImportModal
-      :visible="showImportInvestigationModal"
-      @close="showImportInvestigationModal = false"
-      @import="handleImportInvestigation"
-    />
-
-    <!-- Share Investigation Modal -->
-    <ShareModal
-      :visible="showShareModal"
-      :export-code="shareExportCode"
-      :export-code-length="shareExportCodeLength"
-      :hidden-count="shareHiddenCount"
-      @close="showShareModal = false"
-    />
   </div>
 </template>
 
@@ -184,11 +155,8 @@ import ShellMainView from "./ShellView/ShellMainView.vue";
 import SettingsMainView from "./SettingsView/SettingsMainView.vue"
 import ImporterMainView from "./ImporterView/ImporterMainView.vue";
 import PrivacyView from "./PrivacyView/PrivacyView.vue";
-import ImportModal from "./ShellView/ImportModal.vue";
-import ShareModal from "./ShellView/ShareModal.vue";
 import NotebookSidebar from "./NotebookSidebar.vue";
 import Axios from "@/utils/AxiosWrapper";
-import { generateExportCode } from "@/utils/InvestigationState";
 import { useSettingsStore } from "../store/SettingsStore";
 import { useModeStore } from "../store/ModeStore";
 import { useNotebookStore } from "../store/NotebookStore";
@@ -206,8 +174,6 @@ export default {
     SettingsMainView,
     ImporterMainView,
     PrivacyView,
-    ImportModal,
-    ShareModal,
     NotebookSidebar,
   },
   provide() {
@@ -228,11 +194,6 @@ export default {
     showShell: true,
     showSettings: false,
     showPrivacy: false,
-    showImportInvestigationModal: false,
-    showShareModal: false,
-    shareExportCode: '',
-    shareExportCodeLength: 0,
-    shareHiddenCount: 0,
     schema: null,
     isKuzuWasmInitialized: false,
     headerHeight: 0,
@@ -543,14 +504,15 @@ export default {
         this.$refs.shellView.redrawAllGraphs();
       }
     },
-    // Handle import investigation from header button
-    handleImportInvestigation(state) {
+    // Open a shared view (parsed HKS state) from the notebook sidebar's
+    // "Open now" action: restore it into the active cell.
+    handleOpenSharedView(state) {
       // Ensure we're on the shell view (and that the hash reflects it, so a
       // subsequent Privacy click always registers as a hash change).
       if (!this.showShell) {
         this.navigateTo('shell');
       }
-      // Delegate to ShellMainView to restore the investigation
+      // Delegate to ShellMainView to restore the shared view into a cell.
       this.$nextTick(() => {
         if (this.$refs.shellView) {
           this.$refs.shellView.handleImportInvestigation(state);
@@ -559,7 +521,7 @@ export default {
     },
     // ---- Notebook sidebar delegation ------------------------------------
     // The sidebar is owned by the shell but its graph actions must act on the
-    // live canvas inside a shell cell. Mirror the handleImportInvestigation
+    // live canvas inside a shell cell. Mirror the handleOpenSharedView
     // path: ensure we're on the shell view, then delegate to ShellMainView,
     // which reaches the active cell's ResultGraph. Each delegation returns
     // { ok, reason }; hand that back to the sidebar so a miss (e.g. the active
@@ -589,26 +551,6 @@ export default {
       this.notebookDelegate("restore-view", (shell) =>
         shell?.restoreNotebookView(view)
       );
-    },
-    // Handle share investigation from header button
-    handleShare() {
-      // Ensure we're on the shell view (and that the hash reflects it).
-      if (!this.showShell) {
-        this.navigateTo('shell');
-      }
-      this.$nextTick(() => {
-        const state = this.$refs.shellView?.getInvestigationState();
-        if (!state || !state.graphData?.nodes?.length) {
-          // No graph data to share - could show toast/alert
-          return;
-        }
-        const result = generateExportCode(state);
-        this.shareExportCode = result.code;
-        this.shareExportCodeLength = result.length;
-        this.shareHiddenCount = Object.keys(state.hiddenElements?.nodes || {}).length
-                              + Object.keys(state.hiddenElements?.edges || {}).length;
-        this.showShareModal = true;
-      });
     },
   },
 };

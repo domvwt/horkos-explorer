@@ -17,7 +17,8 @@
 
       <div class="import-modal-body">
         <p class="import-modal-description">
-          Paste an export code to restore a shared view.
+          Paste a share code to open a shared view, or save it to this notebook
+          for later.
         </p>
 
         <div class="import-code-container">
@@ -26,7 +27,7 @@
             v-model="importCode"
             class="form-control"
             rows="5"
-            placeholder="Paste export code here (HKS1:...:Z)"
+            placeholder="Paste share code here (HKS1:...:Z)"
             @paste="handlePaste"
           />
         </div>
@@ -44,7 +45,7 @@
         <div class="import-hint">
           <small class="text-muted">
             <i class="fa-solid fa-info-circle" />
-            Get an export code by clicking "Share view" on any graph, then copy the code.
+            Get a share code from the Share action on any saved view, then copy the code.
           </small>
         </div>
       </div>
@@ -57,17 +58,25 @@
           Cancel
         </button>
         <button
+          class="btn btn-outline-primary"
+          :disabled="!importCode.trim() || isImporting"
+          @click="saveToNotebook"
+        >
+          <i class="fa-solid fa-floppy-disk" />
+          Save to notebook
+        </button>
+        <button
           class="btn btn-primary"
           :disabled="!importCode.trim() || isImporting"
-          @click="importInvestigation"
+          @click="openSharedView"
         >
           <span v-if="isImporting">
             <i class="fa-solid fa-spinner fa-spin" />
-            Importing...
+            Opening…
           </span>
           <span v-else>
-            <i class="fa-solid fa-file-import" />
-            Import
+            <i class="fa-solid fa-diagram-project" />
+            Open now
           </span>
         </button>
       </div>
@@ -76,7 +85,17 @@
 </template>
 
 <script>
-import { parseExportCode } from "@/utils/InvestigationState";
+import { validateImportCode } from "@/utils/NotebookSidebarLogic";
+
+// Maps a validateImportCode() failure reason to the message shown under the
+// textarea. Kept out of the (pure, framework-free) logic module so copy lives
+// with the component.
+const ERROR_MESSAGES = {
+  empty: 'Please paste a share code.',
+  truncated: 'The share code looks truncated. Make sure you copied the whole code.',
+  invalid: 'Invalid share code. Make sure it starts with "HKS1:" and ends with ":Z".',
+  'no-data': 'This share code contains no graph data.',
+};
 
 export default {
   name: "ImportModal",
@@ -86,7 +105,7 @@ export default {
       required: true,
     },
   },
-  emits: ['close', 'import'],
+  emits: ['close', 'open', 'save'],
   data: () => ({
     importCode: '',
     errorMessage: '',
@@ -119,58 +138,55 @@ export default {
 
       const code = pastedText.trim();
 
-      // Check if it looks like a valid export code (must have both prefix and end marker)
+      // A complete, valid code auto-opens on paste (the primary action), matching
+      // the previous one-step behaviour.
       if (code.startsWith('HKS1:') && code.endsWith(':Z')) {
-        // Try to parse it
-        const state = parseExportCode(code);
-        if (state && state.minimalNodes && state.minimalNodes.length > 0) {
-          // Valid code - auto-import
+        const result = validateImportCode(code);
+        if (result.ok) {
           event.preventDefault();
           this.importCode = code;
           this.$nextTick(() => {
-            this.importInvestigation();
+            this.openSharedView();
           });
         }
       }
     },
-    importInvestigation() {
+    // Shared validation for both footer actions. On failure it surfaces the
+    // message and returns null; on success it returns { code, state }.
+    validate() {
       this.errorMessage = '';
-
-      const code = this.importCode.trim();
-      if (!code) {
-        this.errorMessage = 'Please paste an export code.';
-        return;
+      const result = validateImportCode(this.importCode);
+      if (!result.ok) {
+        this.errorMessage = ERROR_MESSAGES[result.reason] || ERROR_MESSAGES.invalid;
+        return null;
       }
-
-      // Check for truncated code (missing end marker)
-      if (code.startsWith('HKS1:') && !code.endsWith(':Z')) {
-        this.errorMessage = 'Export code appears to be truncated. Make sure you copied the entire code.';
-        return;
-      }
-
-      // Parse the export code
-      const state = parseExportCode(code);
-      if (!state) {
-        this.errorMessage = 'Invalid export code. Make sure it starts with "HKS1:" and ends with ":Z".';
-        return;
-      }
-
-      // Validate minimum state
-      if (!state.minimalNodes || state.minimalNodes.length === 0) {
-        this.errorMessage = 'This export code contains no graph data.';
-        return;
-      }
+      return result;
+    },
+    // "Open now": restore the shared view into the active cell (existing flow).
+    openSharedView() {
+      const result = this.validate();
+      if (!result) return;
 
       this.isImporting = true;
 
-      // Emit the parsed state to parent
-      this.$emit('import', state);
+      // Emit the parsed state to the parent to restore into the active cell.
+      this.$emit('open', result.state);
 
       // Close modal after a brief delay
       setTimeout(() => {
         this.isImporting = false;
         this.$emit('close');
       }, 500);
+    },
+    // "Save to notebook": file the code as a saved view WITHOUT opening it.
+    // Emits the raw wire code (a saved view stores it verbatim); the sidebar
+    // persists it into the active notebook.
+    saveToNotebook() {
+      const result = this.validate();
+      if (!result) return;
+
+      this.$emit('save', result.code);
+      this.$emit('close');
     },
   },
 };

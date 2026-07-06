@@ -17,7 +17,7 @@
 
       <div class="share-modal-body">
         <p class="share-modal-description">
-          Copy this code to share the current view. Paste it into the Open a shared view dialog to restore.
+          Copy this code to share this view. Paste it into the Open a shared view dialog to restore.
         </p>
 
         <div class="share-code-container">

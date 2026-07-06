@@ -1,3 +1,5 @@
+import { parseExportCode } from "./InvestigationState";
+
 /**
  * Pure, framework-free helpers behind the notebook sidebar.
  *
@@ -140,4 +142,65 @@ export function selectEntityThroughCell(graph, target) {
   }
   graph.handleSelectPinnedEntity({ label: target.label, pk: target.pk });
   return { ok: true, reason: null };
+}
+
+/**
+ * Base name for a shared view filed into the notebook without a user-typed name.
+ */
+export const SHARED_VIEW_BASE_NAME = "Shared view";
+
+/**
+ * Validate a pasted HKS share code for the "Open a shared view" flow, shared by
+ * both actions on a valid code ("Open now" and "Save to notebook"). Parses the
+ * code once and normalises the outcome to a { ok, reason } shape the UI maps to
+ * a message. On success it hands back both the trimmed `code` (the wire string,
+ * which a saved view stores verbatim) and the parsed `state` (used to restore
+ * into the active cell).
+ *
+ * Reasons:
+ *   - "empty"      nothing pasted;
+ *   - "truncated"  an HKS1 code missing its ":Z" end marker (likely a partial
+ *                  copy);
+ *   - "invalid"    doesn't parse as an HKS code;
+ *   - "no-data"    parses but carries no graph nodes.
+ */
+export function validateImportCode(rawCode) {
+  const code = typeof rawCode === "string" ? rawCode.trim() : "";
+  if (!code) {
+    return { ok: false, reason: "empty" };
+  }
+  if (code.startsWith("HKS1:") && !code.endsWith(":Z")) {
+    return { ok: false, reason: "truncated" };
+  }
+  const state = parseExportCode(code);
+  if (!state) {
+    return { ok: false, reason: "invalid" };
+  }
+  if (!state.minimalNodes || state.minimalNodes.length === 0) {
+    return { ok: false, reason: "no-data" };
+  }
+  return { ok: true, reason: null, code, state };
+}
+
+/**
+ * Pick a non-colliding name for a shared view filed straight into the notebook
+ * (the "Save to notebook" action files a code without opening it, so there is no
+ * user-typed name to fall back on). Returns SHARED_VIEW_BASE_NAME, or the first
+ * free "Shared view (n)" when the base — or an earlier suffix — is taken, so two
+ * saved shared views stay distinguishable in the list.
+ */
+export function buildSharedViewName(existingNames) {
+  const taken = new Set(
+    Array.isArray(existingNames)
+      ? existingNames.filter((n) => typeof n === "string")
+      : []
+  );
+  if (!taken.has(SHARED_VIEW_BASE_NAME)) {
+    return SHARED_VIEW_BASE_NAME;
+  }
+  let n = 2;
+  while (taken.has(`${SHARED_VIEW_BASE_NAME} (${n})`)) {
+    n += 1;
+  }
+  return `${SHARED_VIEW_BASE_NAME} (${n})`;
 }
