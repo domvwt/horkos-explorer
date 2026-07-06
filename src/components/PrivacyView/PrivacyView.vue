@@ -68,8 +68,8 @@
             or other identifiers before relying on it.
           </li>
           <li>
-            We show, for every entity, the source records it was built from, so you can trace each
-            fact back to the originating Companies House or PSC filing.
+            We show, for every entity, which public registers it was built from — Companies House
+            and/or the PSC register — so you can check the underlying data at source.
           </li>
         </ul>
       </section>
