@@ -39,6 +39,7 @@
 <script>
 import { mapStores } from "pinia";
 import { useNotebookStore } from "../../store/NotebookStore";
+import { useSettingsStore } from "../../store/SettingsStore";
 
 /**
  * Pin/unpin + per-entity note affordance for the selected graph node.
@@ -71,7 +72,7 @@ export default {
     };
   },
   computed: {
-    ...mapStores(useNotebookStore),
+    ...mapStores(useNotebookStore, useSettingsStore),
     // The cluster id is the primary key; fall back to the "id" property.
     pk() {
       const pkProp = this.properties.find((p) => p.isPrimaryKey);
@@ -79,11 +80,20 @@ export default {
       const idProp = this.properties.find((p) => p.name === "id");
       return idProp && idProp.value != null ? String(idProp.value) : null;
     },
+    // Resolve a human-readable caption through the same per-entity-type mapping
+    // ResultGraph.entityDisplayName uses: settingsForLabel(type).label names the
+    // property to caption on (Address -> "full", Person/Company -> "name", else
+    // the pk's property). Fall back to the raw pk for an unknown/virtual type or
+    // a missing/NULL caption property.
     displayName() {
-      const nameProp =
-        this.properties.find((p) => p.name === "name") ||
-        this.properties.find((p) => p.name === "full");
-      return nameProp && nameProp.value != null ? String(nameProp.value) : this.pk;
+      const labelProp = this.settingsStore.settingsForLabel(this.entityType)?.label;
+      if (labelProp) {
+        const named = this.properties.find((p) => p.name === labelProp);
+        if (named && named.value != null && named.value !== "NULL") {
+          return String(named.value);
+        }
+      }
+      return this.pk;
     },
     pinned() {
       return this.notebookStore.isPinned(this.entityType, this.pk);
@@ -124,12 +134,12 @@ export default {
       if (!pk) return;
       const saved = this.notebookStore.noteFor(entityType, pk);
       if (this.draftNote.trim() === saved) return;
-      this.notebookStore.setNote(entityType, pk, this.draftNote);
+      this.notebookStore.setNote(entityType, pk, this.draftNote, this.displayName);
     },
     commitNote() {
       if (!this.pk) return;
       if (this.draftNote.trim() === this.savedNote) return;
-      this.notebookStore.setNote(this.entityType, this.pk, this.draftNote);
+      this.notebookStore.setNote(this.entityType, this.pk, this.draftNote, this.displayName);
     },
   },
 };

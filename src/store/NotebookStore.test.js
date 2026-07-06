@@ -124,6 +124,35 @@ describe("notes", () => {
     store.setNote("Person", "p1", "   ");
     expect(store.noteFor("Person", "p1")).toBe("");
   });
+
+  it("records a captured display name alongside the note", () => {
+    const store = freshStore();
+    store.setNote("Company", "c1", "flagged", "Acme Ltd");
+    expect(store.activeNotebook.noteLabels["Company|c1"]).toBe("Acme Ltd");
+  });
+
+  it("works without a name (legacy 3-arg call) and stores no label", () => {
+    const store = freshStore();
+    store.setNote("Company", "c1", "flagged");
+    expect(store.noteFor("Company", "c1")).toBe("flagged");
+    expect(store.activeNotebook.noteLabels["Company|c1"]).toBeUndefined();
+  });
+
+  it("clearing a note removes both the note and its captured label", () => {
+    const store = freshStore();
+    store.setNote("Company", "c1", "flagged", "Acme Ltd");
+    store.setNote("Company", "c1", "");
+    expect(store.noteFor("Company", "c1")).toBe("");
+    expect(store.activeNotebook.notes["Company|c1"]).toBeUndefined();
+    expect(store.activeNotebook.noteLabels["Company|c1"]).toBeUndefined();
+  });
+
+  it("clears a stale label when a note is re-set without a name", () => {
+    const store = freshStore();
+    store.setNote("Company", "c1", "flagged", "Acme Ltd");
+    store.setNote("Company", "c1", "still flagged");
+    expect(store.activeNotebook.noteLabels["Company|c1"]).toBeUndefined();
+  });
 });
 
 describe("saved views", () => {
@@ -538,8 +567,72 @@ describe("orphanNotes", () => {
     store.setNote("Company", "c9", "look into this shell");
     expect(store.orphanNoteCount).toBe(1);
     expect(store.orphanNotes).toEqual([
-      { key: "Company|c9", label: "Company", pk: "c9", note: "look into this shell" },
+      { key: "Company|c9", label: "Company", pk: "c9", name: "", note: "look into this shell" },
     ]);
+  });
+
+  it("surfaces the captured display name when one was recorded", () => {
+    const store = freshStore();
+    store.setNote("Company", "c9", "look into this shell", "Shell Holdings Ltd");
+    expect(store.orphanNotes[0].name).toBe("Shell Holdings Ltd");
+  });
+
+  it("falls back to an empty name for a legacy note with no captured label", () => {
+    const store = freshStore();
+    store.setNote("Company", "c9", "look into this shell");
+    expect(store.orphanNotes[0].name).toBe("");
+  });
+
+  it("keeps orphan membership correct as a noted entity is pinned then unpinned", () => {
+    const store = freshStore();
+    store.setNote("Person", "p2", "watch", "Bob Smith");
+    expect(store.orphanNoteCount).toBe(1);
+    expect(store.orphanNotes[0].name).toBe("Bob Smith");
+    store.pin("Person", "p2", "Bob Smith");
+    expect(store.orphanNoteCount).toBe(0);
+    store.unpin("Person", "p2");
+    expect(store.orphanNoteCount).toBe(1);
+    expect(store.orphanNotes[0].name).toBe("Bob Smith");
+  });
+
+  it("round-trips the captured name through export/import", () => {
+    const store = freshStore();
+    store.setNote("Company", "c9", "look into this shell", "Shell Holdings Ltd");
+    const exported = store.exportNotebook();
+    expect(exported.notebook.noteLabels["Company|c9"]).toBe("Shell Holdings Ltd");
+
+    const target = freshStore();
+    const result = target.importNotebook(JSON.stringify(exported));
+    expect(result.ok).toBe(true);
+    expect(target.orphanNotes[0].name).toBe("Shell Holdings Ltd");
+  });
+
+  it("drops a stored noteLabels entry with no matching note on load", () => {
+    const store = freshStore();
+    const id = store.activeNotebook.id;
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        v: 1,
+        activeId: id,
+        notebooks: [
+          {
+            id,
+            name: "N",
+            page: "",
+            pins: {},
+            notes: { "Company|c1": "kept" },
+            // Orphan label: no note at this key → dropped on load.
+            noteLabels: { "Company|c1": "Kept Co", "Company|ghost": "Ghost Co" },
+            savedViews: [],
+          },
+        ],
+      })
+    );
+    const reloaded = freshStore();
+    reloaded.load();
+    expect(reloaded.activeNotebook.noteLabels["Company|c1"]).toBe("Kept Co");
+    expect(reloaded.activeNotebook.noteLabels["Company|ghost"]).toBeUndefined();
   });
 
   it("moves a note between pinned and orphan as the pin toggles", () => {

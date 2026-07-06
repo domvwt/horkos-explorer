@@ -66,6 +66,7 @@ function emptyNotebook(name) {
     page: "",
     pins: {},
     notes: {},
+    noteLabels: {},
     savedViews: [],
   };
 }
@@ -127,6 +128,17 @@ function sanitizeNotebook(raw, { preserveId = true } = {}) {
     for (const [key, value] of Object.entries(raw.notes)) {
       if (typeof value === "string" && value.length > 0) {
         nb.notes[key] = value;
+      }
+    }
+  }
+
+  // Captured display labels for notes, parallel to nb.notes. Only keep a label
+  // whose note survived sanitisation above — a label with no note is orphaned
+  // data (e.g. a hand-edited / hostile file) and is dropped.
+  if (raw.noteLabels && typeof raw.noteLabels === "object") {
+    for (const [key, value] of Object.entries(raw.noteLabels)) {
+      if (typeof value === "string" && value.length > 0 && key in nb.notes) {
+        nb.noteLabels[key] = value;
       }
     }
   }
@@ -243,6 +255,7 @@ export const useNotebookStore = defineStore("notebook", {
     orphanNotes() {
       const nb = this.activeNotebook;
       const pins = nb.pins;
+      const noteLabels = nb.noteLabels || {};
       const out = [];
       for (const [key, note] of Object.entries(nb.notes)) {
         if (pins[key]) continue; // pinned — surfaced in the pins list instead
@@ -252,6 +265,7 @@ export const useNotebookStore = defineStore("notebook", {
           key,
           label: key.slice(0, sep),
           pk: key.slice(sep + 1),
+          name: noteLabels[key] || "",
           note,
         });
       }
@@ -419,16 +433,26 @@ export const useNotebookStore = defineStore("notebook", {
     /**
      * Set (or clear, when text is empty) the note for an entity. Notes are
      * kept independently of pins so a note can annotate an entity that isn't
-     * currently pinned, but the UI surfaces them together.
+     * currently pinned, but the UI surfaces them together. `name` is the
+     * entity's display label captured at note-creation time (parallel to
+     * nb.noteLabels), so the sidebar can show a human-readable caption instead
+     * of the raw pk; it's optional and legacy 3-arg callers still work.
      */
-    setNote(label, pk, text) {
+    setNote(label, pk, text, name) {
       const key = entityKey(label, pk);
       const trimmed = (text || "").trim();
       const nb = this.activeNotebook;
       if (trimmed) {
         nb.notes[key] = trimmed;
+        if (typeof name === "string" && name) {
+          nb.noteLabels[key] = name;
+        } else {
+          // No usable label — clear any stale one so it can't outlive its note.
+          delete nb.noteLabels[key];
+        }
       } else {
         delete nb.notes[key];
+        delete nb.noteLabels[key];
       }
       this.touchActive();
       this.persist();
@@ -485,6 +509,7 @@ export const useNotebookStore = defineStore("notebook", {
           page: nb.page,
           pins: nb.pins,
           notes: nb.notes,
+          noteLabels: nb.noteLabels,
           savedViews: nb.savedViews,
         },
       };

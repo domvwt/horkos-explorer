@@ -231,11 +231,11 @@
             >
               <button
                 class="notebook-sidebar__entity-name"
-                :title="`Select ${orphan.pk}`"
+                :title="`Select ${orphan.name || orphan.pk}`"
                 @click="selectEntity(orphan.label, orphan.pk)"
               >
                 <span class="notebook-sidebar__entity-type">{{ orphan.label }}</span>
-                {{ orphan.pk }}
+                {{ orphan.name || orphan.pk }}
                 <span class="notebook-sidebar__note-preview">{{ notePreview(orphan.note) }}</span>
               </button>
               <button
