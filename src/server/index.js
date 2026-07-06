@@ -21,6 +21,16 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim())
   : null;
 
+// Last-resort safety net: any promise rejection that escapes a route handler
+// or async callback would, under Node's default, terminate the process (and,
+// on Express 4.x, leave the client hanging). Log it and keep serving so one
+// unguarded async path cannot take the whole server down. Individual handlers
+// still catch their own errors and send a proper response (see State.js et al.).
+process.on("unhandledRejection", (reason) => {
+  const detail = reason instanceof Error ? reason.stack || reason.message : reason;
+  logger.error(`Unhandled promise rejection (ignored to keep server alive): ${detail}`);
+});
+
 process.on("SIGINT", () => {
   logger.info("SIGINT received, exiting");
   duckdb.close();

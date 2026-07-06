@@ -72,7 +72,11 @@ router.post("/", QueryValidator.middleware(database), async (req, res) => {
       });
     }
   }
-  const conn = database.getConnection();
+  // Validate the request synchronously BEFORE acquiring a connection. Every
+  // early return below must run before getConnection() so a rejected request
+  // never increments the admission-control counter (and the connection's use
+  // count) without a matching release — otherwise repeated 400s would leak the
+  // in-flight slot until the server permanently sheds all load.
   const query = req.body.query;
   if (!query || !typeof query === "string") {
     return res
@@ -88,6 +92,19 @@ router.post("/", QueryValidator.middleware(database), async (req, res) => {
   const params = req.body.params;
   if (params && !typeof params === "object") {
     return res.status(400).send({ error: "Params must be an object" });
+  }
+  let conn;
+  try {
+    conn = database.getConnection();
+  } catch (err) {
+    // Admission control sheds load once too many queries are in flight. Map the
+    // LoadShedError to its carried HTTP status (503) so the client can back off,
+    // rather than letting it escape as an unhandled rejection (hangs the client).
+    return sendErrorResponse(res, err, {
+      status: err && err.status ? err.status : 503,
+      clientMessage: "Server is at capacity, please retry shortly",
+      logContext: "Cypher query admission control shed load",
+    });
   }
   const progressCallback = (pipelineProgress, numPipelinesFinished, numPipelines) => {
     queryMap.set(req.body.uuid, {
@@ -112,6 +129,11 @@ router.post("/", QueryValidator.middleware(database), async (req, res) => {
       const currentSchema = await database.getSchema();
       isSchemaChanged =
         JSON.stringify(schema) !== JSON.stringify(currentSchema);
+      if (isSchemaChanged) {
+        // A DDL statement changed the schema; drop any cached schema so the
+        // next read recomputes it (no-op unless a schema is currently cached).
+        database.invalidateSchemaCache();
+      }
     }
     if (sessionDb && req.body.updateHistory) {
       try {
