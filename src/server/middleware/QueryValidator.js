@@ -552,8 +552,11 @@ class QueryValidator {
       throw new Error('Query must be a non-empty string');
     }
 
-    // Only enforce validation in READ_ONLY mode
-    if (mode !== MODES.READ_ONLY) {
+    // Fail CLOSED on mode: enforce the allowlist for EVERY mode except the
+    // explicit local-dev READ_WRITE. DEMO, WASM, an unset/typo/garbage mode all
+    // fall through to enforcement so a mis-set MODE on a live backend cannot
+    // re-open LOAD FROM / in-query CALL.
+    if (mode === MODES.READ_WRITE) {
       return true;
     }
 

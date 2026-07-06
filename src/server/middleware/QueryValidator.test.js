@@ -146,9 +146,52 @@ describe("full validateQuery — backtick DoS payload is rejected (AC#2)", () =>
     );
   });
 
-  it("is a no-op (allows anything) outside READ_ONLY mode", () => {
+  it("is a no-op (allows anything) under READ_WRITE mode", () => {
     const payload = backtickNestingPayload(160);
     expect(QueryValidator.validateQuery(payload, MODES.READ_WRITE)).toBe(true);
+  });
+});
+
+describe("allowlist fails CLOSED on mode — enforce unless READ_WRITE (TASK-168)", () => {
+  // A LOAD FROM is a live local-file read (SSRF-ish) that Kuzu's read-only DB
+  // open does NOT block; the allowlist is the ONLY control. It must be rejected
+  // for every mode that is not the explicit local-dev READ_WRITE.
+  const LOAD_FROM_QUERY = "LOAD FROM 'somefile.csv' RETURN *";
+
+  it("REJECTS LOAD FROM under READ_ONLY mode", () => {
+    expect(() =>
+      QueryValidator.validateQuery(LOAD_FROM_QUERY, MODES.READ_ONLY)
+    ).toThrow();
+  });
+
+  it("REJECTS LOAD FROM under DEMO mode (fail closed)", () => {
+    expect(() =>
+      QueryValidator.validateQuery(LOAD_FROM_QUERY, MODES.DEMO)
+    ).toThrow();
+  });
+
+  it("REJECTS LOAD FROM under WASM mode (fail closed)", () => {
+    expect(() =>
+      QueryValidator.validateQuery(LOAD_FROM_QUERY, MODES.WASM)
+    ).toThrow();
+  });
+
+  it("REJECTS LOAD FROM under an unrecognised/garbage mode (fail closed)", () => {
+    expect(() =>
+      QueryValidator.validateQuery(LOAD_FROM_QUERY, "NOT_A_REAL_MODE")
+    ).toThrow();
+  });
+
+  it("ALLOWS LOAD FROM under READ_WRITE mode (validation short-circuits to true)", () => {
+    expect(QueryValidator.validateQuery(LOAD_FROM_QUERY, MODES.READ_WRITE)).toBe(
+      true
+    );
+  });
+
+  it("still ALLOWS a benign read query under READ_ONLY (allowlist not broken)", () => {
+    expect(QueryValidator.validateQuery("MATCH (n) RETURN n", READ_ONLY)).toBe(
+      true
+    );
   });
 });
 
