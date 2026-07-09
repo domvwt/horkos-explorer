@@ -773,17 +773,6 @@ export default {
       this.$emit("select-entity", { label, pk });
     },
 
-    /**
-     * Pre-fill the "save current view" input with a suggested name (called by
-     * ResultGraph via MainLayout's provided prefill fn after a successful find,
-     * so a single Save click saves the connection view). Does NOT auto-expand
-     * the sidebar — a collapsed sidebar keeps the draft ready for when it opens.
-     */
-    prefillViewName(name) {
-      if (typeof name !== "string" || !name.trim()) return;
-      this.newViewName = name.trim();
-    },
-
     // ---- Saved views ----------------------------------------------------
     // Save/restore need the live G6 canvas, which lives in a shell cell, so
     // both are emitted up to MainLayout, which delegates through

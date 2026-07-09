@@ -176,17 +176,6 @@ export default {
     PrivacyView,
     NotebookSidebar,
   },
-  provide() {
-    return {
-      // Injected by a deeply-nested ResultGraph so a successful "find
-      // connection" can pre-fill the notebook sidebar's save-view input (a
-      // reverse path that avoids threading a prop through ShellCell /
-      // ResultContainer). Resolves the sidebar ref at call time.
-      prefillSaveViewName: (name) => {
-        this.$refs.notebookSidebar?.prefillViewName(name);
-      },
-    };
-  },
   data: () => ({
     accessModeModal: null,
     showSchema: false,
