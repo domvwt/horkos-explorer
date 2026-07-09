@@ -377,6 +377,41 @@
               <i class="fa-solid fa-check-circle" />
               Fully Expanded
             </button>
+
+            <!-- Clear the whole canvas: two-stage inline danger confirm
+                 (no native dialog), auto-reverting after a few idle seconds. -->
+            <template v-if="confirmingClearCanvas">
+              <div class="result-graph__clear-confirm">
+                <span class="result-graph__clear-confirm-msg">
+                  Clear the whole canvas? This can be undone.
+                </span>
+                <div class="result-graph__clear-confirm-actions">
+                  <button
+                    ref="clearCanvasConfirmBtn"
+                    class="btn btn-sm btn-danger"
+                    @click="clearCanvas()"
+                  >
+                    Clear canvas
+                  </button>
+                  <button
+                    class="btn btn-sm btn-outline-secondary"
+                    @click="cancelClearCanvas()"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </template>
+            <button
+              v-else
+              ref="clearCanvasBtn"
+              class="btn btn-sm btn-outline-danger"
+              title="Remove all nodes and edges from the canvas"
+              @click="startClearCanvas()"
+            >
+              <i class="fa-solid fa-trash-can" />
+              Clear Canvas
+            </button>
           </div>
 
           <!-- Node Counts -->
@@ -534,6 +569,11 @@ import Axios from "@/utils/AxiosWrapper";
 import { createGraphConfig, getLayoutConfig } from "./graphConfig";
 import { generateExportCode, parseExportCode } from "@/utils/InvestigationState";
 
+// Idle time before an armed inline danger-confirm (Clear Canvas) auto-reverts
+// to its trigger button, so a stray "clear" can't linger armed. Matches the
+// notebook sidebar's two-stage confirm timing.
+const CONFIRM_AUTO_REVERT_MS = 5000;
+
 export default {
   name: "ResultGraph",
   components: {
@@ -605,6 +645,10 @@ export default {
       },
     },
     draggedNodeDebounceTimer: null,
+    // Two-stage inline confirm for the Clear Canvas action (no native dialog),
+    // auto-reverting after a few idle seconds via clearCanvasConfirmTimer.
+    confirmingClearCanvas: false,
+    clearCanvasConfirmTimer: null,
     expansions: [],
     originalNodeIds: new Set(),
     // Maps nodeId -> expansionId that first introduced this node
@@ -978,6 +1022,9 @@ export default {
     if (this.connectionSearchTimer) {
       window.clearTimeout(this.connectionSearchTimer);
     }
+    if (this.clearCanvasConfirmTimer) {
+      window.clearTimeout(this.clearCanvasConfirmTimer);
+    }
   },
   methods: {
     copyToClipboard(text) {
@@ -1346,6 +1393,96 @@ export default {
 
       this.deselectAll();
       this.$nextTick(() => this.updateNeighborCounts());
+    },
+
+    // ---- Clear Canvas: two-stage inline confirm (no native dialog) ---------
+    // First click arms the confirm and starts an auto-revert timer so a stray
+    // "clear" can't linger armed; the second click actually clears the canvas.
+    startClearCanvas() {
+      this.confirmingClearCanvas = true;
+      this.armClearCanvasAutoRevert();
+      this.$nextTick(() => this.$refs.clearCanvasConfirmBtn?.focus());
+    },
+    cancelClearCanvas() {
+      this.clearClearCanvasTimer();
+      this.confirmingClearCanvas = false;
+      this.$nextTick(() => this.$refs.clearCanvasBtn?.focus());
+    },
+    armClearCanvasAutoRevert() {
+      this.clearClearCanvasTimer();
+      this.clearCanvasConfirmTimer = window.setTimeout(() => {
+        this.confirmingClearCanvas = false;
+        this.clearCanvasConfirmTimer = null;
+      }, CONFIRM_AUTO_REVERT_MS);
+    },
+    clearClearCanvasTimer() {
+      if (this.clearCanvasConfirmTimer) {
+        window.clearTimeout(this.clearCanvasConfirmTimer);
+        this.clearCanvasConfirmTimer = null;
+      }
+    },
+
+    /**
+     * Remove ALL nodes and edges from the canvas in one operation, undoable as a
+     * SINGLE 'remove' history entry (the same type single-node removal pushes),
+     * so one undo restores everything (nodes, edges, expansions, nodeIntroducedBy,
+     * counts and pin badges). Clears the CANVAS only — the notebook (pins, notes,
+     * saved views) is never touched. Uses the canonical removeFromGraph path.
+     */
+    async clearCanvas() {
+      if (!this.g6Graph) {
+        this.clearClearCanvasTimer();
+        this.confirmingClearCanvas = false;
+        return;
+      }
+
+      const currentNodes = this.g6Graph.getNodeData() || [];
+      const currentEdges = this.g6Graph.getEdgeData() || [];
+
+      // Nothing on canvas: just dismiss the confirm, no history entry.
+      if (currentNodes.length === 0) {
+        this.clearClearCanvasTimer();
+        this.confirmingClearCanvas = false;
+        return;
+      }
+
+      // Capture full state BEFORE removal so a single undo can restore it.
+      // Shape matches what undoRemove/redoRemove consume.
+      const removedNodes = JSON.parse(JSON.stringify(currentNodes));
+      const removedEdges = JSON.parse(JSON.stringify(currentEdges));
+      const removedExpansions = JSON.parse(JSON.stringify(this.expansions));
+      const removedNodeIntroducedBy = JSON.parse(JSON.stringify(this.nodeIntroducedBy));
+
+      const allNodeIds = new Set(currentNodes.map((n) => n.id));
+      const allEdgeIds = new Set(currentEdges.map((e) => e.id));
+
+      await this.removeFromGraph(allNodeIds, allEdgeIds);
+
+      // Everything is gone: reset live tracking. The captured copies above live
+      // in the history entry for undo.
+      this.expansions = [];
+      this.nodeIntroducedBy = {};
+
+      // One history entry — a single Ctrl+Z restores the whole canvas.
+      this.historyManager.push({
+        type: 'remove',
+        data: {
+          removedNodes,
+          removedEdges,
+          removedNodeIntroducedBy,
+          removedExpansions,
+        }
+      });
+
+      // Housekeeping (mirrors removeNodeById / undoRemove): clear selection and
+      // re-sync pin badges to "none on canvas" and counts to 0.
+      this.deselectAll();
+      this.clearClearCanvasTimer();
+      this.confirmingClearCanvas = false;
+      this.$nextTick(() => {
+        this.$refs.connectedEntitiesPanel?.refreshInGraphStatus();
+        this.updateNeighborCounts();
+      });
     },
 
     /**
@@ -4271,6 +4408,32 @@ export default {
       flex-direction: column;
       gap: 0.5rem;
       margin-bottom: 1rem;
+    }
+
+    .result-graph__clear-confirm {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      padding: 0.5rem 0.6rem;
+      border: 1px solid var(--bs-danger, #e15759);
+      border-radius: 0.375rem;
+      background-color: var(--bs-body-bg);
+    }
+
+    .result-graph__clear-confirm-msg {
+      font-size: 0.8rem;
+      line-height: 1.35;
+      color: var(--bs-body-text);
+    }
+
+    .result-graph__clear-confirm-actions {
+      display: flex;
+      gap: 0.35rem;
+
+      .btn {
+        flex: 1;
+        white-space: nowrap;
+      }
     }
 
     .result-graph__summary-section {
