@@ -4,9 +4,8 @@
  * The panel prioritises the ENTITY, not the edge: a neighbour reachable by
  * several relationships (multiple types, or parallel edges of one type) is one
  * connected entity, shown on a single row, counted once. These helpers do the
- * per-edge row shaping, the entity-first collapsing, and the bounded
- * "expand all" selection without any DB or DOM access, so they are
- * unit-testable in isolation.
+ * per-edge row shaping and the entity-first collapsing without any DB or DOM
+ * access, so they are unit-testable in isolation.
  */
 
 import {
@@ -138,56 +137,4 @@ export function collapseByEntity(edgeRows) {
   });
 
   return Array.from(byId.values());
-}
-
-/**
- * Select the distinct connected entities to add when "expand all" is invoked,
- * bounded by the shared neighbour-fetch cap.
- *
- * Only entities not already on the canvas are candidates. They are ordered
- * exactly as the visible list shows them top-to-bottom: groups sorted by raw
- * entity label, then case-insensitive locale-aware display name within the
- * group, then id as a deterministic tie-break — the panel's grouped display
- * uses this same (label, name, id) comparator, so a capped expansion takes
- * the first N entities the user actually sees. When the candidate count
- * exceeds `cap`, the first `cap` are returned and `truncated` is set so the
- * caller can show a non-blocking notice.
- *
- * @param {Array<Object>} entities - Collapsed distinct entities (from
- *   collapseByEntity). Each needs `id`, `displayName`, `label`, and `inGraph`.
- * @param {number} cap - The maximum number to expand in one action (the
- *   existing neighbour-fetch bound). Fractional values are floored;
- *   invalid or non-positive values select nothing.
- * @returns {{ toAdd: Array<Object>, totalCandidates: number, truncated: boolean }}
- */
-export function selectEntitiesToExpand(entities, cap) {
-  const empty = { toAdd: [], totalCandidates: 0, truncated: false };
-  if (!Array.isArray(entities)) {
-    return empty;
-  }
-  const bound = Math.floor(Number(cap));
-  if (!Number.isFinite(bound) || bound <= 0) {
-    return empty;
-  }
-
-  const candidates = entities.filter((e) => e && !e.inGraph);
-  const sorted = candidates.slice().sort((a, b) => {
-    const byLabel = String(a.label || "").localeCompare(String(b.label || ""));
-    if (byLabel !== 0) {
-      return byLabel;
-    }
-    const nameA = (a.displayName || "").toLowerCase();
-    const nameB = (b.displayName || "").toLowerCase();
-    const byName = nameA.localeCompare(nameB);
-    if (byName !== 0) {
-      return byName;
-    }
-    return String(a.id).localeCompare(String(b.id));
-  });
-
-  return {
-    toAdd: sorted.slice(0, bound),
-    totalCandidates: candidates.length,
-    truncated: candidates.length > bound,
-  };
 }

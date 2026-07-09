@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   buildEdgeRows,
   collapseByEntity,
-  selectEntitiesToExpand,
 } from "./ConnectedEntities";
 
 // --- buildEdgeRows fixtures -------------------------------------------------
@@ -190,112 +189,5 @@ describe("collapseByEntity", () => {
     expect(collapseByEntity(null)).toEqual([]);
     const rows = [edgeRow({ id: undefined }), edgeRow({ id: null }), edgeRow({ id: "1_10" })];
     expect(collapseByEntity(rows)).toHaveLength(1);
-  });
-});
-
-describe("selectEntitiesToExpand", () => {
-  function entity(id, name, inGraph = false, label = "Company") {
-    return { id, displayName: name, inGraph, label };
-  }
-
-  it("selects only entities not already on the canvas", () => {
-    const entities = [
-      entity("1_1", "Alpha", true),
-      entity("1_2", "Bravo", false),
-      entity("1_3", "Charlie", false),
-    ];
-    const { toAdd, totalCandidates, truncated } = selectEntitiesToExpand(entities, 10);
-    expect(toAdd.map(e => e.id)).toEqual(["1_2", "1_3"]);
-    expect(totalCandidates).toBe(2);
-    expect(truncated).toBe(false);
-  });
-
-  it("orders within a group by the display comparator: case-insensitive locale-aware name, then id", () => {
-    const entities = [
-      entity("1_3", "Charlie"),
-      entity("1_1", "alpha"),
-      entity("1_2", "Bravo"),
-    ];
-    const { toAdd } = selectEntitiesToExpand(entities, 10);
-    expect(toAdd.map(e => e.displayName)).toEqual(["alpha", "Bravo", "Charlie"]);
-  });
-
-  it("respects the GROUP dimension of the display order: earlier group beats earlier name", () => {
-    // The visible list groups by raw label ("Address" sorts before "Company")
-    // and only then sorts names within each group. A capped selection must
-    // take the visible top entity — the Address — over an alphabetically
-    // earlier company name further down the panel.
-    const entities = [
-      entity("1_1", "Aardvark Ltd", false, "Company"),
-      entity("1_2", "Zebra Street", false, "Address"),
-    ];
-    const { toAdd } = selectEntitiesToExpand(entities, 1);
-    expect(toAdd.map(e => e.displayName)).toEqual(["Zebra Street"]);
-  });
-
-  it("sorts accented names the way the visible list does, not by code units", () => {
-    // Code-unit order would put "Zed" before "Émile" (é > z in UTF-16);
-    // localeCompare — the visible list's within-group comparator — puts Émile
-    // first, so a capped selection takes the first entities the user sees.
-    const entities = [entity("1_1", "Zed"), entity("1_2", "Émile")];
-    const { toAdd } = selectEntitiesToExpand(entities, 1);
-    expect(toAdd.map(e => e.displayName)).toEqual(["Émile"]);
-  });
-
-  it("breaks display-name ties by id for a stable order", () => {
-    const entities = [
-      entity("1_20", "Same"),
-      entity("1_3", "Same"),
-      entity("1_1", "Same"),
-    ];
-    const { toAdd } = selectEntitiesToExpand(entities, 10);
-    expect(toAdd.map(e => e.id)).toEqual(["1_1", "1_20", "1_3"]);
-  });
-
-  it("caps the selection at the bound and flags truncation", () => {
-    const entities = Array.from({ length: 5 }, (_, i) => entity(`1_${i}`, `Node ${i}`));
-    const { toAdd, totalCandidates, truncated } = selectEntitiesToExpand(entities, 3);
-    expect(toAdd).toHaveLength(3);
-    expect(totalCandidates).toBe(5);
-    expect(truncated).toBe(true);
-  });
-
-  it("does not flag truncation when candidates exactly equal the bound", () => {
-    const entities = Array.from({ length: 3 }, (_, i) => entity(`1_${i}`, `Node ${i}`));
-    const { truncated } = selectEntitiesToExpand(entities, 3);
-    expect(truncated).toBe(false);
-  });
-
-  it("caps deterministically so the same first-N are chosen regardless of input order", () => {
-    const forward = [entity("1_1", "Alpha"), entity("1_2", "Bravo"), entity("1_3", "Charlie")];
-    const reversed = forward.slice().reverse();
-    const a = selectEntitiesToExpand(forward, 2).toAdd.map(e => e.id);
-    const b = selectEntitiesToExpand(reversed, 2).toAdd.map(e => e.id);
-    expect(a).toEqual(b);
-    expect(a).toEqual(["1_1", "1_2"]);
-  });
-
-  it("floors a fractional cap (the settings number input allows one)", () => {
-    const entities = Array.from({ length: 5 }, (_, i) => entity(`1_${i}`, `Node ${i}`));
-    const { toAdd, truncated } = selectEntitiesToExpand(entities, 3.7);
-    expect(toAdd).toHaveLength(3);
-    expect(truncated).toBe(true);
-  });
-
-  it("returns an empty selection for a non-positive or invalid cap", () => {
-    const entities = [entity("1_1", "Alpha")];
-    expect(selectEntitiesToExpand(entities, 0).toAdd).toEqual([]);
-    expect(selectEntitiesToExpand(entities, -5).toAdd).toEqual([]);
-    expect(selectEntitiesToExpand(entities, 0.9).toAdd).toEqual([]);
-    expect(selectEntitiesToExpand(entities, NaN).toAdd).toEqual([]);
-    expect(selectEntitiesToExpand(entities, Infinity).toAdd).toEqual([]);
-  });
-
-  it("tolerates a non-array entity input", () => {
-    expect(selectEntitiesToExpand(null, 10)).toEqual({
-      toAdd: [],
-      totalCandidates: 0,
-      truncated: false,
-    });
   });
 });
