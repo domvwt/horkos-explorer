@@ -405,7 +405,7 @@
             <button
               v-else
               ref="clearCanvasBtn"
-              class="btn btn-sm btn-outline-danger"
+              class="btn btn-sm btn-outline-secondary result-graph__clear-btn"
               title="Remove all nodes and edges from the canvas"
               @click="startClearCanvas()"
             >
@@ -4733,6 +4733,18 @@ export default {
         &:hover {
           opacity: 0.9;
         }
+      }
+
+    }
+
+    // Destructive triggers stay as quiet as their neutral siblings and only
+    // adopt the danger colour once the pointer/focus reaches them. The double
+    // class out-specifies the shared button:hover rule above.
+    .btn.result-graph__clear-btn {
+      &:hover,
+      &:focus-visible {
+        color: var(--bs-danger, #e15759);
+        background-color: rgba(var(--bs-danger-rgb, 225, 87, 89), 0.08);
       }
     }
 

@@ -59,8 +59,10 @@ export function formatNodeLabel(rawNode, schema, settingsStore) {
     return NODE_TYPE_DISPLAY_NAMES[rawNode._label];
   }
 
+  // Settings are derived from the schema after it loads; a label can lack an
+  // entry if a result is formatted before that happens.
   const nodeSettings = settingsStore.settingsForLabel(rawNode._label);
-  const nodeLabelProp = nodeSettings.label;
+  const nodeLabelProp = nodeSettings?.label;
 
   if (!nodeLabelProp || rawNode[nodeLabelProp] === undefined) {
     return "";
@@ -91,7 +93,7 @@ export function formatNodeLabel(rawNode, schema, settingsStore) {
  * @param {number} [options.fy] - Fixed Y position for data (pinning)
  * @param {string} [options.formattedLabel] - Pre-formatted label (if not provided, uses raw value)
  * @param {Object} [options.rawProperties] - Original raw properties to store (if different from rawNode)
- * @returns {Object} G6 node object
+ * @returns {Object|null} G6 node object, or null when the node is invalid or has no visual settings
  */
 export function buildG6Node(nodeId, rawNode, settingsStore, options = {}) {
   if (!rawNode || !rawNode._label) {
@@ -100,6 +102,10 @@ export function buildG6Node(nodeId, rawNode, settingsStore, options = {}) {
   }
 
   const nodeSettings = settingsStore.settingsForLabel(rawNode._label);
+  if (!nodeSettings?.g6Settings) {
+    console.warn('buildG6Node: no visual settings for label:', rawNode._label);
+    return null;
+  }
   const nodeFill = nodeSettings.g6Settings.style.fill;
 
   // Cap node size to prevent extreme zoom when there are few nodes
@@ -167,7 +173,7 @@ export function buildG6Node(nodeId, rawNode, settingsStore, options = {}) {
  * @param {Object} schema - Database schema for property types (optional but recommended)
  * @param {Object} [options] - Optional settings
  * @param {number} [options.overlapIndex=1] - Index for overlapping edge offset (1-based)
- * @returns {Object} G6 edge object
+ * @returns {Object|null} G6 edge object, or null when the rel is invalid or has no visual settings
  */
 export function buildG6Edge(edgeId, sourceId, targetId, rawRel, settingsStore, schema, options = {}) {
   if (!rawRel || !rawRel._label) {
@@ -177,6 +183,10 @@ export function buildG6Edge(edgeId, sourceId, targetId, rawRel, settingsStore, s
 
   const overlapIndex = options.overlapIndex ?? 1;
   const relSettings = settingsStore.settingsForLabel(rawRel._label);
+  if (!relSettings?.g6Settings) {
+    console.warn('buildG6Edge: no visual settings for label:', rawRel._label);
+    return null;
+  }
 
   // Build label with proper formatting
   let relLabel = "";
@@ -256,6 +266,19 @@ export function buildG6Edge(edgeId, sourceId, targetId, rawRel, settingsStore, s
  *   - edgesMap: Object mapping edge ID to edge object
  */
 export function extractGraphFromQueryResult(queryResult, schema, settingsStore, performanceSettings) {
+  // The schema arrives asynchronously at boot (and can fail to load outright);
+  // a result drawn before then degrades to an empty graph instead of crashing.
+  if (!schema?.nodeTables || !schema?.relTables) {
+    console.warn('extractGraphFromQueryResult: schema not loaded, skipping graph extraction');
+    return {
+      counters: { node: {}, rel: {}, total: { node: 0, rel: 0 } },
+      nodes: [],
+      edges: [],
+      nodesMap: {},
+      edgesMap: {},
+    };
+  }
+
   const rows = queryResult.rows;
   const dataTypes = queryResult.dataTypes;
   const nodes = {};

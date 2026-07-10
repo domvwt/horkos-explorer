@@ -316,8 +316,23 @@ export default {
         schema = await Kuzu.getSchema();
       }
       else {
-        const response = await Axios.get("/api/schema");
-        schema = response.data;
+        // Without the schema every graph draw fails, and the boot-time fetch
+        // can be dropped by a flaky connection or busy dev server, so retry
+        // briefly before giving up.
+        const maxAttempts = 4;
+        for (let attempt = 1; ; attempt++) {
+          try {
+            const response = await Axios.get("/api/schema");
+            schema = response.data;
+            break;
+          } catch (error) {
+            if (attempt >= maxAttempts) {
+              throw error;
+            }
+            console.warn(`getSchema: attempt ${attempt} failed, retrying:`, error.message);
+            await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+          }
+        }
       }
       this.schema = schema;
     },
