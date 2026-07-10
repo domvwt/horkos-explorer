@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Public deployment safety**: Read-only mode with query validation
 - **Multi-user support**: Stateless architecture for concurrent users
-- **Investigation workflow**: Tailored for financial crime investigations and entity resolution
+- **Investigation workflow**: Tailored for corporate-transparency investigation and research workflows
 - **External integration**: Quick access to external resources (Companies House, Google, Wikipedia, Maps)
 
 See [`research-notes/README.md`](research-notes/README.md) for detailed architecture research, security analysis, and implementation roadmap.
