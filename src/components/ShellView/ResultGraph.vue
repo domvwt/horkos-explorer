@@ -347,6 +347,7 @@
           <ResultDisclaimer
             v-if="clickedIsNode"
             :entity-type="clickedLabel"
+            :is-unlinked-psc-company="clickedIsUnlinkedPscCompany"
           />
         </div>
         <div v-else>
@@ -563,7 +564,8 @@ import EntityPinPanel from "./EntityPinPanel.vue";
 import {
   nodeTypeDisplayName,
   relTypeDisplayName,
-  hideInternalProperties
+  hideInternalProperties,
+  isPscOnlyProvenance
 } from "../../utils/DisplayPolicy";
 import Axios from "@/utils/AxiosWrapper";
 import { createGraphConfig, getLayoutConfig } from "./graphConfig";
@@ -631,6 +633,7 @@ export default {
     clickedId: null,
     clickedLabel: "",
     clickedIsNode: false,
+    clickedIsUnlinkedPscCompany: false,
     isCurrentNodeExpanded: false,
     delta: 0.05, // used for zooming, copied from G6
     zoomSensitivity: 2, // used for zooming, copied from G6
@@ -1591,6 +1594,10 @@ export default {
       this.clickedId = model.id;
       this.clickedProperties = ValueFormatter.filterAndBeautifyProperties(properties, this.schema);
       this.clickedIsNode = !(properties._src && properties._dst);
+      // A PSC-only Company is a corporate controller with no linked Companies
+      // House record; flag it so the disclaimer can explain the standalone node.
+      this.clickedIsUnlinkedPscCompany =
+        label === "Company" && isPscOnlyProvenance(properties);
       this.expandedProperties = {}; // Reset expanded properties when clicking a new node/edge
       if (this.clickedIsNode) {
         this.isCurrentNodeExpanded = this.isNeighborExpanded(model);
@@ -2524,6 +2531,7 @@ export default {
       this.clickedId = null;
       this.clickedProperties = [];
       this.clickedIsNode = false;
+      this.clickedIsUnlinkedPscCompany = false;
     },
 
     toggleSidePanel() {

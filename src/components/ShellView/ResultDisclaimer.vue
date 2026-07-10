@@ -18,6 +18,11 @@
       class="result-disclaimer__body"
     >
       <p>{{ matchWarning }}</p>
+      <p v-if="isUnlinkedPscCompany">
+        This controller has no linked Companies House record. Controllers that are foreign,
+        dissolved, or otherwise unregistered have no live UK record to connect to — a standalone
+        node here is expected, not a missing link.
+      </p>
       <p>
         Control type and ownership band shown are <strong>our interpretation</strong> of the
         register's nature-of-control text and may be misread — check the underlying filing.
@@ -42,6 +47,12 @@ export default {
     entityType: {
       type: String,
       default: "",
+    },
+    // True when the entity is a PSC-only corporate controller (a Company with no
+    // linked Companies House record) — adds a neutral data-quality caveat.
+    isUnlinkedPscCompany: {
+      type: Boolean,
+      default: false,
     },
   },
   data() {

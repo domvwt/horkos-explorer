@@ -267,3 +267,23 @@ export function countRecordsBySystem(records) {
   });
   return recordCounts;
 }
+
+/**
+ * Whether an entity's provenance is PSC-only — it appears in the PSC register
+ * but has no Companies House record. Only meaningful for Company nodes: such a
+ * company is a corporate controller with no linked CH entity (foreign,
+ * dissolved, or otherwise unregistered), so it renders as a standalone node.
+ * The caller gates on entity type; this helper only inspects provenance.
+ *
+ * Fails safe to false when provenance is missing/unparseable (no caveat).
+ *
+ * @param {Object} properties - Raw entity properties (with `source_records`).
+ * @returns {boolean}
+ */
+export function isPscOnlyProvenance(properties) {
+  if (!properties) {
+    return false;
+  }
+  const counts = countRecordsBySystem(properties.source_records);
+  return (counts.psc || 0) > 0 && (counts.companies_house || 0) === 0;
+}

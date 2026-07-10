@@ -12,6 +12,7 @@ import {
   extractOwnershipShare,
   sourceSystemDisplayName,
   countRecordsBySystem,
+  isPscOnlyProvenance,
 } from "./DisplayPolicy";
 
 describe("internal-field filter", () => {
@@ -278,5 +279,34 @@ describe("source-system record counting", () => {
     expect(countRecordsBySystem("NULL")).toEqual({});
     expect(countRecordsBySystem(null)).toEqual({});
     expect(countRecordsBySystem([])).toEqual({});
+  });
+});
+
+describe("PSC-only provenance detection", () => {
+  it("is true when provenance is PSC-only (no Companies House record)", () => {
+    expect(
+      isPscOnlyProvenance({ source_records: "['psc:1', 'psc:2']" })
+    ).toBe(true);
+    expect(
+      isPscOnlyProvenance({ source_records: ["psc:1"] })
+    ).toBe(true);
+  });
+
+  it("is false when a Companies House record is present", () => {
+    expect(
+      isPscOnlyProvenance({ source_records: "['companies-house:1']" })
+    ).toBe(false);
+    // CH present alongside PSC (linked controller) — still no caveat.
+    expect(
+      isPscOnlyProvenance({ source_records: "['companies-house:1', 'psc:2']" })
+    ).toBe(false);
+  });
+
+  it("is false when provenance is missing, empty, or unparseable", () => {
+    expect(isPscOnlyProvenance({})).toBe(false);
+    expect(isPscOnlyProvenance({ source_records: "NULL" })).toBe(false);
+    expect(isPscOnlyProvenance({ source_records: [] })).toBe(false);
+    expect(isPscOnlyProvenance(null)).toBe(false);
+    expect(isPscOnlyProvenance(undefined)).toBe(false);
   });
 });
