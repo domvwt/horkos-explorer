@@ -977,15 +977,25 @@ export default {
       }
     }, true); // Use capture phase to intercept before G6
 
-    // Keyboard shortcuts for undo/redo
+    // Keyboard shortcuts for undo/redo. Gated on isGraphVisible() for the same
+    // reason as Delete below: multiple ResultGraph instances stay mounted at
+    // once (hidden Table/Code tabs, other notebook cells) and each keeps its own
+    // live global keydown listener + history stack. Without the gate a Ctrl+Z
+    // meant for the graph the user is looking at would ALSO fire undo on every
+    // hidden cell, silently mutating graphs off-screen — and the add-via-search
+    // path (which can leave focus in the search box of the visible cell) would
+    // undo against the wrong instance. Unlike Delete this deliberately does NOT
+    // gate on isTypingContext(): Ctrl+Z must still undo the graph while focus is
+    // in the node-search box, since a picked suggestion is added additively and
+    // the user expects Ctrl+Z to remove it.
     this.handleKeydown = (e) => {
       // Ctrl+Z (or Cmd+Z on Mac) for undo
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey && this.isGraphVisible()) {
         e.preventDefault();
         this.undo();
       }
       // Ctrl+Y or Ctrl+Shift+Z (or Cmd variants) for redo
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey)) && this.isGraphVisible()) {
         e.preventDefault();
         this.redo();
       }
