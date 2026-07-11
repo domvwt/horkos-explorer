@@ -24,10 +24,18 @@ const ownershipSettings = {
   g6Settings: { size: 2, style: { stroke: "#999999" } },
 };
 
+// Hub nodes carry a build-time `name` from the pipeline; their configured label
+// property resolves to "name" the same way real entity types' do.
+const hubSettings = {
+  label: "name",
+  g6Settings: { size: 30, style: { fill: "#bbbbbb", lineWidth: 1 } },
+};
+
 const schema = {
   nodeTables: [
     { name: "Person", properties: [{ name: "name", type: "STRING" }] },
     { name: "Company", properties: [{ name: "name", type: "STRING" }] },
+    { name: "VirtualHub", properties: [{ name: "name", type: "STRING" }] },
   ],
   relTables: [{ name: "PersonOwnership", properties: [] }],
 };
@@ -62,6 +70,28 @@ describe("formatNodeLabel", () => {
 
   it("returns an empty string when the label has no settings entry", () => {
     expect(formatNodeLabel(rawPerson, schema, makeSettingsStore())).toBe("");
+  });
+
+  it("shows a hub node's representative name, not the cluster id", () => {
+    const rawHub = {
+      _id: { table: 3, offset: 0 },
+      _label: "VirtualHub",
+      id: "hub_cluster_42",
+      name: "John Smith",
+    };
+    const store = makeSettingsStore({ VirtualHub: hubSettings });
+    expect(formatNodeLabel(rawHub, schema, store)).toBe("John Smith");
+  });
+
+  it("falls back to the type display name for a hub with no name (legacy graph)", () => {
+    const rawHub = {
+      _id: { table: 3, offset: 0 },
+      _label: "VirtualHub",
+      id: "hub_cluster_42",
+      name: null,
+    };
+    const store = makeSettingsStore({ VirtualHub: hubSettings });
+    expect(formatNodeLabel(rawHub, schema, store)).toBe("Possible Matches");
   });
 });
 

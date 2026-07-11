@@ -53,32 +53,37 @@ export function formatNodeLabel(rawNode, schema, settingsStore) {
     return "";
   }
 
-  // Internal node tables (VirtualHub) carry no human-readable property —
-  // label them with their plain-English type name instead of the cluster id.
-  if (NODE_TYPE_DISPLAY_NAMES[rawNode._label]) {
-    return NODE_TYPE_DISPLAY_NAMES[rawNode._label];
-  }
-
   // Settings are derived from the schema after it loads; a label can lack an
   // entry if a result is formatted before that happens.
   const nodeSettings = settingsStore.settingsForLabel(rawNode._label);
   const nodeLabelProp = nodeSettings?.label;
 
-  if (!nodeLabelProp || rawNode[nodeLabelProp] === undefined) {
-    return "";
-  }
-
-  // Find property type from schema for proper formatting
-  const nodeTable = schema?.nodeTables?.find((table) => table.name === rawNode._label);
-  if (nodeTable) {
-    const property = nodeTable.properties.find((p) => p.name === nodeLabelProp);
-    if (property) {
-      return String(ValueFormatter.beautifyValue(rawNode[nodeLabelProp], property.type));
+  // Prefer the configured label property (a hub's build-time `name`, a
+  // Person/Company name, an Address `full`) so a representative label shows
+  // rather than the raw cluster id. This runs BEFORE the type-name fallback so
+  // internal node tables (VirtualHub) that now carry a `name` display it.
+  if (nodeLabelProp && rawNode[nodeLabelProp] !== undefined && rawNode[nodeLabelProp] !== null) {
+    // Find the property type from the schema for proper formatting.
+    const nodeTable = schema?.nodeTables?.find((table) => table.name === rawNode._label);
+    if (nodeTable) {
+      const property = nodeTable.properties.find((p) => p.name === nodeLabelProp);
+      if (property) {
+        return String(ValueFormatter.beautifyValue(rawNode[nodeLabelProp], property.type));
+      }
     }
+    // Fallback to string conversion if no schema info.
+    return String(rawNode[nodeLabelProp]);
   }
 
-  // Fallback to string conversion if no schema info
-  return String(rawNode[nodeLabelProp]);
+  // No label-property value: for internal node tables (VirtualHub), fall back to
+  // the plain-English type name rather than the cluster id — this covers graphs
+  // built before the pipeline emitted a hub `name`.
+  if (NODE_TYPE_DISPLAY_NAMES[rawNode._label]) {
+    return NODE_TYPE_DISPLAY_NAMES[rawNode._label];
+  }
+
+  // Settings not loaded yet, or a real entity type with no label value.
+  return "";
 }
 
 /**

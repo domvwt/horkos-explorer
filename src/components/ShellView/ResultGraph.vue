@@ -754,14 +754,21 @@ export default {
       if (!this.clickedIsNode) {
         return relTypeDisplayName(this.clickedLabel);
       }
-      // Internal node tables (VirtualHub) have no human-readable property
-      if (nodeTypeDisplayName(this.clickedLabel) !== this.clickedLabel) {
-        return nodeTypeDisplayName(this.clickedLabel);
-      }
-      const labelProp = this.settingsStore.settingsForLabel(this.clickedLabel).label;
-      const named = this.clickedProperties.find(p => p.name === labelProp);
+      // Prefer the configured label property so a representative name shows
+      // rather than the raw cluster id. Internal node tables (VirtualHub) now
+      // carry a build-time `name`, so this resolves for them too.
+      const labelProp = this.settingsStore.settingsForLabel(this.clickedLabel)?.label;
+      const named = labelProp
+        ? this.clickedProperties.find(p => p.name === labelProp)
+        : null;
       if (named && named.value && named.value !== 'NULL') {
         return named.value;
+      }
+      // No label value: fall back to the plain-English type name for internal
+      // node tables (covers hubs in graphs built before the pipeline emitted a
+      // `name`), otherwise the primary key.
+      if (nodeTypeDisplayName(this.clickedLabel) !== this.clickedLabel) {
+        return nodeTypeDisplayName(this.clickedLabel);
       }
       const pk = this.clickedProperties.find(p => p.isPrimaryKey);
       return pk ? pk.value : nodeTypeDisplayName(this.clickedLabel);
