@@ -10,8 +10,7 @@
             class="form-control"
             :style="{
               backgroundColor: `${getColor()} !important`,
-              color: '#FFFFFF',
-              textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
+              color: inkForBackground(getColor()),
             }"
           >
         </div>
@@ -168,7 +167,6 @@
               <span
                 v-if="property.isPrimaryKey"
                 class="badge bg-[var(--bs-body-accent)]"
-                :style="{ textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000' }"
               >PK</span>
             </td>
             <td v-if="!property.isEditing">
@@ -217,6 +215,7 @@ import { mapStores } from 'pinia'
 import SchemaPropertyEditCell from "./SchemaPropertyEditCell.vue";
 import { DATA_TYPES, PLACEHOLDER_NODE_TABLE, PLACEHOLDER_REL_TABLE } from "../../utils/Constants";
 import { v4 as uuidv4 } from "uuid";
+import { inkForBackground } from "../../utils/ChipContrast";
 export default {
   name: "SchemaSidebarAddView",
   components: {
@@ -319,6 +318,8 @@ export default {
     this.currProperties.push(primaryKey);
   },
   methods: {
+    // Legible ink for chips/inputs filled with an entity colour.
+    inkForBackground,
     getColor(label) {
       if (!label) {
         return this.isNode ?
@@ -393,9 +394,10 @@ export default {
           color: "#000000",
         };
       }
+      const color = this.getColor(value);
       return {
-        backgroundColor: this.getColor(value),
-        color: "#ffffff",
+        backgroundColor: color,
+        color: inkForBackground(color),
       };
     },
     processCurrConnectivity() {

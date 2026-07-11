@@ -1016,16 +1016,6 @@ export default {
     min-width: 0;
   }
 
-  .badge {
-    display: inline-block;
-    background-color: var(--bs-body-bg-accent) !important;
-    color: #fff !important;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    vertical-align: middle;
-  }
-
   .schema_side-panel__wrapper {
     width: 360px;
     height: 100%;

@@ -276,6 +276,48 @@ In `Database.js`:
 
 The access mode (`READ_ONLY`, `READ_WRITE`, etc.) is determined at server startup and cannot be changed at runtime without restarting the server.
 
+## UI Style Conventions
+
+The app aims for a minimal, quiet visual language. Every UI change must conform;
+when touching a surface that predates these rules, bring it into line.
+
+1. **Button hierarchy** — exactly three tiers, nothing else:
+   - *Solid primary* (`btn-primary`): reserved for a page's single main action
+     (e.g. Search). Never more than one per surface.
+   - *Boxed neutral* (`btn-outline-secondary` style): genuine panel actions the
+     user is expected to click in normal flow (e.g. Expand Graph).
+   - *Quiet text/icon actions*: everything secondary, rare, or undoable —
+     hover-highlighted text or icon, no permanent box or border.
+2. **Colour budget** — the blue accent appears at most once per surface. Red is
+   never a resting state: it exists only inside open menus and armed two-stage
+   confirms. Semantic state colours (success/warn/danger) are not decoration.
+3. **Reversible actions get undo, not friction.** If an action is one undo away
+   from recovered, it is a single quiet click plus a toast that mentions undo —
+   no confirm stage, no danger styling. Two-stage inline confirms (never native
+   `window.confirm`/`prompt`) are reserved for genuinely unrecoverable actions
+   (deleting notebooks, wiping storage).
+4. **Rare actions live in menus.** Lifecycle/backup actions (rename, export,
+   import, delete, wipe) belong in a small dropdown menu, not as permanently
+   visible buttons. Cautionary copy travels with the action it describes
+   (caption inside the menu), never as standing panel text.
+5. **A disabled button is a status, not an action** — render statuses as plain
+   captions instead of unclickable buttons.
+6. **Chips and badges**: no text-shadow outline hacks. Entity-type colours come
+   from the shared canvas palette so panels and canvas stay in sync. Render an
+   entity chip with `chipStyle()` (`src/utils/ChipContrast.js`) — a light
+   colour-mix wash of the entity colour over the theme background with ink that
+   is mostly body-text plus a whisper of the hue, so it stays legible and
+   theme-adaptive with no forced ink. Where a control must be filled with the
+   raw entity colour instead (e.g. the schema editor's coloured `<select>`/name
+   inputs), pick the ink with `inkForBackground()` (YIQ: dark ink on light
+   fills, white on dark) rather than a fixed colour.
+7. **List rows reveal actions on hover/focus-within** (unpin, share, delete);
+   the resting state of a list is just its content.
+8. **Section headers are micro-labels** (small uppercase, letterspaced,
+   secondary colour), not bold headings with hairline rules.
+9. **Light theme is design-primary**; style through the CSS tokens in
+   `src/assets/global.css` so dark follows. Never hardcode greys.
+
 ## Security Considerations
 
 **CRITICAL for public deployment** (see `research-notes/README.md` for full details):

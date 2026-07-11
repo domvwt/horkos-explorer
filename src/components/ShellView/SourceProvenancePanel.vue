@@ -12,9 +12,7 @@
         v-for="source in sourceRecords"
         :key="source.id"
         class="badge source-badge"
-        :style="{
-          '--badge-bg-color': source.color,
-        }"
+        :style="chipStyle(source.color)"
         :title="source.count ? `${source.count} source record${source.count === 1 ? '' : 's'} from ${source.label}` : source.label"
       >
         {{ source.label }}<span
@@ -32,6 +30,7 @@ import {
   countRecordsBySystem,
   sourceSystemDisplayName,
 } from "../../utils/DisplayPolicy";
+import { chipStyle } from "../../utils/ChipContrast";
 
 export default {
   name: "SourceProvenancePanel",
@@ -102,7 +101,11 @@ export default {
       // Sort by predefined order
       return sourceBadges.sort((a, b) => a.order - b.order);
     }
-  }
+  },
+  methods: {
+    // Theme-adaptive chip wash for the source colour (shared util).
+    chipStyle,
+  },
 };
 </script>
 
@@ -135,11 +138,6 @@ export default {
       font-size: 0.8rem;
       font-weight: 500;
       border-radius: 0.375rem;
-    }
-
-    .source-badge {
-      background-color: var(--badge-bg-color) !important;
-      color: white !important;
     }
 
     .source-badge__count {

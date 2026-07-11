@@ -380,27 +380,38 @@ export default {
     // methods bridge MainLayout -> the active cell's ResultGraph, mirroring the
     // existing handleImportInvestigation delegation path.
 
-    // The ResultGraph of the active cell (or the first cell as a fallback), or
-    // null if no graph is mounted yet.
-    activeResultGraph() {
+    // The active cell (or the first cell as a fallback), or null if no cells
+    // are mounted. Prefer whichever cell's editor is currently active; fall
+    // back to the first cell so the sidebar always has a target (same
+    // convention as the import/restore flow, which uses cell 0).
+    activeCell() {
       if (this.shellCell.length === 0) return null;
-      // Prefer whichever cell's editor is currently active; fall back to the
-      // first cell so the sidebar always has a target (same convention as the
-      // import/restore flow, which uses cell 0).
-      let cell = null;
       for (let i = 0; i < this.shellCell.length; i++) {
         const c = this.$refs[this.getCellRef(i)]?.[0];
         if (c && c.isActive && c.isActive()) {
-          cell = c;
-          break;
+          return c;
         }
       }
-      if (!cell) {
-        cell = this.$refs[this.getCellRef(0)]?.[0] || null;
-      }
+      return this.$refs[this.getCellRef(0)]?.[0] || null;
+    },
+
+    // The ResultGraph of the active cell, or null if no graph is mounted yet.
+    activeResultGraph() {
+      const cell = this.activeCell();
       if (!cell) return null;
       const container = cell.$refs[cell.getRefName(0)]?.[0];
       return container?.$refs?.resultGraph || null;
+    },
+
+    // Resolve the active cell's ResultGraph for an action that should work on
+    // a fresh page, mounting an empty canvas first when no query has run yet
+    // (the cell's own ensureResultGraph stub-mount, same as a picked search
+    // suggestion). Returns null while a query is in flight — a stub-mount
+    // would race the pending response — or when no cell/graph is available.
+    async ensureActiveResultGraph() {
+      const cell = this.activeCell();
+      if (!cell || cell.isLoading) return null;
+      return await cell.ensureResultGraph();
     },
 
     // Each action routes through the unit-tested NotebookSidebarLogic helpers
@@ -410,18 +421,25 @@ export default {
 
     // Route a pinned/noted entity click to the active cell's pin-navigation
     // handler (it already handles on-canvas / hidden / off-canvas / not-found).
-    selectNotebookEntity({ label, pk }) {
-      return selectEntityThroughCell(this.activeResultGraph(), { label, pk });
+    // Bootstraps an empty canvas when no query has run yet, so a pin click on
+    // a fresh page seeds the graph instead of dead-ending on "no-graph".
+    async selectNotebookEntity({ label, pk }) {
+      const graph = await this.ensureActiveResultGraph();
+      return selectEntityThroughCell(graph, { label, pk });
     },
 
-    // Save the active cell's current canvas as a named saved view.
+    // Save the active cell's current canvas as a named saved view. No canvas
+    // bootstrap here: with no graph mounted there is nothing to save, and
+    // "no-graph" feedback is the honest outcome.
     saveNotebookView(name) {
       return saveViewThroughCell(this.activeResultGraph(), name);
     },
 
-    // Restore a saved view onto the active cell's canvas.
-    restoreNotebookView(view) {
-      return restoreViewThroughCell(this.activeResultGraph(), view);
+    // Restore a saved view onto the active cell's canvas, bootstrapping an
+    // empty canvas first so a saved view opens on a fresh page too.
+    async restoreNotebookView(view) {
+      const graph = await this.ensureActiveResultGraph();
+      return restoreViewThroughCell(graph, view);
     },
 
     /**

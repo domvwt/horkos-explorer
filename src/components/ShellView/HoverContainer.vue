@@ -172,7 +172,6 @@ export default {
       .pk-badge {
         font-size: 0.6rem;
         padding: 0.1rem 0.3rem;
-        text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
         color: white !important;
         flex-shrink: 0;
       }

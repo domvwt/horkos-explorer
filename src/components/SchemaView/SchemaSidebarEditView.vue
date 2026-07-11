@@ -10,8 +10,7 @@
             class="form-control"
             :style="{
               backgroundColor: ` ${getBackgroundColorForEditingTable()} !important`,
-              color: '#FFFFFF',
-              textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
+              color: inkForBackground(getBackgroundColorForEditingTable()),
             }"
           >
         </div>
@@ -44,11 +43,7 @@
         >
           <span
             class="badge bg-[var(--bs-body-accent)]"
-            :style="{
-              backgroundColor: ` ${getColor(conn.src)} !important`,
-              textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
-              color: '#FFFFFF',
-            }"
+            :style="chipStyle(getColor(conn.src))"
           >
             {{ conn.src }}
           </span>
@@ -57,11 +52,7 @@
           &nbsp;
           <span
             class="badge bg-[var(--bs-body-accent)]"
-            :style="{
-              backgroundColor: ` ${getColor(conn.dst)} !important`,
-              textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
-              color: '#FFFFFF',
-            }"
+            :style="chipStyle(getColor(conn.dst))"
           >
             {{ conn.dst }}
           </span>
@@ -144,7 +135,6 @@
               <span
                 v-if="property.isPrimaryKey"
                 class="badge bg-[var(--bs-body-accent)]"
-                :style="{ textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000', color: '#FFFFFF', }"
               >
                 PK </span>
             </td>
@@ -204,6 +194,7 @@ import { useSettingsStore } from "../../store/SettingsStore";
 import { mapStores } from 'pinia'
 import SchemaPropertyEditCell from "./SchemaPropertyEditCell.vue";
 import { DATA_TYPES, PLACEHOLDER_NODE_TABLE, PLACEHOLDER_REL_TABLE } from "../../utils/Constants";
+import { inkForBackground, chipStyle } from "../../utils/ChipContrast";
 export default {
   name: "SchemaSidebarEditView",
   components: {
@@ -283,6 +274,9 @@ export default {
     this.currLabel = this.label;
   },
   methods: {
+    // Legible ink for chips/inputs filled with an entity colour.
+    inkForBackground,
+    chipStyle,
     getTableFromSchema() {
       if (this.isEditingLabel) {
         if (this.isNode) {

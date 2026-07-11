@@ -4,11 +4,7 @@
       <h5>
         <span
           class="badge bg-[var(--bs-body-accent)]"
-          :style="{
-            backgroundColor: ` ${getColor(label)} !important`,
-            color: '#ffffff',
-            textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
-          }"
+          :style="chipStyle(getColor(label))"
         >
           {{ label }}
         </span>
@@ -22,11 +18,7 @@
         >
           <span
             class="badge bg-[var(--bs-body-accent)]"
-            :style="{
-              backgroundColor: ` ${getColor(conn.src)} !important`,
-              color: '#FFFFFF',
-              textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
-            }"
+            :style="chipStyle(getColor(conn.src))"
           >
             {{ conn.src }}
           </span>
@@ -35,11 +27,7 @@
           &nbsp;
           <span
             class="badge bg-[var(--bs-body-accent)]"
-            :style="{
-              backgroundColor: ` ${getColor(conn.dst)} !important`,
-              color: '#FFFFFF',
-              textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
-            }"
+            :style="chipStyle(getColor(conn.dst))"
           >
             {{ conn.dst }}
           </span>
@@ -76,7 +64,6 @@
               <span
                 v-if="property.isPrimaryKey"
                 class="badge bg-[var(--bs-body-accent)]"
-                :style="{ textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000', color: '#FFFFFF', }"
               >
                 PK </span>
             </td>
@@ -93,6 +80,7 @@
 <script lang="js">
 import { useSettingsStore } from "../../store/SettingsStore";
 import { mapStores } from 'pinia'
+import { chipStyle } from "../../utils/ChipContrast";
 export default {
   name: "SchemaSidebarReadOnlyView",
   props: {
@@ -133,6 +121,8 @@ export default {
     },
   },
   methods: {
+    // Theme-adaptive chip wash for entity colours (shared util).
+    chipStyle,
     getColor(label) {
       return this.settingsStore.colorForLabel(label);
     },

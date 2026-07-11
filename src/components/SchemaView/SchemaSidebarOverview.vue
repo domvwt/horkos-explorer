@@ -24,7 +24,7 @@
             <td scope="row">
               <span
                 class="badge bg-[var(--bs-body-accent)]"
-                :style="{ backgroundColor: `${getColor(nodeTable.name)} !important`, textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000', color: '#FFFFFF', }"
+                :style="chipStyle(getColor(nodeTable.name))"
               >{{
                 nodeTable.name }}</span>
               <br>
@@ -99,11 +99,7 @@
             >
               <span
                 class="badge bg-[var(--bs-body-accent)]"
-                :style="{
-                  backgroundColor: ` ${getColor(relTable.name)} !important`,
-                  color: '#FFFFFF',
-                  textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
-                }"
+                :style="chipStyle(getColor(relTable.name))"
               >
                 {{ relTable.name }}</span>
               <br>
@@ -160,6 +156,7 @@
 import { useSettingsStore } from "../../store/SettingsStore";
 import { useModeStore } from "../../store/ModeStore";
 import { mapStores } from 'pinia'
+import { chipStyle } from "../../utils/ChipContrast";
 export default {
   name: "SchemaSidebarOverview",
   props: {
@@ -173,6 +170,8 @@ export default {
     ...mapStores(useSettingsStore, useModeStore)
   },
   methods: {
+    // Theme-adaptive chip wash for entity colours (shared util).
+    chipStyle,
     getColor(label) {
       return this.settingsStore.colorForLabel(label);
     },
@@ -215,10 +214,10 @@ ul {
   margin-bottom: 4px;
 }
 
+/* Chip ink comes from the inline chipStyle() binding — no forced colour. */
 .badge {
   display: inline-block;
   max-width: 150px;
-  color: #fff !important;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

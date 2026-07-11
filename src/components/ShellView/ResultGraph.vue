@@ -68,9 +68,10 @@
           v-if="clickedIsNode"
           class="result-graph__actions"
         >
+          <!-- Pinned is a passive state, not an alert: the filled star and the
+               node's canvas badge carry it — the button itself stays neutral. -->
           <button
-            class="btn btn-sm"
-            :class="clickedNodePinned ? 'btn-warning' : 'btn-outline-secondary'"
+            class="btn btn-sm btn-outline-secondary"
             :title="clickedNodePinned ? 'Unpin this entity' : 'Pin this entity to your notebook'"
             @click="togglePinClickedNode()"
           >
@@ -244,11 +245,7 @@
               <span
                 v-if="clickedTypeDisplayName !== entityDisplayName"
                 class="badge entity-header-type-badge"
-                :style="{
-                  backgroundColor: `${getColor(clickedLabel)} !important`,
-                  color: 'white !important',
-                  textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
-                }"
+                :style="chipStyle(getColor(clickedLabel))"
               >{{ clickedTypeDisplayName }}</span>
             </div>
           </div>
@@ -351,7 +348,11 @@
           />
         </div>
         <div v-else>
-          <!-- Overview Actions -->
+          <!-- Overview Actions. When everything is expanded, the status
+               caption takes the Expand button's slot (same position, no
+               layout jump — a disabled button would be a status in costume).
+               Clear is a normal-flow neutral action: single click, no
+               confirm, and the toast points at undo. -->
           <div
             v-if="counters.total.node > 0"
             class="result-graph__actions"
@@ -369,49 +370,20 @@
                 Expand Graph
               </span>
             </button>
-            <button
+            <p
               v-else
+              class="result-graph__overview-status"
+            >
+              <i class="fa-solid fa-circle-check" />
+              Fully expanded
+            </p>
+            <button
               class="btn btn-sm btn-outline-secondary"
-              disabled
-              style="opacity: 0.6; cursor: not-allowed;"
+              title="Remove everything from the canvas — one undo restores it"
+              @click="clearCanvas()"
             >
-              <i class="fa-solid fa-check-circle" />
-              Fully Expanded
-            </button>
-
-            <!-- Clear the whole canvas: two-stage inline danger confirm
-                 (no native dialog), auto-reverting after a few idle seconds. -->
-            <template v-if="confirmingClearCanvas">
-              <div class="result-graph__clear-confirm">
-                <span class="result-graph__clear-confirm-msg">
-                  Clear the whole canvas? This can be undone.
-                </span>
-                <div class="result-graph__clear-confirm-actions">
-                  <button
-                    ref="clearCanvasConfirmBtn"
-                    class="btn btn-sm btn-danger"
-                    @click="clearCanvas()"
-                  >
-                    Clear canvas
-                  </button>
-                  <button
-                    class="btn btn-sm btn-outline-secondary"
-                    @click="cancelClearCanvas()"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            </template>
-            <button
-              v-else
-              ref="clearCanvasBtn"
-              class="btn btn-sm btn-outline-secondary result-graph__clear-btn"
-              title="Remove all nodes and edges from the canvas"
-              @click="startClearCanvas()"
-            >
-              <i class="fa-solid fa-trash-can" />
-              Clear Canvas
+              <i class="fa-solid fa-eraser" />
+              Clear canvas
             </button>
           </div>
 
@@ -428,8 +400,8 @@
                 >
                   <th scope="row">
                     <span
-                      class="badge bg-primary"
-                      :style="{ backgroundColor: `${getColor(label)} !important`, textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000', color: 'white !important' }"
+                      class="badge"
+                      :style="chipStyle(getColor(label))"
                     >{{ displayNodeType(label) }}</span>
                   </th>
                   <td>{{ counters.node[label] }}</td>
@@ -451,12 +423,8 @@
                 >
                   <th scope="row">
                     <span
-                      class="badge bg-primary"
-                      :style="{
-                        backgroundColor: `${getColor(rel.colorLabel)} !important`,
-                        color: 'white !important',
-                        textShadow: '-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000',
-                      }"
+                      class="badge"
+                      :style="chipStyle(getColor(rel.colorLabel))"
                     >{{ rel.display }}</span>
                   </th>
                   <td>{{ rel.count }}</td>
@@ -553,6 +521,7 @@ import { useModeStore } from "../../store/ModeStore";
 import { useNotebookStore } from "../../store/NotebookStore";
 import { mapStores } from 'pinia'
 import ValueFormatter from "../../utils/ValueFormatter";
+import { chipStyle } from "../../utils/ChipContrast";
 import HoverContainer from "./HoverContainer.vue";
 import GraphToast from "./GraphToast.vue";
 import ExternalLinksPanel from "./ExternalLinksPanel.vue";
@@ -570,11 +539,6 @@ import {
 import Axios from "@/utils/AxiosWrapper";
 import { createGraphConfig, getLayoutConfig } from "./graphConfig";
 import { generateExportCode, parseExportCode } from "@/utils/InvestigationState";
-
-// Idle time before an armed inline danger-confirm (Clear Canvas) auto-reverts
-// to its trigger button, so a stray "clear" can't linger armed. Matches the
-// notebook sidebar's two-stage confirm timing.
-const CONFIRM_AUTO_REVERT_MS = 5000;
 
 export default {
   name: "ResultGraph",
@@ -648,10 +612,6 @@ export default {
       },
     },
     draggedNodeDebounceTimer: null,
-    // Two-stage inline confirm for the Clear Canvas action (no native dialog),
-    // auto-reverting after a few idle seconds via clearCanvasConfirmTimer.
-    confirmingClearCanvas: false,
-    clearCanvasConfirmTimer: null,
     expansions: [],
     originalNodeIds: new Set(),
     // Maps nodeId -> expansionId that first introduced this node
@@ -1042,11 +1002,10 @@ export default {
     if (this.connectionSearchTimer) {
       window.clearTimeout(this.connectionSearchTimer);
     }
-    if (this.clearCanvasConfirmTimer) {
-      window.clearTimeout(this.clearCanvasConfirmTimer);
-    }
   },
   methods: {
+    // Chip background + legible ink for entity-type badges (shared util).
+    chipStyle,
     copyToClipboard(text) {
       navigator.clipboard?.writeText(text).catch(() => {
         document.execCommand('copy', false, text);
@@ -1415,54 +1374,25 @@ export default {
       this.$nextTick(() => this.updateNeighborCounts());
     },
 
-    // ---- Clear Canvas: two-stage inline confirm (no native dialog) ---------
-    // First click arms the confirm and starts an auto-revert timer so a stray
-    // "clear" can't linger armed; the second click actually clears the canvas.
-    startClearCanvas() {
-      this.confirmingClearCanvas = true;
-      this.armClearCanvasAutoRevert();
-      this.$nextTick(() => this.$refs.clearCanvasConfirmBtn?.focus());
-    },
-    cancelClearCanvas() {
-      this.clearClearCanvasTimer();
-      this.confirmingClearCanvas = false;
-      this.$nextTick(() => this.$refs.clearCanvasBtn?.focus());
-    },
-    armClearCanvasAutoRevert() {
-      this.clearClearCanvasTimer();
-      this.clearCanvasConfirmTimer = window.setTimeout(() => {
-        this.confirmingClearCanvas = false;
-        this.clearCanvasConfirmTimer = null;
-      }, CONFIRM_AUTO_REVERT_MS);
-    },
-    clearClearCanvasTimer() {
-      if (this.clearCanvasConfirmTimer) {
-        window.clearTimeout(this.clearCanvasConfirmTimer);
-        this.clearCanvasConfirmTimer = null;
-      }
-    },
-
     /**
      * Remove ALL nodes and edges from the canvas in one operation, undoable as a
      * SINGLE 'remove' history entry (the same type single-node removal pushes),
      * so one undo restores everything (nodes, edges, expansions, nodeIntroducedBy,
-     * counts and pin badges). Clears the CANVAS only — the notebook (pins, notes,
-     * saved views) is never touched. Uses the canonical removeFromGraph path.
+     * counts and pin badges). Because it's one undo away from recovered, the
+     * trigger is a single quiet click — no confirm stage — and the toast points
+     * at undo. Clears the CANVAS only — the notebook (pins, notes, saved views)
+     * is never touched. Uses the canonical removeFromGraph path.
      */
     async clearCanvas() {
       if (!this.g6Graph) {
-        this.clearClearCanvasTimer();
-        this.confirmingClearCanvas = false;
         return;
       }
 
       const currentNodes = this.g6Graph.getNodeData() || [];
       const currentEdges = this.g6Graph.getEdgeData() || [];
 
-      // Nothing on canvas: just dismiss the confirm, no history entry.
+      // Nothing on canvas: nothing to do, no history entry.
       if (currentNodes.length === 0) {
-        this.clearClearCanvasTimer();
-        this.confirmingClearCanvas = false;
         return;
       }
 
@@ -1497,8 +1427,7 @@ export default {
       // Housekeeping (mirrors removeNodeById / undoRemove): clear selection and
       // re-sync pin badges to "none on canvas" and counts to 0.
       this.deselectAll();
-      this.clearClearCanvasTimer();
-      this.confirmingClearCanvas = false;
+      this.showToast("Canvas cleared — press Ctrl+Z to undo", 5000);
       this.$nextTick(() => {
         this.$refs.connectedEntitiesPanel?.refreshInGraphStatus();
         this.updateNeighborCounts();
@@ -4435,29 +4364,17 @@ export default {
       margin-bottom: 1rem;
     }
 
-    .result-graph__clear-confirm {
-      display: flex;
-      flex-direction: column;
-      gap: 0.5rem;
-      padding: 0.5rem 0.6rem;
-      border: 1px solid var(--bs-danger, #e15759);
-      border-radius: 0.375rem;
-      background-color: var(--bs-body-bg);
-    }
-
-    .result-graph__clear-confirm-msg {
+    // Sits in the Expand button's slot when the graph is fully expanded, so
+    // the panel keeps its shape as the state flips.
+    .result-graph__overview-status {
+      margin: 0;
+      padding: 0.25rem 0;
       font-size: 0.8rem;
-      line-height: 1.35;
-      color: var(--bs-body-text);
-    }
+      color: var(--bs-body-text-secondary);
+      text-align: center;
 
-    .result-graph__clear-confirm-actions {
-      display: flex;
-      gap: 0.35rem;
-
-      .btn {
-        flex: 1;
-        white-space: nowrap;
+      i {
+        margin-right: 0.3rem;
       }
     }
 
@@ -4648,7 +4565,6 @@ export default {
         .pk-badge {
           font-size: 0.6rem;
           padding: 0.1rem 0.3rem;
-          text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
           color: white !important;
           flex-shrink: 0;
         }
@@ -4724,10 +4640,10 @@ export default {
       border-top: 1px solid var(--bs-body-inactive);
     }
 
+    // Entity-type chips take their background + legible ink from an inline
+    // chipStyle() binding (shared canvas palette) — no forced colours here.
     .badge {
       display: inline-block;
-      background-color: var(--bs-body-bg-accent) !important;
-      color: #fff !important;
       overflow: hidden;
       text-overflow: hidden;
       white-space: nowrap;
@@ -4760,17 +4676,6 @@ export default {
         }
       }
 
-    }
-
-    // Destructive triggers stay as quiet as their neutral siblings and only
-    // adopt the danger colour once the pointer/focus reaches them. The double
-    // class out-specifies the shared button:hover rule above.
-    .btn.result-graph__clear-btn {
-      &:hover,
-      &:focus-visible {
-        color: var(--bs-danger, #e15759);
-        background-color: rgba(var(--bs-danger-rgb, 225, 87, 89), 0.08);
-      }
     }
 
     button.btn-outline-primary {
@@ -4836,31 +4741,30 @@ export default {
     z-index: 1;  // Lower than sidebar (z-index: 2)
   }
 
+  // Quiet icon treatment, matching the canvas toolbar's bare icons (the
+  // boxed look was the only outlier among the canvas controls).
   .result-graph__control-btn {
-    background-color: var(--bs-body-bg-secondary);
-    border: 1px solid var(--bs-body-inactive);
-    border-radius: 0.375rem;
-    padding: 0.5rem;
+    background: none;
+    border: none;
+    padding: 0.35rem;
     cursor: pointer;
     color: var(--bs-body-text);
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 32px;
-    height: 32px;
-    transition: background-color 0.15s ease, opacity 0.15s ease;
+    transition: opacity 0.15s ease;
 
     &:hover:not(:disabled) {
-      background-color: var(--bs-body-bg-hover);
+      opacity: 0.7;
     }
 
     &:disabled {
-      opacity: 0.4;
+      opacity: 0.3;
       cursor: default;
     }
 
     i {
-      font-size: 0.875rem;
+      font-size: 1rem;
     }
   }
 }

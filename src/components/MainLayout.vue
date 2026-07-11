@@ -535,9 +535,17 @@ export default {
       if (!this.showShell) {
         this.navigateTo('shell');
       }
-      this.$nextTick(() => {
-        const result =
-          invoke(this.$refs.shellView) || { ok: false, reason: "no-graph" };
+      // Async: select/restore may stub-mount an empty canvas before acting.
+      // A rejected delegate (e.g. the stub-mount throwing mid-setup) must still
+      // hand an outcome back to the sidebar, or the "+ Save current" editor
+      // stays open with no feedback — treat a throw as a no-graph miss.
+      this.$nextTick(async () => {
+        let result;
+        try {
+          result = (await invoke(this.$refs.shellView)) || { ok: false, reason: "no-graph" };
+        } catch (e) {
+          result = { ok: false, reason: "no-graph" };
+        }
         this.$refs.notebookSidebar?.handleDelegateResult(action, result);
       });
     },
@@ -669,10 +677,13 @@ body {
   }
 }
 
+/* Default badge: accent chip with white ink. Deliberately NOT !important —
+   entity-type chips override both via an inline chipStyle() binding that
+   computes a legible ink for their canvas colour (utils/ChipContrast.js). */
 .badge {
   margin-left: 4px;
   margin-top: 4px;
   background-color: var(--bs-body-bg-accent);
-  color: white !important;
+  color: white;
 }
 </style>

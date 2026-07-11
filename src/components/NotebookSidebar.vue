@@ -29,11 +29,57 @@
       v-else
       class="notebook-sidebar__panel"
     >
-      <div class="notebook-sidebar__panel-header">
-        <h6>
-          <i class="fa-solid fa-book" />
-          Notebook
-        </h6>
+      <!-- Single header row: the notebook name IS the switcher (opens the
+           notebook menu); ⋯ opens the lifecycle menu; « collapses. When
+           renaming or creating, the name slot swaps to an inline input
+           (Enter/Esc/blur semantics unchanged from the previous layout). -->
+      <div class="notebook-sidebar__header">
+        <input
+          v-if="renaming"
+          ref="renameInput"
+          v-model="renameDraft"
+          type="text"
+          class="form-control form-control-sm"
+          :placeholder="activeName"
+          @keyup.enter="finishRename('enter')"
+          @keyup.esc="finishRename('escape')"
+          @blur="finishRename('blur')"
+        >
+        <input
+          v-else-if="creating"
+          ref="createInput"
+          v-model="createDraft"
+          type="text"
+          class="form-control form-control-sm"
+          placeholder="Untitled notebook"
+          @keyup.enter="finishCreate('enter')"
+          @keyup.esc="finishCreate('escape')"
+          @blur="finishCreate('blur')"
+        >
+        <button
+          v-else
+          ref="switcherBtn"
+          class="notebook-sidebar__switcher"
+          :class="{ 'is-open': showNotebookMenu }"
+          title="Switch or create a notebook"
+          aria-haspopup="menu"
+          :aria-expanded="showNotebookMenu ? 'true' : 'false'"
+          @click="toggleNotebookMenu"
+        >
+          <span class="notebook-sidebar__switcher-name">{{ activeName }}</span>
+          <i class="fa-solid fa-angle-down" />
+        </button>
+        <button
+          ref="overflowBtn"
+          class="notebook-sidebar__icon-btn"
+          :class="{ 'is-open': showOverflowMenu }"
+          title="Notebook actions"
+          aria-haspopup="menu"
+          :aria-expanded="showOverflowMenu ? 'true' : 'false'"
+          @click="toggleOverflowMenu"
+        >
+          <i class="fa-solid fa-ellipsis" />
+        </button>
         <button
           class="notebook-sidebar__icon-btn"
           title="Collapse notebook"
@@ -43,127 +89,161 @@
         </button>
       </div>
 
+      <!-- Notebook switcher menu -->
+      <div
+        v-if="showNotebookMenu"
+        ref="notebookMenu"
+        class="notebook-sidebar__menu notebook-sidebar__menu--notebooks"
+        role="menu"
+      >
+        <button
+          v-for="nb in notebookStore.notebookList"
+          :key="nb.id"
+          class="notebook-sidebar__menu-item"
+          :class="{ 'is-active': nb.id === notebookStore.activeId }"
+          role="menuitem"
+          @click="switchFromMenu(nb.id)"
+        >
+          <span class="notebook-sidebar__menu-lead">
+            <i
+              v-if="nb.id === notebookStore.activeId"
+              class="fa-solid fa-check"
+            />
+          </span>
+          <span class="notebook-sidebar__menu-text">{{ nb.name }}</span>
+        </button>
+        <hr>
+        <button
+          class="notebook-sidebar__menu-item"
+          role="menuitem"
+          @click="createFromMenu"
+        >
+          <span class="notebook-sidebar__menu-lead"><i class="fa-solid fa-plus" /></span>
+          <span class="notebook-sidebar__menu-text">New notebook</span>
+        </button>
+      </div>
+
+      <!-- Lifecycle / backup menu. Red exists only in here (and in armed
+           confirms) — never as a resting state in the panel. The privacy
+           caveat travels with the export/import actions it describes. -->
+      <div
+        v-if="showOverflowMenu"
+        ref="overflowMenu"
+        class="notebook-sidebar__menu notebook-sidebar__menu--overflow"
+        role="menu"
+      >
+        <button
+          class="notebook-sidebar__menu-item"
+          role="menuitem"
+          @click="renameFromMenu"
+        >
+          <span class="notebook-sidebar__menu-text">Rename notebook</span>
+        </button>
+        <hr>
+        <button
+          class="notebook-sidebar__menu-item"
+          role="menuitem"
+          @click="exportFromMenu"
+        >
+          <span class="notebook-sidebar__menu-text">Export notebook…</span>
+        </button>
+        <button
+          class="notebook-sidebar__menu-item"
+          role="menuitem"
+          @click="importFromMenu"
+        >
+          <span class="notebook-sidebar__menu-text">Import notebook…</span>
+        </button>
+        <p class="notebook-sidebar__menu-caption">
+          Exports stay in this browser and may contain notes about identifiable
+          people — they're your responsibility.
+        </p>
+        <hr>
+        <button
+          class="notebook-sidebar__menu-item notebook-sidebar__menu-item--danger"
+          role="menuitem"
+          @click="deleteFromMenu"
+        >
+          <span class="notebook-sidebar__menu-text">Delete notebook…</span>
+        </button>
+        <button
+          class="notebook-sidebar__menu-item notebook-sidebar__menu-item--danger"
+          role="menuitem"
+          @click="wipeFromMenu"
+        >
+          <span class="notebook-sidebar__menu-text">Wipe all notebooks…</span>
+        </button>
+      </div>
+
       <div class="notebook-sidebar__scroll">
-        <!-- Notebook switcher -->
-        <div class="notebook-sidebar__section">
-          <!-- Active notebook name + inline rename affordance. When renaming,
-               the name swaps to an input pre-filled with the current name;
-               Enter/blur commit, Esc cancels. -->
-          <div class="notebook-sidebar__name-row">
-            <input
-              v-if="renaming"
-              ref="renameInput"
-              v-model="renameDraft"
-              type="text"
-              class="form-control form-control-sm"
-              :placeholder="activeName"
-              @keyup.enter="finishRename('enter')"
-              @keyup.esc="finishRename('escape')"
-              @blur="finishRename('blur')"
-            >
-            <template v-else>
-              <span class="notebook-sidebar__active-name">{{ activeName }}</span>
-              <button
-                ref="renameBtn"
-                class="notebook-sidebar__icon-btn"
-                title="Rename this notebook"
-                @click="startRename"
-              >
-                <i class="fa-solid fa-pen" />
-              </button>
-            </template>
-          </div>
-
-          <div class="notebook-sidebar__switcher-row">
-            <select
-              class="form-select form-select-sm"
-              :value="notebookStore.activeId"
-              title="Switch notebook"
-              @change="onSwitch($event.target.value)"
-            >
-              <option
-                v-for="nb in notebookStore.notebookList"
-                :key="nb.id"
-                :value="nb.id"
-              >
-                {{ nb.name }}
-              </option>
-            </select>
-          </div>
-
-          <!-- Create: the "New" button swaps in place to an inline input.
-               Enter commits (empty commits the default name); Esc/blur cancel
-               (blur must never accidentally create). -->
-          <div class="notebook-sidebar__switcher-actions">
-            <input
-              v-if="creating"
-              ref="createInput"
-              v-model="createDraft"
-              type="text"
-              class="form-control form-control-sm"
-              placeholder="Untitled notebook"
-              @keyup.enter="finishCreate('enter')"
-              @keyup.esc="finishCreate('escape')"
-              @blur="finishCreate('blur')"
-            >
+        <!-- Armed two-stage confirms (triggered from the ⋯ menu) render at the
+             top of the panel; both auto-revert after a few idle seconds. -->
+        <div
+          v-if="confirmingDelete"
+          class="notebook-sidebar__confirm"
+        >
+          <span class="notebook-sidebar__confirm-msg">
+            Delete “{{ activeName }}”? Pins, notes and saved views in it
+            will be lost.
+          </span>
+          <div class="notebook-sidebar__confirm-actions">
             <button
-              v-else
-              ref="newBtn"
-              class="btn btn-sm btn-outline-secondary"
-              title="Create a new notebook"
-              @click="startCreate"
+              ref="deleteConfirmBtn"
+              class="btn btn-sm btn-danger"
+              @click="confirmDelete"
             >
-              <i class="fa-solid fa-plus" /> New
+              Delete
             </button>
-
-            <!-- Delete: two-stage inline danger confirm (no modal). The button
-                 swaps in place to a danger-styled pair that auto-reverts after
-                 a few idle seconds. -->
-            <template v-if="confirmingDelete">
-              <div class="notebook-sidebar__confirm">
-                <span class="notebook-sidebar__confirm-msg">
-                  Delete “{{ activeName }}”? Pins, notes and saved views in it
-                  will be lost.
-                </span>
-                <div class="notebook-sidebar__confirm-actions">
-                  <button
-                    ref="deleteConfirmBtn"
-                    class="btn btn-sm btn-danger"
-                    @click="confirmDelete"
-                  >
-                    Delete
-                  </button>
-                  <button
-                    class="btn btn-sm btn-outline-secondary"
-                    @click="cancelDelete"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            </template>
             <button
-              v-else
-              ref="deleteBtn"
               class="btn btn-sm btn-outline-secondary"
-              title="Delete this notebook"
-              @click="startDelete"
+              @click="cancelDelete"
             >
-              <i class="fa-solid fa-trash" /> Delete
+              Cancel
             </button>
           </div>
         </div>
+        <div
+          v-if="confirmingWipe"
+          class="notebook-sidebar__confirm"
+        >
+          <span class="notebook-sidebar__confirm-msg">
+            Wipe everything? All notebooks will be erased from this browser —
+            pins, notes and saved views included.
+          </span>
+          <div class="notebook-sidebar__confirm-actions">
+            <button
+              ref="wipeConfirmBtn"
+              class="btn btn-sm btn-danger"
+              @click="confirmWipe"
+            >
+              Wipe everything
+            </button>
+            <button
+              class="btn btn-sm btn-outline-secondary"
+              @click="cancelWipe"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+        <p
+          v-if="importMessage"
+          class="notebook-sidebar__import-msg"
+          :class="importOk ? 'is-ok' : 'is-error'"
+        >
+          {{ importMessage }}
+        </p>
 
-        <!-- Notebook page (matter-level narrative) -->
+        <!-- Notes (the notebook-level narrative). Borderless until focused. -->
         <div class="notebook-sidebar__section">
-          <div class="notebook-sidebar__section-title">
-            Page
+          <div class="notebook-sidebar__label">
+            Notes
           </div>
           <textarea
             v-model="pageDraft"
-            class="form-control form-control-sm notebook-sidebar__page"
+            class="notebook-sidebar__notes"
             rows="5"
-            placeholder="Write your research narrative for this notebook…"
+            placeholder="Add notes…"
             @blur="commitPage"
           />
           <small
@@ -172,16 +252,21 @@
           >Unsaved — click away to save</small>
         </div>
 
-        <!-- Pinned entities -->
+        <!-- Pinned entities: canvas-coloured type dot + name; unpin appears on
+             hover/focus so the resting state is just the content. -->
         <div class="notebook-sidebar__section">
-          <div class="notebook-sidebar__section-title">
-            Pinned entities
+          <div class="notebook-sidebar__label">
+            Pinned
+            <span
+              v-if="notebookStore.pinnedCount > 0"
+              class="notebook-sidebar__count"
+            >{{ notebookStore.pinnedCount }}</span>
           </div>
           <p
             v-if="notebookStore.pinnedCount === 0"
             class="notebook-sidebar__empty"
           >
-            No pinned entities. Select a node and click <strong>Pin</strong> to add it.
+            Nothing pinned yet — select a node and click Pin.
           </p>
           <ul
             v-else
@@ -194,18 +279,24 @@
             >
               <button
                 class="notebook-sidebar__entity-name"
-                :title="`Select ${pin.name || pin.pk}`"
+                :title="`${pin.label} — select ${pin.name || pin.pk}`"
                 @click="selectEntity(pin.label, pin.pk)"
               >
-                <span class="notebook-sidebar__entity-type">{{ pin.label }}</span>
-                {{ pin.name || pin.pk }}
                 <span
-                  v-if="noteFor(pin.label, pin.pk)"
-                  class="notebook-sidebar__note-preview"
-                >{{ notePreview(noteFor(pin.label, pin.pk)) }}</span>
+                  class="notebook-sidebar__dot"
+                  :style="{ backgroundColor: dotColor(pin.label) }"
+                  aria-hidden="true"
+                />
+                <span class="notebook-sidebar__entity-text">
+                  <span class="notebook-sidebar__entity-title">{{ pin.name || pin.pk }}</span>
+                  <span
+                    v-if="noteFor(pin.label, pin.pk)"
+                    class="notebook-sidebar__note-preview"
+                  >{{ notePreview(noteFor(pin.label, pin.pk)) }}</span>
+                </span>
               </button>
               <button
-                class="notebook-sidebar__icon-btn"
+                class="notebook-sidebar__row-action"
                 title="Unpin"
                 @click="notebookStore.unpin(pin.label, pin.pk)"
               >
@@ -220,8 +311,9 @@
           v-if="notebookStore.orphanNoteCount > 0"
           class="notebook-sidebar__section"
         >
-          <div class="notebook-sidebar__section-title">
-            Noted entities
+          <div class="notebook-sidebar__label">
+            Noted
+            <span class="notebook-sidebar__count">{{ notebookStore.orphanNoteCount }}</span>
           </div>
           <ul class="notebook-sidebar__list">
             <li
@@ -231,15 +323,21 @@
             >
               <button
                 class="notebook-sidebar__entity-name"
-                :title="`Select ${orphan.name || orphan.pk}`"
+                :title="`${orphan.label} — select ${orphan.name || orphan.pk}`"
                 @click="selectEntity(orphan.label, orphan.pk)"
               >
-                <span class="notebook-sidebar__entity-type">{{ orphan.label }}</span>
-                {{ orphan.name || orphan.pk }}
-                <span class="notebook-sidebar__note-preview">{{ notePreview(orphan.note) }}</span>
+                <span
+                  class="notebook-sidebar__dot"
+                  :style="{ backgroundColor: dotColor(orphan.label) }"
+                  aria-hidden="true"
+                />
+                <span class="notebook-sidebar__entity-text">
+                  <span class="notebook-sidebar__entity-title">{{ orphan.name || orphan.pk }}</span>
+                  <span class="notebook-sidebar__note-preview">{{ notePreview(orphan.note) }}</span>
+                </span>
               </button>
               <button
-                class="notebook-sidebar__icon-btn"
+                class="notebook-sidebar__row-action"
                 title="Remove this note"
                 @click="notebookStore.setNote(orphan.label, orphan.pk, '')"
               >
@@ -249,44 +347,38 @@
           </ul>
         </div>
 
-        <!-- Saved views -->
+        <!-- Saved views: "+ Save current" swaps to an inline name input
+             (Enter saves, Esc/blur cancel — the typed name survives a failed
+             save so a "no graph open" miss doesn't eat it). -->
         <div class="notebook-sidebar__section">
-          <div class="notebook-sidebar__section-title">
-            Saved views
-          </div>
-          <div class="notebook-sidebar__save-row">
-            <input
-              v-model="newViewName"
-              type="text"
-              class="form-control form-control-sm"
-              placeholder="Name this view…"
-              @keyup.enter="saveView"
-            >
+          <div class="notebook-sidebar__label">
+            Views
             <button
-              class="btn btn-sm btn-outline-primary"
-              :disabled="!newViewName.trim()"
+              v-if="!savingView"
+              ref="saveViewBtn"
+              class="notebook-sidebar__label-action"
               title="Save the current canvas as a named view"
-              @click="saveView"
+              @click="startSaveView"
             >
-              <i class="fa-solid fa-floppy-disk" />
-              Save
+              + Save current
             </button>
           </div>
-          <div class="notebook-sidebar__save-row">
-            <button
-              class="btn btn-sm btn-outline-secondary w-100"
-              title="Open a shared view from a code"
-              @click="openImportModal"
-            >
-              <i class="fa-solid fa-file-import" />
-              Open a shared view
-            </button>
-          </div>
+          <input
+            v-if="savingView"
+            ref="viewNameInput"
+            v-model="newViewName"
+            type="text"
+            class="form-control form-control-sm notebook-sidebar__view-name-input"
+            placeholder="Name this view"
+            @keyup.enter="finishSaveView('enter')"
+            @keyup.esc="finishSaveView('escape')"
+            @blur="finishSaveView('blur')"
+          >
           <p
             v-if="notebookStore.savedViewCount === 0"
             class="notebook-sidebar__empty"
           >
-            No saved views. Arrange the graph, name it above, and save.
+            No saved views yet.
           </p>
           <ul
             v-else
@@ -302,18 +394,19 @@
                 :title="`Restore ${view.name}`"
                 @click="restoreView(view)"
               >
-                <i class="fa-solid fa-diagram-project" />
-                {{ view.name }}
+                <span class="notebook-sidebar__entity-text">
+                  <span class="notebook-sidebar__entity-title">{{ view.name }}</span>
+                </span>
               </button>
               <button
-                class="notebook-sidebar__icon-btn"
+                class="notebook-sidebar__row-action"
                 title="Share this view"
                 @click="shareView(view)"
               >
                 <i class="fa-solid fa-share-nodes" />
               </button>
               <button
-                class="notebook-sidebar__icon-btn"
+                class="notebook-sidebar__row-action"
                 title="Delete this view"
                 @click="notebookStore.removeView(view.id)"
               >
@@ -321,88 +414,12 @@
               </button>
             </li>
           </ul>
-        </div>
-
-        <!-- Backup: export / import -->
-        <div class="notebook-sidebar__section">
-          <div class="notebook-sidebar__section-title">
-            Backup
-          </div>
-          <div class="notebook-sidebar__backup-row">
-            <button
-              class="btn btn-sm btn-outline-secondary"
-              title="Download this notebook as a JSON file"
-              @click="exportNotebook"
-            >
-              <i class="fa-solid fa-file-export" />
-              Export
-            </button>
-            <button
-              class="btn btn-sm btn-outline-secondary"
-              title="Import a notebook from a JSON file (added as a new notebook)"
-              @click="triggerImport"
-            >
-              <i class="fa-solid fa-file-import" />
-              Import
-            </button>
-            <input
-              ref="fileInput"
-              type="file"
-              accept="application/json,.json"
-              class="notebook-sidebar__file-input"
-              @change="handleFileSelected"
-            >
-          </div>
-          <p class="notebook-sidebar__notice">
-            <i class="fa-solid fa-triangle-exclamation" />
-            Exported files may contain notes about identifiable people and are your
-            responsibility. Nothing is sent to the server — the notebook stays in
-            this browser.
-          </p>
-          <p
-            v-if="importMessage"
-            class="notebook-sidebar__import-msg"
-            :class="importOk ? 'is-ok' : 'is-error'"
-          >
-            {{ importMessage }}
-          </p>
-        </div>
-
-        <!-- Wipe everything: two-stage inline danger confirm (no modal),
-             auto-reverting after a few idle seconds. -->
-        <div class="notebook-sidebar__section">
-          <template v-if="confirmingWipe">
-            <div class="notebook-sidebar__confirm">
-              <span class="notebook-sidebar__confirm-msg">
-                Wipe everything? All notebooks will be erased from this browser —
-                pins, notes and saved views included.
-              </span>
-              <div class="notebook-sidebar__confirm-actions">
-                <button
-                  ref="wipeConfirmBtn"
-                  class="btn btn-sm btn-danger"
-                  @click="confirmWipe"
-                >
-                  Wipe everything
-                </button>
-                <button
-                  class="btn btn-sm btn-outline-secondary"
-                  @click="cancelWipe"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </template>
           <button
-            v-else
-            ref="wipeBtn"
-            class="btn btn-sm btn-outline-danger w-100"
-            title="Delete every notebook and start fresh"
-            @click="startWipe"
+            class="notebook-sidebar__link"
+            title="Open a shared view from a code"
+            @click="openImportModal"
           >
-            <i class="fa-solid fa-eraser" />
-            Wipe everything
+            Open a shared view…
           </button>
         </div>
       </div>
@@ -417,6 +434,16 @@
         {{ feedback }}
       </div>
     </div>
+
+    <!-- Hidden file input for notebook import (triggered from the ⋯ menu; the
+         menu closes before the picker opens, so the input lives outside it). -->
+    <input
+      ref="fileInput"
+      type="file"
+      accept="application/json,.json"
+      class="notebook-sidebar__file-input"
+      @change="handleFileSelected"
+    >
 
     <!-- Share a saved view: fixed-overlay modals rendered from the sidebar. -->
     <ShareModal
@@ -439,6 +466,7 @@
 <script>
 import { mapStores } from "pinia";
 import { useNotebookStore } from "../store/NotebookStore";
+import { useSettingsStore } from "../store/SettingsStore";
 import ShareModal from "./ShellView/ShareModal.vue";
 import ImportModal from "./ShellView/ImportModal.vue";
 import {
@@ -454,15 +482,16 @@ const NOTE_PREVIEW_LENGTH = 60;
 
 /**
  * Left-docked, always-present, collapsible notebook rail owned by the app
- * shell (MainLayout). Collapsed it is a narrow icon rail; expanded it shows
- * the active notebook's page, pins, noted-but-unpinned entities, saved
- * views, per-notebook backup and a wipe-everything action.
+ * shell (MainLayout). Collapsed it is a narrow icon rail; expanded it shows a
+ * single header row (the notebook name doubles as the switcher, a ⋯ menu
+ * holds the lifecycle/backup actions) above the active notebook's notes,
+ * pins, noted-but-unpinned entities and saved views.
  *
  * Notebook naming and the destructive actions never use native browser
- * dialogs: create/rename swap in place to an inline input, and delete /
- * wipe-everything use a two-stage in-place danger confirm that auto-reverts
- * after a few idle seconds. The commit/cancel decision logic lives in
- * NotebookSidebarLogic so it lands under vitest.
+ * dialogs: create/rename swap the header name slot to an inline input, and
+ * delete / wipe-everything use a two-stage in-place danger confirm that
+ * auto-reverts after a few idle seconds. The commit/cancel decision logic
+ * lives in NotebookSidebarLogic so it lands under vitest.
  *
  * The sidebar reads/writes the client-side NotebookStore directly, but graph
  * actions (select an entity, save/restore a canvas view) need the live G6
@@ -484,25 +513,34 @@ export default {
   data() {
     return {
       expanded: false,
-      // Blur-commit draft for the notebook page (mirrors EntityPinPanel's note
-      // draft): typing edits the local draft; commitPage() writes it to the
-      // store on blur, and beforeUnmount flushes any pending edit.
+      // Blur-commit draft for the notebook notes (mirrors EntityPinPanel's
+      // note draft): typing edits the local draft; commitPage() writes it to
+      // the store on blur, and beforeUnmount flushes any pending edit.
       pageDraft: "",
       pageEntityId: null,
+      // Saved-view naming. `savingView` swaps the "+ Save current" label
+      // action to an inline input; the typed name is only cleared when the
+      // delegation reports success, so a miss doesn't eat it.
+      savingView: false,
       newViewName: "",
-      // Inline create/rename input state. `creating`/`renaming` toggle the "New"
-      // button and the active-name span to an input in place; the drafts hold
-      // the in-progress text. `renameCommitted` guards against a Enter-then-blur
-      // double-commit on rename (Enter commits, then the blur that follows would
-      // fire finishRename again).
+      // Header dropdown menus (notebook switcher / lifecycle overflow). At
+      // most one is open; a document-level pointerdown listener closes them
+      // on outside clicks and Esc closes + refocuses the trigger.
+      showNotebookMenu: false,
+      showOverflowMenu: false,
+      // Inline create/rename input state. `creating`/`renaming` swap the
+      // header name slot to an input in place; the drafts hold the
+      // in-progress text. `renameCommitted` guards against a Enter-then-blur
+      // double-commit on rename (Enter commits, then the blur that follows
+      // would fire finishRename again).
       creating: false,
       createDraft: "",
       renaming: false,
       renameDraft: "",
       renameCommitted: false,
-      // Two-stage inline danger confirms (no modal). Each swaps its trigger
-      // button to a Delete/Cancel pair and auto-reverts after a few idle
-      // seconds via its own timer, cleared on unmount.
+      // Two-stage inline danger confirms (no modal), armed from the ⋯ menu.
+      // Each renders a Delete/Cancel pair at the top of the panel and
+      // auto-reverts after a few idle seconds via its own timer.
       confirmingDelete: false,
       confirmingWipe: false,
       confirmTimer: null,
@@ -522,20 +560,23 @@ export default {
     };
   },
   computed: {
-    ...mapStores(useNotebookStore),
+    ...mapStores(useNotebookStore, useSettingsStore),
     activeName() {
       return this.notebookStore.activeNotebook?.name || "Untitled notebook";
     },
-    // Dirty flag for the page draft (drives the "unsaved" hint).
+    // Dirty flag for the notes draft (drives the "unsaved" hint).
     pageDirty() {
       return this.pageDraft !== (this.notebookStore.page || "");
     },
+    anyMenuOpen() {
+      return this.showNotebookMenu || this.showOverflowMenu;
+    },
   },
   watch: {
-    // Reload the page draft whenever the active notebook changes so switching
+    // Reload the notes draft whenever the active notebook changes so switching
     // notebooks shows the right narrative. Flush any pending edit to the
     // OUTGOING notebook first, so switching without blurring the textarea
-    // doesn't silently drop the page (same guard as EntityPinPanel's note).
+    // doesn't silently drop the notes (same guard as EntityPinPanel's note).
     "notebookStore.activeId": {
       immediate: true,
       handler() {
@@ -550,14 +591,24 @@ export default {
       this.$emit("toggle", this.expanded);
       this.notifyLayoutChange();
     },
+    // Attach the outside-click / Esc listeners only while a menu is open.
+    anyMenuOpen(open) {
+      if (open) {
+        document.addEventListener("pointerdown", this.onDocPointerDown, true);
+        document.addEventListener("keydown", this.onDocKeydown, true);
+      } else {
+        this.removeMenuListeners();
+      }
+    },
   },
   mounted() {
     this.loadState();
   },
   // Blur doesn't fire when the sidebar is unmounted (e.g. hot reload / route
-  // teardown), so flush any pending page draft here too — no draft loss.
+  // teardown), so flush any pending notes draft here too — no draft loss.
   beforeUnmount() {
     this.flushPageDraft();
+    this.removeMenuListeners();
     if (this.feedbackTimer) {
       window.clearTimeout(this.feedbackTimer);
     }
@@ -584,7 +635,7 @@ export default {
       }
     },
     expand() {
-      // Flush any pending page edit before the panel content re-renders.
+      // Flush any pending notes edit before the panel content re-renders.
       this.flushPageDraft();
       this.pageDraft = this.notebookStore.page || "";
       this.expanded = true;
@@ -592,6 +643,7 @@ export default {
     },
     collapse() {
       this.flushPageDraft();
+      this.closeMenus();
       this.expanded = false;
       this.persistState();
     },
@@ -605,7 +657,47 @@ export default {
       }, 220);
     },
 
-    // ---- Notebook page draft --------------------------------------------
+    // ---- Header menus -----------------------------------------------------
+    toggleNotebookMenu() {
+      this.showOverflowMenu = false;
+      this.showNotebookMenu = !this.showNotebookMenu;
+    },
+    toggleOverflowMenu() {
+      this.showNotebookMenu = false;
+      this.showOverflowMenu = !this.showOverflowMenu;
+    },
+    closeMenus() {
+      this.showNotebookMenu = false;
+      this.showOverflowMenu = false;
+    },
+    removeMenuListeners() {
+      document.removeEventListener("pointerdown", this.onDocPointerDown, true);
+      document.removeEventListener("keydown", this.onDocKeydown, true);
+    },
+    // Close on any pointerdown outside the open menu and its trigger. The
+    // triggers are excluded so their own click toggles instead of
+    // close-then-reopen.
+    onDocPointerDown(event) {
+      const inside = [
+        this.$refs.notebookMenu,
+        this.$refs.overflowMenu,
+        this.$refs.switcherBtn,
+        this.$refs.overflowBtn,
+      ].some((el) => el && el.contains(event.target));
+      if (!inside) {
+        this.closeMenus();
+      }
+    },
+    onDocKeydown(event) {
+      if (event.key !== "Escape") return;
+      const wasNotebookMenu = this.showNotebookMenu;
+      this.closeMenus();
+      this.$nextTick(() => {
+        (wasNotebookMenu ? this.$refs.switcherBtn : this.$refs.overflowBtn)?.focus();
+      });
+    },
+
+    // ---- Notebook notes draft --------------------------------------------
     commitPage() {
       commitPageDraft(this.notebookStore, this.pageDraft);
     },
@@ -644,10 +736,41 @@ export default {
       this.cancelConfirms();
       this.notebookStore.switchNotebook(id);
     },
+    switchFromMenu(id) {
+      this.closeMenus();
+      if (id !== this.notebookStore.activeId) {
+        this.onSwitch(id);
+      }
+    },
+    createFromMenu() {
+      this.closeMenus();
+      this.startCreate();
+    },
+    renameFromMenu() {
+      this.closeMenus();
+      this.startRename();
+    },
+    exportFromMenu() {
+      this.closeMenus();
+      this.exportNotebook();
+    },
+    importFromMenu() {
+      this.closeMenus();
+      this.triggerImport();
+    },
+    deleteFromMenu() {
+      this.closeMenus();
+      this.startDelete();
+    },
+    wipeFromMenu() {
+      this.closeMenus();
+      this.startWipe();
+    },
+
     // ---- Inline create -----------------------------------------------------
-    // The "New" button swaps to an inline input. Enter commits (empty commits
-    // the default name); Esc/blur cancel — a blur must never accidentally
-    // create. Cancelling returns focus to the "New" button.
+    // "New notebook" (in the switcher menu) swaps the header name to an inline
+    // input. Enter commits (empty commits the default name); Esc/blur cancel —
+    // a blur must never accidentally create. Esc returns focus to the switcher.
     startCreate() {
       this.cancelConfirms();
       this.createDraft = "";
@@ -665,15 +788,15 @@ export default {
       } else if (trigger === "escape") {
         // Return focus to the trigger only on an explicit Esc cancel; a blur
         // cancel means the user already moved focus elsewhere — don't steal it.
-        this.$nextTick(() => this.$refs.newBtn?.focus());
+        this.$nextTick(() => this.$refs.switcherBtn?.focus());
       }
     },
 
     // ---- Inline rename -----------------------------------------------------
-    // A pencil next to the active name swaps it to an input pre-filled with the
-    // current name. Enter/blur commit (the store guards empty/whitespace); Esc
-    // cancels. renameCommitted stops an Enter-then-blur double fire; cancelling
-    // returns focus to the pencil.
+    // "Rename notebook" (in the ⋯ menu) swaps the header name to an input
+    // pre-filled with the current name. Enter/blur commit (the store guards
+    // empty/whitespace); Esc cancels. renameCommitted stops an Enter-then-blur
+    // double fire; cancelling returns focus to the ⋯ trigger.
     startRename() {
       this.cancelConfirms();
       this.renameDraft = this.notebookStore.activeNotebook?.name || "";
@@ -696,7 +819,7 @@ export default {
         this.notebookStore.renameNotebook(this.notebookStore.activeId, name);
       } else {
         this.renaming = false;
-        this.$nextTick(() => this.$refs.renameBtn?.focus());
+        this.$nextTick(() => this.$refs.overflowBtn?.focus());
       }
     },
 
@@ -715,7 +838,7 @@ export default {
     cancelDelete() {
       this.clearConfirmTimer();
       this.confirmingDelete = false;
-      this.$nextTick(() => this.$refs.deleteBtn?.focus());
+      this.$nextTick(() => this.$refs.overflowBtn?.focus());
     },
 
     // ---- Inline wipe-everything confirm (two-stage, no modal) --------------
@@ -733,11 +856,11 @@ export default {
     cancelWipe() {
       this.clearConfirmTimer();
       this.confirmingWipe = false;
-      this.$nextTick(() => this.$refs.wipeBtn?.focus());
+      this.$nextTick(() => this.$refs.overflowBtn?.focus());
     },
 
     // Shared confirm helpers: only one danger confirm is ever open, and it
-    // auto-reverts to the idle button after a few idle seconds so a stray
+    // auto-reverts to the idle state after a few idle seconds so a stray
     // "Delete" can't linger armed. The timer is cleared on unmount.
     armConfirmAutoRevert() {
       this.clearConfirmTimer();
@@ -760,6 +883,11 @@ export default {
     },
 
     // ---- Entities / notes -----------------------------------------------
+    // Entity-type dot colour comes from the same SettingsStore getter the
+    // canvas uses, so the sidebar and graph always agree on type colours.
+    dotColor(label) {
+      return this.settingsStore.colorForLabel(label);
+    },
     noteFor(label, pk) {
       return this.notebookStore.noteFor(label, pk);
     },
@@ -781,6 +909,24 @@ export default {
     // helpers against the active cell's ResultGraph, so the tested trim /
     // no-graph / no-view logic IS the production path. The { ok, reason }
     // outcome comes back via handleDelegateResult below.
+    startSaveView() {
+      this.savingView = true;
+      this.$nextTick(() => this.$refs.viewNameInput?.focus());
+    },
+    finishSaveView(trigger) {
+      if (!this.savingView) return;
+      if (trigger === "enter") {
+        // Dispatch the save; the editor stays open until the delegation
+        // reports success so a miss keeps the typed name in place.
+        this.saveView();
+        return;
+      }
+      // Esc/blur close the editor; the draft name is retained for next time.
+      this.savingView = false;
+      if (trigger === "escape") {
+        this.$nextTick(() => this.$refs.saveViewBtn?.focus());
+      }
+    },
     saveView() {
       const name = this.newViewName.trim();
       if (!name) return;
@@ -825,14 +971,15 @@ export default {
 
     // ---- Delegation feedback ---------------------------------------------
     // MainLayout calls this with the { ok, reason } outcome of a sidebar
-    // action. On success we finish the interaction (clear the save input); on
-    // a "no-graph" miss we surface a hint instead of silently no-opping.
-    // "empty-graph" gets no extra message — ResultGraph already toasts
-    // "Nothing to save" for that case (we just keep the typed name).
+    // action. On success we finish the interaction (clear + close the view
+    // name editor); on a "no-graph" miss we surface a hint instead of silently
+    // no-opping. "empty-graph" gets no extra message — ResultGraph already
+    // toasts "Nothing to save" for that case (we just keep the typed name).
     handleDelegateResult(action, result) {
       if (result && result.ok) {
         if (action === "save-view") {
           this.newViewName = "";
+          this.savingView = false;
         }
         return;
       }
@@ -965,54 +1112,19 @@ export default {
   }
 
   &__panel {
+    position: relative;
     display: flex;
     flex-direction: column;
     height: 100%;
     width: 340px;
   }
 
-  &__panel-header {
+  // ---- Header row: switcher + ⋯ + collapse -----------------------------
+  &__header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 0.75rem 1rem;
-    border-bottom: 1px solid var(--bs-body-inactive);
-
-    h6 {
-      margin: 0;
-      font-size: 0.95rem;
-      font-weight: 600;
-      color: var(--bs-body-text);
-
-      i {
-        margin-right: 0.4rem;
-      }
-    }
-  }
-
-  &__scroll {
-    flex: 1;
-    overflow-y: auto;
-    padding: 0.75rem 1rem 1.5rem;
-  }
-
-  &__section {
-    margin-top: 1rem;
-    padding-top: 1rem;
-    border-top: 1px solid var(--bs-body-inactive);
-
-    &:first-child {
-      margin-top: 0;
-      padding-top: 0;
-      border-top: none;
-    }
-  }
-
-  &__name-row {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    margin-bottom: 0.5rem;
+    gap: 0.15rem;
+    padding: 0.55rem 0.5rem 0.55rem 0.65rem;
 
     .form-control {
       flex: 1;
@@ -1020,42 +1132,189 @@ export default {
     }
   }
 
-  &__active-name {
+  &__switcher {
     flex: 1;
     min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: none;
+    border: none;
+    padding: 0.25rem 0.4rem;
+    border-radius: 0.375rem;
     font-size: 0.9rem;
     font-weight: 600;
     color: var(--bs-body-text);
+    cursor: pointer;
+    text-align: left;
+
+    i {
+      font-size: 0.7rem;
+      color: var(--bs-body-text-secondary);
+      flex-shrink: 0;
+    }
+
+    &:hover,
+    &.is-open {
+      background-color: var(--bs-body-bg-hover);
+    }
+  }
+
+  &__switcher-name {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  &__switcher-row {
-    margin-bottom: 0.5rem;
+  &__icon-btn {
+    background: none;
+    border: none;
+    color: var(--bs-body-text-secondary);
+    cursor: pointer;
+    padding: 0.25rem 0.45rem;
+    border-radius: 0.375rem;
+    flex-shrink: 0;
+
+    &:hover,
+    &.is-open {
+      background-color: var(--bs-body-bg-hover);
+      color: var(--bs-body-text);
+    }
   }
 
-  &__switcher-actions {
-    display: flex;
-    gap: 0.35rem;
-    flex-wrap: wrap;
+  // ---- Dropdown menus ----------------------------------------------------
+  &__menu {
+    position: absolute;
+    top: 2.6rem;
+    z-index: 30;
+    min-width: 13rem;
+    max-width: calc(100% - 1.5rem);
+    padding: 0.25rem;
+    background-color: var(--bs-body-bg);
+    border: 1px solid var(--bs-body-inactive);
+    border-radius: 0.5rem;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
 
-    .btn {
-      flex: 1;
-      white-space: nowrap;
+    hr {
+      margin: 0.25rem 0.35rem;
+      border: 0;
+      border-top: 1px solid var(--bs-body-bg-hover);
+      opacity: 1;
+    }
+  }
+
+  &__menu--notebooks {
+    left: 0.65rem;
+  }
+
+  &__menu--overflow {
+    right: 0.65rem;
+  }
+
+  &__menu-item {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    width: 100%;
+    background: none;
+    border: none;
+    padding: 0.35rem 0.55rem;
+    border-radius: 0.375rem;
+    font-size: 0.82rem;
+    color: var(--bs-body-text);
+    cursor: pointer;
+    text-align: left;
+
+    &:hover,
+    &:focus-visible {
+      background-color: var(--bs-body-bg-hover);
     }
 
-    .form-control {
-      flex: 1 1 100%;
-      min-width: 0;
+    &--danger {
+      color: var(--bs-danger, #e15759);
+    }
+  }
+
+  &__menu-lead {
+    width: 1em;
+    flex-shrink: 0;
+    color: var(--bs-body-text-secondary);
+    font-size: 0.75rem;
+  }
+
+  &__menu-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__menu-caption {
+    margin: 0.1rem 0 0.15rem;
+    padding: 0 0.55rem;
+    font-size: 0.68rem;
+    line-height: 1.4;
+    color: var(--bs-body-text-secondary);
+    white-space: normal;
+  }
+
+  // ---- Panel body ----------------------------------------------------------
+  &__scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.25rem 0.85rem 1rem;
+  }
+
+  &__section {
+    margin-top: 1.15rem;
+
+    &:first-child {
+      margin-top: 0.35rem;
+    }
+  }
+
+  // Micro-label section headers: small caps, letterspaced, secondary colour —
+  // no bold headings, no hairline rules between sections.
+  &__label {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-size: 0.66rem;
+    font-weight: 650;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--bs-body-text-secondary);
+    margin-bottom: 0.35rem;
+  }
+
+  &__count {
+    font-weight: 550;
+    letter-spacing: 0;
+  }
+
+  &__label-action {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 0.78rem;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--bs-body-bg-accent);
+    cursor: pointer;
+
+    &:hover {
+      text-decoration: underline;
     }
   }
 
   &__confirm {
-    flex: 1 1 100%;
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
+    margin: 0.5rem 0;
     padding: 0.5rem 0.6rem;
     border: 1px solid var(--bs-danger, #e15759);
     border-radius: 0.375rem;
@@ -1078,20 +1337,34 @@ export default {
     }
   }
 
-  &__section-title {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: var(--bs-body-text-secondary);
-    margin-bottom: 0.5rem;
-  }
-
-  &__page {
+  // Borderless notes area: reads as plain text on the panel until focused.
+  &__notes {
+    display: block;
+    width: 100%;
     resize: vertical;
-    background-color: var(--bs-body-bg);
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 0.375rem;
+    padding: 0.25rem 0.4rem;
+    margin-left: -0.4rem;
+    font-size: 0.82rem;
+    line-height: 1.5;
     color: var(--bs-body-text);
+
+    &::placeholder {
+      color: var(--bs-body-text-secondary);
+      opacity: 0.7;
+    }
+
+    &:hover {
+      border-color: var(--bs-body-bg-hover);
+    }
+
+    &:focus {
+      outline: none;
+      background-color: var(--bs-body-bg);
+      border-color: var(--bs-body-inactive);
+    }
   }
 
   &__hint {
@@ -1103,105 +1376,123 @@ export default {
   }
 
   &__empty {
-    font-size: 0.8rem;
+    font-size: 0.78rem;
     color: var(--bs-body-text-secondary);
     margin: 0;
+  }
+
+  &__view-name-input {
+    margin-bottom: 0.4rem;
   }
 
   &__list {
     list-style: none;
     padding: 0;
-    margin: 0;
+    margin: 0 -0.35rem;
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
   }
 
+  // List rows: content only at rest; the row actions (unpin / share / delete)
+  // appear on hover or focus-within.
   &__entity {
     display: flex;
     align-items: center;
-    gap: 0.25rem;
+    gap: 0.1rem;
+    border-radius: 0.375rem;
+
+    &:hover {
+      background-color: var(--bs-body-bg-hover);
+    }
+
+    .notebook-sidebar__row-action {
+      visibility: hidden;
+    }
+
+    &:hover .notebook-sidebar__row-action,
+    &:focus-within .notebook-sidebar__row-action {
+      visibility: visible;
+    }
   }
 
   &__entity-name {
     flex: 1;
     min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
     text-align: left;
     background: none;
     border: none;
     color: var(--bs-body-text);
-    padding: 0.35rem 0.5rem;
+    padding: 0.3rem 0.35rem;
     border-radius: 0.375rem;
-    font-size: 0.85rem;
+    font-size: 0.82rem;
     cursor: pointer;
-
-    &:hover {
-      background-color: var(--bs-body-bg-hover);
-    }
-
-    i {
-      margin-right: 0.35rem;
-      opacity: 0.7;
-    }
   }
 
-  &__entity-type {
-    display: inline-block;
-    font-size: 0.7rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    opacity: 0.6;
-    margin-right: 0.35rem;
+  &__dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  &__entity-text {
+    flex: 1;
+    min-width: 0;
+  }
+
+  &__entity-title {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   &__note-preview {
     display: block;
-    font-size: 0.72rem;
-    color: var(--bs-body-text);
+    font-size: 0.7rem;
+    color: var(--bs-body-text-secondary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    margin-top: 0.1rem;
   }
 
-  &__icon-btn {
+  &__row-action {
     background: none;
     border: none;
     color: var(--bs-body-text-secondary);
     cursor: pointer;
-    padding: 0.25rem 0.4rem;
+    padding: 0.25rem 0.35rem;
     border-radius: 0.375rem;
     flex-shrink: 0;
+    font-size: 0.78rem;
 
     &:hover {
-      background-color: var(--bs-body-bg-hover);
       color: var(--bs-body-text);
     }
   }
 
-  &__save-row,
-  &__backup-row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 0.5rem;
-    flex-wrap: wrap;
+  &__link {
+    display: block;
+    background: none;
+    border: none;
+    padding: 0;
+    margin-top: 0.5rem;
+    font-size: 0.78rem;
+    color: var(--bs-body-text-secondary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    cursor: pointer;
+
+    &:hover {
+      color: var(--bs-body-text);
+    }
   }
 
   &__file-input {
     display: none;
-  }
-
-  &__notice {
-    font-size: 0.75rem;
-    color: var(--bs-body-text-secondary);
-    margin: 0.5rem 0 0;
-    line-height: 1.35;
-
-    i {
-      margin-right: 0.35rem;
-      color: var(--bs-warning, #d5b441);
-    }
   }
 
   &__import-msg {
@@ -1232,7 +1523,7 @@ export default {
   }
 }
 
-// On very narrow viewports the expanded panel overlays rather than pushing the
+// On narrow viewports the expanded panel overlays rather than pushing the
 // canvas (which would leave no room to work).
 @media (max-width: 640px) {
   .notebook-sidebar--expanded {
