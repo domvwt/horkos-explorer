@@ -24,11 +24,15 @@ const horkosSchema = {
   ],
 };
 
-const HORKOS_DEMO_QUERY = `// Example: people and the companies they own. Edit or clear this to start your own research.
+const HORKOS_DEMO_QUERY = `// Example: the busiest company and its direct owners. Edit or clear this to start your own research.
 // ▶️ Run this query by clicking the play button or pressing Shift + Enter.
-MATCH (person:Person)-[owns:PersonOwnership]->(company:Company)
-RETURN person, owns, company
-LIMIT 25;`;
+MATCH (c:Company)-[:PersonOwnership]-()
+WITH c, count(*) AS links
+ORDER BY links DESC
+LIMIT 1
+MATCH (c)-[owns:PersonOwnership]-(neighbour)
+RETURN c, owns, neighbour
+LIMIT 50;`;
 
 describe("buildDemoQuery", () => {
   it("returns the curated Horkos example when Person, Company and PersonOwnership all exist", () => {

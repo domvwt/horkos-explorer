@@ -22,11 +22,23 @@
  *      a node-only query, which can never hit the cross-type cast.
  */
 
-const HORKOS_DEMO_QUERY = `// Example: people and the companies they own. Edit or clear this to start your own research.
+// The busiest company by PersonOwnership links, plus its direct owners. The
+// anchor is found at runtime (ORDER BY ... LIMIT 1) so no company name is
+// hardcoded and the result is never empty on any graph that has a single
+// PersonOwnership edge. The hop is pinned to the SINGLE PersonOwnership rel
+// type on purpose: an untyped hop (`-[]-`) forces Kuzu to union the graph's
+// heterogeneous rel tables, whose divergent property structs cannot be
+// combined - that fails at execution, not parse time. One typed hop keeps the
+// demo a cheap, bounded read that passes the READ_ONLY allowlist.
+const HORKOS_DEMO_QUERY = `// Example: the busiest company and its direct owners. Edit or clear this to start your own research.
 // ▶️ Run this query by clicking the play button or pressing Shift + Enter.
-MATCH (person:Person)-[owns:PersonOwnership]->(company:Company)
-RETURN person, owns, company
-LIMIT 25;`;
+MATCH (c:Company)-[:PersonOwnership]-()
+WITH c, count(*) AS links
+ORDER BY links DESC
+LIMIT 1
+MATCH (c)-[owns:PersonOwnership]-(neighbour)
+RETURN c, owns, neighbour
+LIMIT 50;`;
 
 function hasTable(tables, name) {
   return Array.isArray(tables) && tables.some((table) => !!table && table.name === name);
