@@ -109,20 +109,27 @@
           <button
             v-if="!isCurrentNodeExpanded"
             class="btn btn-sm btn-outline-secondary"
+            :disabled="isExpanding"
             @click="expandSelectedNode()"
           >
-            <i class="fa-solid fa-up-down-left-right" />
-            <span v-if="currentNodeNeighborInfo && currentNodeNeighborInfo.hasCount">
-              Expand Neighbors (+{{ currentNodeNeighborInfo.count }})
-              <i
-                v-if="currentNodeNeighborInfo.isProfligate"
-                class="fa-solid fa-triangle-exclamation neighbor-warning"
-                title="High connectivity (>10 connections)"
-              />
-            </span>
-            <span v-else>
-              Expand Neighbors
-            </span>
+            <template v-if="isExpanding">
+              <i class="fa-solid fa-spinner fa-spin" />
+              Expanding…
+            </template>
+            <template v-else>
+              <i class="fa-solid fa-up-down-left-right" />
+              <span v-if="currentNodeNeighborInfo && currentNodeNeighborInfo.hasCount">
+                Expand Neighbors (+{{ currentNodeNeighborInfo.count }})
+                <i
+                  v-if="currentNodeNeighborInfo.isProfligate"
+                  class="fa-solid fa-triangle-exclamation neighbor-warning"
+                  title="High connectivity (>10 connections)"
+                />
+              </span>
+              <span v-else>
+                Expand Neighbors
+              </span>
+            </template>
           </button>
 
           <button
@@ -348,11 +355,15 @@
           />
         </div>
         <div v-else>
-          <!-- Overview Actions. When everything is expanded, the status
-               caption takes the Expand button's slot (same position, no
-               layout jump — a disabled button would be a status in costume).
-               Clear is a normal-flow neutral action: single click, no
-               confirm, and the toast points at undo. -->
+          <!-- Overview Actions. The Expand Graph control keeps its box and slot
+               in every state — it never disappears or morphs into a different
+               element (a vanishing/shape-shifting control reads as a glitch).
+               When nothing is left to expand it settles into a quiet, non-
+               interactive "Fully expanded" status in the SAME button footprint
+               (rule 5: a resolved state is a status, not a live action — but it
+               stays a caption-in-a-button-box, not a dead greyed-out action).
+               Clear is a normal-flow neutral action: single click, no confirm,
+               and the toast points at undo. -->
           <div
             v-if="counters.total.node > 0"
             class="result-graph__actions"
@@ -360,23 +371,32 @@
             <button
               v-if="hasUnexpandedNodes"
               class="btn btn-sm btn-outline-secondary"
+              :disabled="isExpanding"
               @click="expandOneMoreHop()"
             >
-              <i class="fa-solid fa-diagram-project" />
-              <span v-if="expandGraphInfo.hasCount">
-                Expand Graph (+{{ expandGraphInfo.willExpand }})
-              </span>
-              <span v-else>
-                Expand Graph
-              </span>
+              <template v-if="isExpanding">
+                <i class="fa-solid fa-spinner fa-spin" />
+                Expanding…
+              </template>
+              <template v-else>
+                <i class="fa-solid fa-diagram-project" />
+                <span v-if="expandGraphInfo.hasCount">
+                  Expand Graph (+{{ expandGraphInfo.willExpand }})
+                </span>
+                <span v-else>
+                  Expand Graph
+                </span>
+              </template>
             </button>
-            <p
+            <button
               v-else
-              class="result-graph__overview-status"
+              type="button"
+              class="btn btn-sm btn-outline-secondary result-graph__expand-btn--done"
+              aria-disabled="true"
             >
               <i class="fa-solid fa-circle-check" />
               Fully expanded
-            </p>
+            </button>
             <button
               class="btn btn-sm btn-outline-secondary"
               title="Remove everything from the canvas — one undo restores it"
@@ -636,6 +656,12 @@ export default {
     isUndoRedoInProgress: false,
     // Re-entrancy guard for pin navigation (see handleSelectPinnedEntity).
     pinSelectInFlight: false,
+    // Re-entrancy guard + busy state shared by all three expand entry points
+    // (expandOnNode, expandSelectedNode, expandOneMoreHop). Set synchronously at
+    // the top of an expand and cleared in a finally, so a second (frustration/
+    // double) click while a fetch is in flight is a no-op and the Expand buttons
+    // can show a quiet in-button spinner. See the expand methods below.
+    isExpanding: false,
     // ---- Find-connection (shortest path between two entities) -----------
     // Re-entrancy guard so a second find can't interleave a duplicate history
     // entry while one is still running (mirrors pinSelectInFlight).
@@ -853,9 +879,17 @@ export default {
         let totalNodesToAdd = 0;
         let countedNodes = 0;
 
+        // Count over the SAME leaves _expandOneMoreHopInner will expand — a leaf
+        // is skipped only when profligate (>10 new neighbours). Only leaves with
+        // a loaded count contribute to the shown number; leaves whose count is
+        // still loading are expandable too but aren't summed, so the badge is a
+        // lower bound that firms up as counts arrive.
         leafNodes.forEach(node => {
           const count = this.neighborCounts[node.id];
-          if (count !== undefined && !this.profligateNodes.has(node.id)) {
+          if (this.profligateNodes.has(node.id) || (typeof count === "number" && count > 10)) {
+            return;
+          }
+          if (typeof count === "number") {
             totalNodesToAdd += count;
             countedNodes++;
           }
@@ -1883,6 +1917,18 @@ export default {
     },
 
     async expandOnNode(model) {
+      // Re-entry guard: a second click while an expand is in flight is a no-op.
+      if (this.isExpanding) {
+        return;
+      }
+      this.isExpanding = true;
+      try {
+        await this._expandOnNodeInner(model);
+      } finally {
+        this.isExpanding = false;
+      }
+    },
+    async _expandOnNodeInner(model) {
       const { tableName, primaryKeyValue, primaryKeyName } = this.getInfoForExpansion(model);
       const sizeLimit = this.settingsStore.performance.maxNumberOfNodesToExpand;
       let neighbors = null;
@@ -1898,9 +1944,16 @@ export default {
       } catch (e) {
         // Ignore error for now. Just don't expand if the core does not execute the query.
         console.error(e);
+        this.showToast("Couldn't expand — server busy. Try again.", 4000);
         return;
       }
       if (!neighbors) {
+        return;
+      }
+      // A shed/failed sub-query makes the neighbour set partial: don't quietly
+      // present it as complete. Roll back to no-op and tell the user.
+      if (neighbors.incomplete) {
+        this.showToast("Couldn't expand — server busy. Try again.", 4000);
         return;
       }
 
@@ -1972,9 +2025,18 @@ export default {
 
     async expandOneMoreHop() {
       if (!this.g6Graph) return;
-
-      const sizeLimit = this.settingsStore.performance.maxNumberOfNodesToExpand;
-
+      // Re-entry guard: a second click while an expand is in flight is a no-op.
+      if (this.isExpanding) {
+        return;
+      }
+      this.isExpanding = true;
+      try {
+        await this._expandOneMoreHopInner();
+      } finally {
+        this.isExpanding = false;
+      }
+    },
+    async _expandOneMoreHopInner() {
       // Get all currently visible nodes
       const allNodes = this.g6Graph.getNodeData();
 
@@ -1987,72 +2049,77 @@ export default {
         return;
       }
 
-      // Prepare to fetch neighbors for all leaf nodes
-      const fetchPromises = leafNodes.map(async (node) => {
-        try {
-          const { tableName, primaryKeyName, primaryKeyValue } = this.getInfoForExpansion(node);
-
-          const neighbors = await NeighborsFetcher.fetchNeighbors({
-            tableName,
-            primaryKeyName,
-            primaryKeyValue,
-            relTables: this.schema.relTables,
-            sizeLimit,
-            isWasm: this.modeStore.isWasm,
-          });
-
-          return { nodeId: node.id, neighbors };
-        } catch (e) {
-          console.error("Failed to fetch neighbors:", e);
-          return { nodeId: node.id, neighbors: null };
+      // Pre-filter high-degree ("profligate") leaves BEFORE fetching, using the
+      // already-known new-neighbour counts (`neighborCounts`, populated by the
+      // count-badge path with the SAME `>10` threshold as `recordNeighborCount`).
+      // Skipping them here keeps the batched fetch's per-source fan-out bounded,
+      // which is what lets `fetchNeighborsBatched` safely drop the per-source
+      // LIMIT. A leaf whose count hasn't loaded yet is treated as expandable
+      // (low-severity: the batched query is cheap and `truncated` stays honest).
+      const expandableLeaves = [];
+      const profligateLeaves = [];
+      leafNodes.forEach(node => {
+        const count = this.neighborCounts[node.id];
+        if (this.profligateNodes.has(node.id) || (typeof count === "number" && count > 10)) {
+          profligateLeaves.push(node);
+        } else {
+          expandableLeaves.push(node);
         }
       });
 
-      const results = await Promise.all(fetchPromises);
-      const validResults = results.filter(r => r.neighbors !== null && r.neighbors.rows && r.neighbors.rows.length > 0);
-
-      if (validResults.length === 0) {
-        this.showToast("No new neighbors found", 3000);
-        return;
-      }
-
-      // Count NEW neighbors for each node and classify as profligate or normal
-      const nodesToExpand = [];
-      const profligateNodes = [];
-
-      for (const result of validResults) {
-        const { nodeId, neighbors } = result;
-        const { nodes } = this.extractGraphFromQueryResultMethod(neighbors);
-
-        // Count NEW neighbor NODES only (not edges)
-        let newCount = 0;
-        nodes.forEach(n => {
-          try {
-            this.g6Graph.getNodeData(n.id);
-            // Node exists, don't count
-          } catch (e) {
-            // Node doesn't exist, count it
-            newCount++;
-          }
-        });
-
-        // Classify node based on new neighbor count
-        if (newCount > 10) {
-          profligateNodes.push({ nodeId, neighbors, newCount });
-          // Mark as profligate
-          this.profligateNodes.add(nodeId);
-          this.neighborCounts[nodeId] = newCount;
-          this.updateNodeBadge(nodeId, true);
-        } else {
-          nodesToExpand.push({ nodeId, neighbors, newCount });
+      if (expandableLeaves.length === 0) {
+        if (profligateLeaves.length > 0) {
+          this.showToast(`All ${profligateLeaves.length} remaining nodes have >10 connections. Double-click nodes individually to expand.`, 4000);
         }
-      }
-
-      if (nodesToExpand.length === 0 && profligateNodes.length > 0) {
-        // Only profligate nodes remain - ALWAYS show a warning so user knows why nothing happened
-        this.showToast(`All ${profligateNodes.length} remaining nodes have >10 connections. Double-click nodes individually to expand.`, 4000);
         return;
       }
+
+      // Group expandable leaves by node table + primary-key column so each
+      // batched query has a single consistent table and pk name (leaves can span
+      // multiple node tables). For each group, also build a pk -> sourceNodeId
+      // map so we can re-associate each returned neighbour/edge with the source
+      // leaf that introduced it (row.pk carries src.pk). Scoped per group so pk
+      // values can't collide across tables.
+      const groups = new Map();
+      expandableLeaves.forEach(node => {
+        try {
+          const { tableName, primaryKeyName, primaryKeyValue } = this.getInfoForExpansion(node);
+          if (!groups.has(tableName)) {
+            groups.set(tableName, { tableName, primaryKeyName, entries: [], pkToSourceId: {} });
+          }
+          const group = groups.get(tableName);
+          group.entries.push({ nodeId: node.id, primaryKeyValue });
+          group.pkToSourceId[String(primaryKeyValue)] = node.id;
+        } catch (e) {
+          console.error("Failed to resolve node for expansion:", e);
+        }
+      });
+
+      // FETCH ALL GROUPS FIRST, MUTATE NOTHING YET. Each group makes O(rel types
+      // x directions x chunks) requests, independent of leaf count, so a large
+      // expand can no longer trip the server's in-flight load-shed guard.
+      const groupList = Array.from(groups.values());
+      const groupResults = await Promise.all(
+        groupList.map(group =>
+          NeighborsFetcher.fetchNeighborsBatched({
+            tableName: group.tableName,
+            primaryKeyName: group.primaryKeyName,
+            primaryKeyValues: group.entries.map(e => e.primaryKeyValue),
+            relTables: this.schema.relTables,
+            isWasm: this.modeStore.isWasm,
+          })
+        )
+      );
+
+      // ALL-OR-NOTHING gate: if ANY sub-query was shed/failed, the fetched set is
+      // partial. Commit nothing, leave the canvas untouched, and prompt a retry —
+      // never present a half-populated expansion as complete.
+      if (groupResults.some(result => result.incomplete)) {
+        this.showToast("Server was busy — nothing expanded. Try again.", 5000);
+        return;
+      }
+
+      const hadTruncation = groupResults.some(result => result.truncated);
 
       // Capture state BEFORE adding for undo
       const nodesBefore = new Set((this.g6Graph.getNodeData() || []).map(n => n.id));
@@ -2062,30 +2129,57 @@ export default {
       const allExpansionEntries = [];
       const allNodeIntroducedByEntries = {};
 
-      // Add normal nodes only
-      for (const { nodeId, neighbors } of nodesToExpand) {
-        await this.addDataWithQueryResult(neighbors);
-        const expansionEntry = { id: nodeId, neighbors };
-        this.expansions.push(expansionEntry);
-        allExpansionEntries.push(expansionEntry);
+      // Commit each group. Partition the merged rows back to their source leaf by
+      // row.pk so every expandable leaf gets a per-source `expansions` entry
+      // (marking it expanded, even if it returned zero neighbours) and
+      // `nodeIntroducedBy` keeps per-source provenance — the exact shapes undo/
+      // redo and collapse already consume.
+      for (let i = 0; i < groupList.length; i++) {
+        const group = groupList[i];
+        const result = groupResults[i];
 
-        // Track which expansion introduced each new node
-        neighbors.rows.forEach((row) => {
-          if (row.dst && row.dst._id) {
-            const newNodeId = encodeId(row.dst._id);
-            if (!this.nodeIntroducedBy[newNodeId] && !this.originalNodeIds.has(newNodeId)) {
-              this.nodeIntroducedBy[newNodeId] = nodeId;
-              allNodeIntroducedByEntries[newNodeId] = nodeId;
-            }
+        // Bucket rows by source node id (from row.pk).
+        const rowsBySource = {};
+        group.entries.forEach(entry => { rowsBySource[entry.nodeId] = []; });
+        (result.rows || []).forEach(row => {
+          const sourceId = group.pkToSourceId[String(row.pk)];
+          if (sourceId && rowsBySource[sourceId]) {
+            rowsBySource[sourceId].push(row);
           }
+        });
+
+        // Feed the whole group's rows to the canvas in one pass (the extractor
+        // draws both `dst` nodes and `r` edges; the scalar `pk` column is
+        // ignored). addData's edge-integrity guard drops any dangling edge.
+        if (result.rows && result.rows.length > 0) {
+          await this.addDataWithQueryResult({ rows: result.rows, dataTypes: result.dataTypes });
+        }
+
+        // Per-source bookkeeping for undo/provenance.
+        group.entries.forEach(entry => {
+          const nodeId = entry.nodeId;
+          const rows = rowsBySource[nodeId] || [];
+          const expansionEntry = { id: nodeId, neighbors: { rows, dataTypes: result.dataTypes } };
+          this.expansions.push(expansionEntry);
+          allExpansionEntries.push(expansionEntry);
+
+          rows.forEach(row => {
+            if (row.dst && row.dst._id) {
+              const newNodeId = encodeId(row.dst._id);
+              if (!this.nodeIntroducedBy[newNodeId] && !this.originalNodeIds.has(newNodeId)) {
+                this.nodeIntroducedBy[newNodeId] = nodeId;
+                allNodeIntroducedByEntries[newNodeId] = nodeId;
+              }
+            }
+          });
         });
       }
 
-      // Complete edges among ALL nodes now on the canvas — the per-node
-      // fetchNeighbors above only draws focus->neighbour edges, so edges
-      // BETWEEN the newly-added leaves (or to other pre-existing nodes) would
-      // otherwise stay undrawn even once every node reports as expanded. Runs
-      // before the diff so those edges fold into this expansion's addedEdges.
+      // Complete edges among ALL nodes now on the canvas — the batched fetch
+      // above only draws source->neighbour edges, so edges BETWEEN the newly-
+      // added leaves (or to other pre-existing nodes) would otherwise stay
+      // undrawn even once every node reports as expanded. Runs before the diff
+      // so those edges fold into this expansion's addedEdges.
       await this.completeEdgesAmongCurrentNodes();
 
       // Capture added nodes/edges AFTER adding for undo
@@ -2094,8 +2188,12 @@ export default {
       const addedNodes = nodesAfter.filter(n => !nodesBefore.has(n.id));
       const addedEdges = edgesAfter.filter(e => !edgesBefore.has(e.id));
 
-      // Record command for undo/redo (batch expansion)
-      if (addedNodes.length > 0 || addedEdges.length > 0) {
+      // Record command for undo/redo. Push whenever state changed — including
+      // when leaves were marked expanded (allExpansionEntries) but added no new
+      // nodes/edges — so undoExpandGraph can revert those `expansions` markers.
+      // Without this, a batch expand of leaves that all have zero new neighbours
+      // would strand un-undoable "expanded" markers.
+      if (addedNodes.length > 0 || addedEdges.length > 0 || allExpansionEntries.length > 0) {
         this.historyManager.push({
           type: 'expandGraph',
           data: {
@@ -2109,19 +2207,25 @@ export default {
 
       this.deselectAll();
 
-      // Show message about profligate nodes (only once)
-      if (profligateNodes.length > 0) {
+      // Show message about skipped profligate nodes (only once each)
+      if (profligateLeaves.length > 0) {
         let needsWarning = false;
-        profligateNodes.forEach(p => {
-          if (!this.shownProfligateWarnings.has(p.nodeId)) {
+        profligateLeaves.forEach(node => {
+          if (!this.shownProfligateWarnings.has(node.id)) {
             needsWarning = true;
-            this.shownProfligateWarnings.add(p.nodeId);
+            this.shownProfligateWarnings.add(node.id);
           }
         });
 
         if (needsWarning) {
-          this.showToast(`Skipped ${profligateNodes.length} highly-connected nodes (>10 connections). Double-click to expand individually.`, 5000);
+          this.showToast(`Skipped ${profligateLeaves.length} highly-connected nodes (>10 connections). Double-click to expand individually.`, 5000);
         }
+      }
+
+      // Honesty: if the server capped any chunk, some nodes may have more
+      // neighbours than were drawn.
+      if (hadTruncation) {
+        this.showToast("Some nodes had more neighbours than could be loaded at once.", 5000);
       }
 
       // Trigger neighbor count update for any new leaf nodes
@@ -2438,9 +2542,30 @@ export default {
       }));
 
       // New nodes DON'T have fx/fy, so force layout will position them
+      const finalNodes = pinnedExistingNodes.concat(nodesToAdd);
+
+      // EDGE-INTEGRITY GUARD: G6 v5's setData throws an uncaught
+      // "Node not found for id: <id>" if any edge references an endpoint that
+      // isn't in the node set. That can happen when a neighbour fetch is
+      // partially shed (an edge arrives but its endpoint node's row was dropped)
+      // or a REL-only completion result names a node that isn't on the canvas.
+      // Drop any such dangling edge here — the single point every G6 feed funnels
+      // through — and console.warn (never swallow) so drops are visible and tie
+      // back to the fetcher's incomplete flag. This is the structural crash fix.
+      const finalNodeIds = new Set(finalNodes.map(node => node.id));
+      const finalEdges = currentEdges.concat(edgesToAdd).filter(edge => {
+        if (finalNodeIds.has(edge.source) && finalNodeIds.has(edge.target)) {
+          return true;
+        }
+        console.warn(
+          `addData: dropping dangling edge ${edge.id} (source=${edge.source}, target=${edge.target}) — endpoint not in node set`
+        );
+        return false;
+      });
+
       const newData = {
-        nodes: pinnedExistingNodes.concat(nodesToAdd),
-        edges: currentEdges.concat(edgesToAdd),
+        nodes: finalNodes,
+        edges: finalEdges,
       };
       this.g6Graph.setData(newData);
       await this.render();
@@ -4364,14 +4489,14 @@ export default {
       margin-bottom: 1rem;
     }
 
-    // Sits in the Expand button's slot when the graph is fully expanded, so
-    // the panel keeps its shape as the state flips.
-    .result-graph__overview-status {
-      margin: 0;
-      padding: 0.25rem 0;
-      font-size: 0.8rem;
+    // "Fully expanded" resolved state: keeps the Expand button's box and slot
+    // but reads as a settled status, not a live action — muted, no hover lift,
+    // default cursor. aria-disabled (not `disabled`) keeps it in the tab/AX tree
+    // as a status rather than a dead greyed-out control.
+    .result-graph__expand-btn--done {
       color: var(--bs-body-text-secondary);
-      text-align: center;
+      cursor: default;
+      pointer-events: none;
 
       i {
         margin-right: 0.3rem;

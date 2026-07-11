@@ -26,11 +26,34 @@ import Kuzu from "./KuzuWasm";
 // badge, so this is an accepted LOW-severity tradeoff.
 const NEIGHBOR_COUNT_PK_CHUNK_SIZE = 25;
 
+// Row count at (or above) which a batched neighbour query is ASSUMED to have hit
+// the server's silent KUZU_QUERY_SIZE_LIMIT and dropped rows. The exact limit is
+// a server-only env var not cleanly readable from this client, so we use its
+// documented default (10000). `fetchNeighborsBatched` also projects `dst`, so a
+// dense chunk can approach the cap; a chunk returning >= this many rows flags the
+// merged result `truncated` (the batched analogue of the per-direction
+// `rows.length >= sizeLimit` check in `fetchNeighbors`). An operator who sets
+// KUZU_QUERY_SIZE_LIMIT lower should lower NEIGHBOR_COUNT_PK_CHUNK_SIZE to match.
+const NEIGHBOR_BATCH_ROW_CAP = 10000;
+
 // Kuzu cannot bind a wildcard relationship variable across edge tables whose
 // same-named STRUCT properties differ in shape (e.g. the Ownership vs
 // Influence `sources` structs), so every fetch here runs one query per
 // concrete relationship type and merges the rows client-side.
 class NeighborsFetcher {
+  // A failed sub-query returns this sentinel instead of a bare `null`, so a
+  // transport failure (load-shed 503, rate-limit 429, timeout 408, bad query
+  // 400, or a network error) is DISTINGUISHABLE from a query that legitimately
+  // matched zero rows. The sentinel has no `.rows`, so every existing
+  // row-merging path (`result && result.rows` / `!result || !result.rows`)
+  // still skips it — but `_mergeResults` and the callers can now count it and
+  // flag the merged result `incomplete`. Without this, a shed sub-query looks
+  // identical to "this node has no neighbours", and the caller silently
+  // presents a partial result as complete.
+  _isFailure(result) {
+    return Boolean(result && result.__failed);
+  }
+
   async _runQuery(query, params, isWasm) {
     try {
       if (isWasm) {
@@ -40,21 +63,37 @@ class NeighborsFetcher {
       return response.data;
     } catch (err) {
       console.error("Neighbor query failed", err);
-      return null;
+      // err.response.status is present for an HTTP error (503/429/408/400);
+      // absent for a network/transport error (err.response is undefined).
+      return { __failed: true, status: (err && err.response && err.response.status) || null };
     }
   }
 
   // Assumes every result projects the same column set (all current callers
-  // return exactly `r, dst` or `r`), so the first result's dataTypes apply.
+  // return exactly `r, dst`, `pk, r, dst`, or `r`), so the first result's
+  // dataTypes apply.
+  //
+  // `incomplete` is computed from the RAW results array (before the null/
+  // sentinel filter) so a failed sub-query is never silently dropped: if ANY
+  // constituent query failed, the merged result carries `incomplete: true`.
+  // When every sub-query failed there are no rows to key dataTypes off, so we
+  // still return a result object (empty rows, `incomplete: true`) rather than
+  // `null` — otherwise the honesty signal would be lost on a full shed. A
+  // genuinely empty (all-succeeded, zero-row) merge still returns `null` for
+  // backward compatibility.
   _mergeResults(results, sizeLimit) {
+    const incomplete = results.some(result => this._isFailure(result));
     const valid = results.filter(result => result && result.rows);
     if (valid.length === 0) {
-      return null;
+      return incomplete ? { rows: [], dataTypes: [], incomplete: true } : null;
     }
     const merged = { rows: [], dataTypes: valid[0].dataTypes };
     valid.forEach(result => merged.rows.push(...result.rows));
     if (typeof sizeLimit === "number") {
       merged.rows = merged.rows.slice(0, sizeLimit);
+    }
+    if (incomplete) {
+      merged.incomplete = true;
     }
     return merged;
   }
@@ -117,9 +156,19 @@ class NeighborsFetcher {
     const truncated =
       Boolean(inbound && inbound.rows.length >= sizeLimit) ||
       Boolean(outbound && outbound.rows.length >= sizeLimit);
+    // If EITHER direction had a failed sub-query, the returned rows are not the
+    // node's complete neighbour set. Surface it so callers can distinguish
+    // "server was busy" from "this node has no neighbours" instead of silently
+    // presenting a partial expansion as complete.
+    const incomplete =
+      Boolean(inbound && inbound.incomplete) ||
+      Boolean(outbound && outbound.incomplete);
     if (!inbound) {
       if (outbound) {
         outbound.truncated = truncated;
+        if (incomplete) {
+          outbound.incomplete = true;
+        }
       }
       return outbound;
     }
@@ -127,6 +176,9 @@ class NeighborsFetcher {
       inbound.rows.push(...outbound.rows);
     }
     inbound.truncated = truncated;
+    if (incomplete) {
+      inbound.incomplete = true;
+    }
     return inbound;
   }
 
@@ -229,6 +281,113 @@ class NeighborsFetcher {
     });
 
     return neighborsByPk;
+  }
+
+  // Build one query per relationship type per direction that projects BOTH the
+  // edge `r` AND the neighbour node `dst` — the batched analogue of the
+  // per-node `fetchNeighbors` queries. `src.pk` is projected so the caller can
+  // re-associate each neighbour/edge with the source node that introduced it
+  // (needed for `nodeIntroducedBy` provenance, per-source `expansions` undo
+  // entries, and the batch-expand history entry). Each query binds a single
+  // concrete rel type, so the divergent-STRUCT wildcard-binding hazard never
+  // arises. Pure over its inputs (no I/O), so it is unit-testable without a DB.
+  _buildNeighborQueries({ tableName, primaryKeyName, relTables }) {
+    if (!Array.isArray(relTables)) {
+      throw new Error("_buildNeighborQueries requires relTables (schema.relTables)");
+    }
+    const escapedTable = DataDefinitionLanguage._escapeName(tableName);
+    const escapedPk = DataDefinitionLanguage._escapeName(primaryKeyName);
+
+    // Connectivity is matched on the raw table name; only escaped names are
+    // interpolated into queries.
+    const inbound = relTables
+      .filter(t => (t.connectivity || []).some(c => c.dst === tableName))
+      .map(t =>
+        `UNWIND $pks AS pk MATCH (dst) -[r:${DataDefinitionLanguage._escapeName(t.name)}]-> (src:${escapedTable}) WHERE src.${escapedPk} = pk RETURN src.${escapedPk} AS pk, r, dst;`
+      );
+    const outbound = relTables
+      .filter(t => (t.connectivity || []).some(c => c.src === tableName))
+      .map(t =>
+        `UNWIND $pks AS pk MATCH (src:${escapedTable}) -[r:${DataDefinitionLanguage._escapeName(t.name)}]-> (dst) WHERE src.${escapedPk} = pk RETURN src.${escapedPk} AS pk, r, dst;`
+      );
+
+    return [...inbound, ...outbound];
+  }
+
+  // Batched neighbour expansion for a set of source nodes that all live in one
+  // node table. Runs the `UNWIND $pks` queries from `_buildNeighborQueries`
+  // (one per rel type per direction, chunked at NEIGHBOR_COUNT_PK_CHUNK_SIZE)
+  // and merges them into a SINGLE `{ rows, dataTypes, incomplete, truncated }`
+  // result the caller can feed straight into the same `addDataWithQueryResult`
+  // path the per-node expand uses — each row is `{ pk, r, dst }`, so the graph
+  // extractor draws both the edge and the neighbour node.
+  //
+  // Request count scales with (rel types x directions x chunks), NOT with the
+  // number of source nodes, so a large multi-node expand can no longer trip the
+  // server's in-flight-query load-shed guard.
+  //
+  // - `incomplete` is true if ANY constituent sub-query failed (a shed/timeout/
+  //   error), so the caller can bail all-or-nothing before touching the canvas.
+  // - `truncated` is true if any chunk hit NEIGHBOR_BATCH_ROW_CAP (the server
+  //   silently capped that chunk). There is deliberately NO per-source LIMIT: an
+  //   UNWIND query can't cheaply apply one, and the caller pre-filters
+  //   high-degree ("profligate") sources before calling, so per-source fan-out
+  //   is already bounded.
+  async fetchNeighborsBatched({
+    tableName,
+    primaryKeyName,
+    primaryKeyValues,
+    relTables,
+    isWasm = false,
+  }) {
+    if (!Array.isArray(primaryKeyValues)) {
+      throw new Error("fetchNeighborsBatched requires primaryKeyValues array");
+    }
+    if (primaryKeyValues.length === 0) {
+      return { rows: [], dataTypes: [], incomplete: false, truncated: false };
+    }
+
+    const queries = this._buildNeighborQueries({
+      tableName,
+      primaryKeyName,
+      relTables,
+    });
+    const unwrappedPks = primaryKeyValues.map(v => this._unwrapPrimaryKeyValue(v));
+
+    // Chunk the pk list so each request stays under the server's silent row cap.
+    // Query text is identical across chunks — only the bound $pks param varies —
+    // so pk VALUES are never interpolated, preserving injection safety.
+    const chunks = [];
+    for (let i = 0; i < unwrappedPks.length; i += NEIGHBOR_COUNT_PK_CHUNK_SIZE) {
+      chunks.push(unwrappedPks.slice(i, i + NEIGHBOR_COUNT_PK_CHUNK_SIZE));
+    }
+
+    const results = await Promise.all(
+      chunks.flatMap(chunk =>
+        queries.map(query => this._runQuery(query, { pks: chunk }, isWasm))
+      )
+    );
+
+    // A chunk that returned at least the cap is assumed to have been truncated
+    // by the server. Checked on the raw results (before _mergeResults) alongside
+    // the incomplete flag it computes.
+    const truncated = results.some(
+      result => result && result.rows && result.rows.length >= NEIGHBOR_BATCH_ROW_CAP
+    );
+
+    // No sizeLimit: per-source fan-out is bounded by the caller's profligate
+    // pre-filter, so a global slice would arbitrarily drop some sources' edges.
+    const merged = this._mergeResults(results);
+    if (!merged) {
+      // All sub-queries succeeded and matched zero rows.
+      return { rows: [], dataTypes: [], incomplete: false, truncated: false };
+    }
+    return {
+      rows: merged.rows,
+      dataTypes: merged.dataTypes,
+      incomplete: Boolean(merged.incomplete),
+      truncated,
+    };
   }
 
   // Build one query per relationship type that can connect the focus node's

@@ -810,3 +810,274 @@ describe("fetchNeighbors truncation flag", () => {
     runSpy.mockRestore();
   });
 });
+
+describe("_buildNeighborQueries", () => {
+  it("emits one query per relevant rel type per direction (never per node)", () => {
+    const queries = NeighborsFetcher._buildNeighborQueries({
+      tableName: "Company",
+      primaryKeyName: "id",
+      relTables,
+    });
+    // Same connectivity accounting as _buildNeighborCountQueries:
+    // inbound: Directorship, CorporateOwnership (2)
+    // outbound: CorporateOwnership, RegisteredAddress (2)
+    expect(queries).toHaveLength(4);
+  });
+
+  it("projects the pk, the edge r, AND the neighbour node dst", () => {
+    const queries = NeighborsFetcher._buildNeighborQueries({
+      tableName: "Company",
+      primaryKeyName: "id",
+      relTables,
+    });
+    queries.forEach(q => {
+      expect(q).toContain("UNWIND $pks AS pk");
+      // Unlike the count builder, this one binds AND returns the edge var `r`
+      // alongside dst so edges draw.
+      expect(q).toContain("RETURN src.`id` AS pk, r, dst;");
+      expect(q).toMatch(/-\[r:`[A-Za-z]+`\]->/);
+    });
+  });
+
+  it("produces correct inbound and outbound query shapes", () => {
+    const inbound = NeighborsFetcher._buildNeighborQueries({
+      tableName: "Company",
+      primaryKeyName: "id",
+      relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
+    });
+    expect(inbound).toEqual([
+      "UNWIND $pks AS pk MATCH (dst) -[r:`Directorship`]-> (src:`Company`) WHERE src.`id` = pk RETURN src.`id` AS pk, r, dst;",
+    ]);
+
+    const outbound = NeighborsFetcher._buildNeighborQueries({
+      tableName: "Company",
+      primaryKeyName: "id",
+      relTables: [{ name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] }],
+    });
+    expect(outbound).toEqual([
+      "UNWIND $pks AS pk MATCH (src:`Company`) -[r:`RegisteredAddress`]-> (dst) WHERE src.`id` = pk RETURN src.`id` AS pk, r, dst;",
+    ]);
+  });
+
+  it("escapes the node table, primary-key, and rel-type identifiers", () => {
+    const queries = NeighborsFetcher._buildNeighborQueries({
+      tableName: "Weird Table",
+      primaryKeyName: "pk name",
+      relTables: [{ name: "Rel Type", connectivity: [{ src: "Weird Table", dst: "Other" }] }],
+    });
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toContain("(src:`Weird Table`)");
+    expect(queries[0]).toContain("`pk name`");
+    expect(queries[0]).toContain("-[r:`Rel Type`]->");
+  });
+
+  it("throws when relTables is not an array", () => {
+    expect(() =>
+      NeighborsFetcher._buildNeighborQueries({ tableName: "Company", primaryKeyName: "id" })
+    ).toThrow();
+  });
+});
+
+describe("fetchNeighborsBatched", () => {
+  const companyRels = [
+    { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
+    { name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] },
+  ];
+
+  it("binds the whole pk list as a single $pks param, once per rel type, and merges rows", async () => {
+    const rowP = { pk: "c1", r: { _id: { table: 5, offset: 1 }, _label: "Directorship" }, dst: { _id: { table: 2, offset: 1 }, _label: "Person" } };
+    const rowA = { pk: "c1", r: { _id: { table: 6, offset: 1 }, _label: "RegisteredAddress" }, dst: { _id: { table: 1, offset: 1 }, _label: "Address" } };
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValueOnce({ rows: [rowP], dataTypes: { pk: "STRING", r: "REL", dst: "NODE" } })
+      .mockResolvedValueOnce({ rows: [rowA], dataTypes: { pk: "STRING", r: "REL", dst: "NODE" } });
+
+    const result = await NeighborsFetcher.fetchNeighborsBatched({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValues: ["c1", "c2", "c3"],
+      relTables: companyRels,
+    });
+
+    // 2 rel types (1 inbound + 1 outbound) -> 2 requests, regardless of 3 pks.
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    runSpy.mock.calls.forEach(([, params]) => {
+      expect(params).toEqual({ pks: ["c1", "c2", "c3"] });
+    });
+    // Merged rows carry both r and dst, and the source pk for re-association.
+    expect(result.rows).toHaveLength(2);
+    expect(result.dataTypes).toEqual({ pk: "STRING", r: "REL", dst: "NODE" });
+    expect(result.incomplete).toBe(false);
+    expect(result.truncated).toBe(false);
+    runSpy.mockRestore();
+  });
+
+  it("chunks a pk list larger than the chunk size into multiple requests per rel type", async () => {
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValue({ rows: [], dataTypes: { pk: "STRING", r: "REL", dst: "NODE" } });
+
+    // 60 pks, chunk size 25 -> 3 chunks. One rel type -> 3 requests.
+    const pks = Array.from({ length: 60 }, (_, i) => `c${i}`);
+    await NeighborsFetcher.fetchNeighborsBatched({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValues: pks,
+      relTables: [{ name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] }],
+    });
+
+    expect(runSpy).toHaveBeenCalledTimes(3);
+    const chunks = runSpy.mock.calls.map(([, params]) => params.pks);
+    expect(chunks.map(c => c.length)).toEqual([25, 25, 10]);
+    expect(chunks.flat()).toEqual(pks);
+    runSpy.mockRestore();
+  });
+
+  it("flags incomplete when ANY sub-query fails (shed), so the caller can bail all-or-nothing", async () => {
+    // Directorship succeeds with a row; RegisteredAddress is shed (failure
+    // sentinel from _runQuery). The merged result must report incomplete.
+    const rowP = { pk: "c1", r: { _id: { table: 5, offset: 1 }, _label: "Directorship" }, dst: { _id: { table: 2, offset: 1 }, _label: "Person" } };
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValueOnce({ rows: [rowP], dataTypes: { pk: "STRING", r: "REL", dst: "NODE" } })
+      .mockResolvedValueOnce({ __failed: true, status: 503 });
+
+    const result = await NeighborsFetcher.fetchNeighborsBatched({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValues: ["c1"],
+      relTables: companyRels,
+    });
+
+    expect(result.incomplete).toBe(true);
+    runSpy.mockRestore();
+  });
+
+  it("flags incomplete even when every sub-query fails (full shed) rather than returning empty", async () => {
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValue({ __failed: true, status: 503 });
+
+    const result = await NeighborsFetcher.fetchNeighborsBatched({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValues: ["c1"],
+      relTables: companyRels,
+    });
+
+    expect(result.incomplete).toBe(true);
+    expect(result.rows).toEqual([]);
+    runSpy.mockRestore();
+  });
+
+  it("flags truncated when a chunk returns at least the row cap", async () => {
+    // Fabricate a chunk result at the cap size to simulate a server-side cap.
+    const capRows = Array.from({ length: 10000 }, (_, i) => ({
+      pk: "c1",
+      r: { _id: { table: 6, offset: i }, _label: "RegisteredAddress" },
+      dst: { _id: { table: 1, offset: i }, _label: "Address" },
+    }));
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValueOnce({ rows: capRows, dataTypes: { pk: "STRING", r: "REL", dst: "NODE" } });
+
+    const result = await NeighborsFetcher.fetchNeighborsBatched({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValues: ["c1"],
+      relTables: [{ name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] }],
+    });
+
+    expect(result.truncated).toBe(true);
+    expect(result.incomplete).toBe(false);
+    runSpy.mockRestore();
+  });
+
+  it("returns an empty, complete result for an empty pk list without querying", async () => {
+    const runSpy = vi.spyOn(NeighborsFetcher, "_runQuery");
+    const result = await NeighborsFetcher.fetchNeighborsBatched({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValues: [],
+      relTables: companyRels,
+    });
+    expect(result).toEqual({ rows: [], dataTypes: [], incomplete: false, truncated: false });
+    expect(runSpy).not.toHaveBeenCalled();
+    runSpy.mockRestore();
+  });
+
+  it("throws when primaryKeyValues is not an array", async () => {
+    await expect(
+      NeighborsFetcher.fetchNeighborsBatched({
+        tableName: "Company",
+        primaryKeyName: "id",
+        relTables: companyRels,
+      })
+    ).rejects.toThrow();
+  });
+});
+
+describe("fetchNeighbors incomplete flag", () => {
+  const person = { _id: { table: 2, offset: 1 }, _label: "Person" };
+
+  it("does NOT flag incomplete when queries legitimately return zero rows", async () => {
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValue({ rows: [], dataTypes: { r: "REL", dst: "NODE" } });
+
+    const result = await NeighborsFetcher.fetchNeighbors({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValue: "c1",
+      relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
+      sizeLimit: 5,
+    });
+    // All sub-queries succeeded and matched zero rows. The result must NOT be
+    // flagged incomplete — a genuine empty neighbour set is honest, not a shed.
+    expect(result === null || !result.incomplete).toBe(true);
+    runSpy.mockRestore();
+  });
+
+  it("flags incomplete when a sub-query fails, distinguishing shed from empty", async () => {
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      // inbound Directorship succeeds with a row
+      .mockResolvedValueOnce({ rows: [{ r: { _id: { table: 5, offset: 1 }, _label: "Directorship" }, dst: person }], dataTypes: { r: "REL", dst: "NODE" } })
+      // outbound RegisteredAddress is shed
+      .mockResolvedValueOnce({ __failed: true, status: 503 });
+
+    const result = await NeighborsFetcher.fetchNeighbors({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValue: "c1",
+      relTables: [
+        { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
+        { name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] },
+      ],
+      sizeLimit: 5,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result.incomplete).toBe(true);
+    runSpy.mockRestore();
+  });
+
+  it("flags incomplete on a full shed rather than looking like an empty neighbour set", async () => {
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValue({ __failed: true, status: 429 });
+
+    const result = await NeighborsFetcher.fetchNeighbors({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValue: "c1",
+      relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
+      sizeLimit: 5,
+    });
+
+    // A full shed must NOT collapse to null (which reads as "no neighbours").
+    expect(result).not.toBeNull();
+    expect(result.incomplete).toBe(true);
+    runSpy.mockRestore();
+  });
+});

@@ -582,7 +582,23 @@ export default {
           edges.push(edge);
         }
       }
-      edges = edges.filter(e => Boolean(e));
+      // EDGE-INTEGRITY GUARD: nodes come only from schema.nodeTables, but edge
+      // endpoints come from relTables[].connectivity (conn.src/conn.dst) with
+      // only a truthiness check above. A rel table whose connectivity names a
+      // node table absent from nodeTables would produce a dangling edge, and
+      // G6 v5's setData throws an uncaught "Node not found for id: <id>" on it.
+      // Drop any such edge before both feed points (drawGraph/redrawGraph)
+      // inherit the result, and console.warn (never swallow) so it's visible.
+      const nodeIds = new Set(nodes.map(n => n.id));
+      edges = edges.filter(e => {
+        if (nodeIds.has(e.source) && nodeIds.has(e.target)) {
+          return true;
+        }
+        console.warn(
+          `extractGraphFromSchema: dropping dangling edge ${e.id} (source=${e.source}, target=${e.target}) — endpoint node table not in schema`
+        );
+        return false;
+      });
       nodes.forEach(n => {
         n.data.degree = edges.filter(e => e.source === n.id || e.target === n.id).length;
       });
