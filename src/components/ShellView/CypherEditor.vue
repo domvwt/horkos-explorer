@@ -64,6 +64,15 @@
               class="editor-container"
               :class="{ 'editor-container--expanded': isEditorExpanded }"
             />
+            <div
+              v-if="!isEditorExpanded"
+              class="editor-resize-handle"
+              :class="{ 'editor-resize-handle--active': isResizing }"
+              title="Drag to resize the editor"
+              role="separator"
+              aria-orientation="horizontal"
+              @mousedown="startResize"
+            />
             <div class="editor-actions">
               <button class="run-button" @click="evaluateCell">
                 <i class="fa-solid fa-play" />
@@ -137,6 +146,12 @@ export default {
       observer: null,
       editorResizeDebounce: null,
       isEditorExpanded: false,
+      // Drag-to-resize state for the handle below the editor.
+      isResizing: false,
+      resizeStartY: 0,
+      resizeStartHeight: 0,
+      boundResizeMove: null,
+      boundStopResize: null,
     }
   },
 
@@ -202,6 +217,14 @@ export default {
       });
     });
     this.observer.observe(this.$refs.wrapper);
+
+    // Global listeners so a drag that leaves the thin handle still tracks and,
+    // crucially, a mouseup ANYWHERE ends the resize (fixes the grip that stayed
+    // "stuck" when the button was released off the handle).
+    this.boundResizeMove = this.onResizeMove;
+    this.boundStopResize = this.stopResize;
+    window.addEventListener("mousemove", this.boundResizeMove);
+    window.addEventListener("mouseup", this.boundStopResize);
   },
 
   beforeUnmount() {
@@ -212,9 +235,51 @@ export default {
       this.observer.disconnect();
       this.observer = null;
     }
+    if (this.boundResizeMove) {
+      window.removeEventListener("mousemove", this.boundResizeMove);
+    }
+    if (this.boundStopResize) {
+      window.removeEventListener("mouseup", this.boundStopResize);
+    }
   },
 
   methods: {
+    // --- Drag-to-resize the editor height ------------------------------------
+    // A dedicated handle (not native CSS `resize`) so it never competes with
+    // Monaco's own scrollbar/resize corner. Height is applied inline to the
+    // editor container; the wrapper's ResizeObserver then emits `editorResize`
+    // and ShellCell re-fits the result graph.
+    startResize(e) {
+      const el = this.$refs.editor;
+      if (!el) return;
+      this.isResizing = true;
+      this.resizeStartY = e.clientY;
+      this.resizeStartHeight = el.getBoundingClientRect().height;
+      // Suppress text selection while dragging.
+      e.preventDefault();
+    },
+
+    onResizeMove(e) {
+      if (!this.isResizing) return;
+      const el = this.$refs.editor;
+      if (!el) return;
+      const MIN_HEIGHT = 80;
+      // Leave room for the surrounding chrome so the editor can't swallow the
+      // whole viewport.
+      const MAX_HEIGHT = Math.max(MIN_HEIGHT, window.innerHeight - 220);
+      const delta = e.clientY - this.resizeStartY;
+      const next = Math.min(
+        MAX_HEIGHT,
+        Math.max(MIN_HEIGHT, this.resizeStartHeight + delta)
+      );
+      el.style.height = `${next}px`;
+    },
+
+    stopResize() {
+      this.isResizing = false;
+    },
+    // -------------------------------------------------------------------------
+
     handleTabClick(mode) {
       if (this.activeMode === mode && !this.isPanelMinimized) {
         // Clicking the active tab minimizes the panel
@@ -339,6 +404,12 @@ export default {
     },
     toggleEditorExpanded() {
       this.isEditorExpanded = !this.isEditorExpanded;
+      // The expand mode uses `height: auto`; a leftover inline height from a
+      // prior drag would win over the class rule (inline > class), so clear it
+      // when expanding. Drag height only applies in the collapsed state.
+      if (this.isEditorExpanded && this.$refs.editor) {
+        this.$refs.editor.style.height = "";
+      }
       // Trigger Monaco layout update after the CSS transition
       this.$nextTick(() => {
         if (this.editor) {
@@ -494,6 +565,55 @@ main {
       &.editor-container--expanded {
         flex: 1;
         height: auto;
+      }
+    }
+
+    // A dedicated drag strip below the editor. It lives in its own row (not on
+    // top of Monaco's scrollbar/resize corner), so grabbing it never fights
+    // Monaco for the right/bottom edge - the reason native `resize` failed. The
+    // wrapper's ResizeObserver picks up the resulting height change and emits
+    // `editorResize`, so ShellCell re-fits the result graph automatically.
+    .editor-resize-handle {
+      flex: 0 0 auto;
+      cursor: row-resize;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      // Slim look, generous grab. The visible strip is only ~9px, but the
+      // padding + negative margins swallow the surrounding 0.75rem flex gap so
+      // the real hit target is ~19px tall - easy to land on without adding any
+      // layout height (the gap it eats was dead space anyway). content-box is
+      // required so the padding EXTENDS the box; under Bootstrap's global
+      // border-box it would instead compress into the 9px and the hit area
+      // would stay tiny.
+      box-sizing: content-box;
+      height: 9px;
+      padding: 5px 0;
+      margin: -5px 0;
+      // Grip is faint but VISIBLE at rest so the control is discoverable (a
+      // resize handle can't be hover-only - you can't hover what you can't
+      // find); it brightens on hover/drag. Uses the app's inactive/secondary
+      // ink tokens so it stays quiet and theme-adaptive.
+      color: var(--bs-body-inactive);
+      transition: color 0.12s ease;
+
+      &::before {
+        content: "";
+        // Full-width hairline: reads as a resize seam between the editor and
+        // its actions, quieter than a centered pill and easier to find.
+        width: 100%;
+        height: 1px;
+        background-color: currentColor;
+      }
+
+      &:hover,
+      &.editor-resize-handle--active {
+        color: var(--bs-body-text-secondary);
+      }
+
+      // While the expand button owns sizing, the drag strip is meaningless.
+      .editor-container--expanded + & {
+        display: none;
       }
     }
 
