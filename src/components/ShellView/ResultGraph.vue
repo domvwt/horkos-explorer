@@ -2653,10 +2653,18 @@ export default {
      * @param {string} layoutType - Layout type key (d3-force, circular, radial, dagre, concentric)
      */
     async changeLayout(layoutType) {
-      if (!this.g6Graph || this.currentLayout === layoutType) {
+      if (!this.g6Graph) {
         return;
       }
 
+      // Note: we do NOT early-return when layoutType === currentLayout.
+      // Re-selecting the active layout re-runs it — for the force layout that
+      // reheats the simulation so the user can reshuffle/re-settle the graph
+      // (the one action people expect from picking Force-Directed again).
+      // Deterministic layouts (circular/dagre/concentric) simply re-animate to
+      // the same positions, which is harmless. Only the history push below is
+      // gated on an actual change, so a re-run never pollutes undo/redo with a
+      // no-op { from: x, to: x } entry.
       const previousLayout = this.currentLayout;
       await this.applyLayoutInternal(layoutType);
 
@@ -2679,6 +2687,15 @@ export default {
       }
 
       const previousLayout = this.currentLayout;
+      const wasForce = previousLayout === 'd3-force';
+      const isForce = layoutType === 'd3-force';
+
+      // Re-selecting the force layout when it's already active is a deliberate
+      // reshuffle request. setLayout + layout() re-runs the sim from the
+      // config's alpha, but the gentle 0.3 used for cross-layout switches barely
+      // moves an already-settled graph (which reads as "nothing happened"). For
+      // a force→force re-run, run from full energy so it visibly re-settles.
+      const reheatForce = isForce && wasForce;
 
       // Get new layout configuration
       const edges = this.g6Graph.getEdgeData() || [];
@@ -2687,13 +2704,24 @@ export default {
         edges,
         nodeCount: nodeData.length,
         isLayoutChange: true,
+        fullEnergy: reheatForce,
       });
 
       try {
-        // Stop current layout simulation if running
-        const currentLayoutInstance = this.g6Graph.getLayout();
-        if (currentLayoutInstance && currentLayoutInstance.simulation) {
-          currentLayoutInstance.simulation.stop();
+        // Release position pins before running the force layout. Restored views
+        // and expand/collapse operations set data.fx/data.fy to nail each node
+        // to a saved coordinate; d3-force honours those absolutely, so a pinned
+        // graph is frozen and re-running Force-Directed moves nothing at all.
+        // Choosing the force layout is an explicit request to let the simulation
+        // own positions, so we clear the pins first. (Deterministic layouts
+        // ignore fx/fy, so we leave them untouched for those.)
+        if (isForce) {
+          const unpinned = nodeData
+            .filter(node => node.data && (node.data.fx != null || node.data.fy != null))
+            .map(node => ({ id: node.id, data: { ...node.data, fx: null, fy: null } }));
+          if (unpinned.length > 0) {
+            this.g6Graph.updateNodeData(unpinned);
+          }
         }
 
         // Update layout
@@ -2703,8 +2731,6 @@ export default {
         await this.g6Graph.layout();
 
         // Update drag behaviors AFTER successful layout
-        const wasForce = previousLayout === 'd3-force';
-        const isForce = layoutType === 'd3-force';
         if (wasForce !== isForce) {
           try {
             this.g6Graph.updateBehavior({ key: 'drag-force', enable: isForce });

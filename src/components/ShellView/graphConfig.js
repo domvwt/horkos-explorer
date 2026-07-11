@@ -145,11 +145,16 @@ function getConcentricConfig() {
  * @param {Object} options - Layout-specific options
  * @param {number} options.nodeCount - Number of nodes in the graph
  * @param {boolean} options.isLayoutChange - Whether this is a layout change (vs initial render)
+ * @param {boolean} options.fullEnergy - Run the force sim from the base config's full energy
+ *   (alpha 1) instead of the gentle 0.3 ease-in used when switching in from another layout. Set
+ *   when re-selecting the force layout to deliberately reshuffle an already-settled graph, which
+ *   the gentle alpha barely disturbs. Ignored for non-force layouts.
  * @returns {Object} Layout configuration
  */
 export function getLayoutConfig(layoutType, options = {}) {
   const nodeCount = options.nodeCount || 10;
   const isLayoutChange = options.isLayoutChange || false;
+  const fullEnergy = options.fullEnergy || false;
 
   switch (layoutType) {
     case 'circular':
@@ -161,8 +166,17 @@ export function getLayoutConfig(layoutType, options = {}) {
     case 'd3-force':
     default: {
       const config = getD3ForceConfig();
-      // When switching TO force layout, use lower initial energy to prevent nodes shooting away
-      if (isLayoutChange) {
+      if (fullEnergy) {
+        // Deliberate reshuffle (re-selecting Force-Directed): keep the base
+        // config's full energy (alpha 1) so a settled graph re-settles from
+        // scratch. We simply DON'T apply the gentle ease-in below — the base
+        // config already carries alpha 1 / alphaDecay 0.03, which is exactly a
+        // fresh-draw reheat. (The visible movement on a restored view comes
+        // from releasing the fx/fy pins in applyLayoutInternal, not from any
+        // alpha tweak here — a pinned node can't move at any alpha.)
+      } else if (isLayoutChange) {
+        // Switching TO force from another layout: lower initial energy so nodes
+        // ease into place instead of shooting away from their current spots.
         config.alpha = 0.3;
         config.alphaDecay = 0.05;
       }
