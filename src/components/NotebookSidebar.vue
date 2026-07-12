@@ -479,6 +479,8 @@ import {
 
 const SIDEBAR_STATE_KEY = "notebookSidebarExpanded";
 const NOTE_PREVIEW_LENGTH = 60;
+const STORAGE_FULL_MESSAGE =
+  "Browser storage is full — recent notebook changes may not be saved.";
 
 /**
  * Left-docked, always-present, collapsible notebook rail owned by the app
@@ -600,6 +602,26 @@ export default {
         this.removeMenuListeners();
       }
     },
+    // NotebookStore latches this true (once per session) the first time a
+    // persist() write fails — e.g. localStorage quota exceeded. Surface one
+    // quiet notice through the existing feedback line; the store's
+    // console.warn already logged the detail. The feedback line only renders
+    // in the expanded panel, so if the sidebar is collapsed defer the notice
+    // until the next expand instead of dropping it.
+    "notebookStore.storageFullNotice"(full) {
+      if (!full) return;
+      if (this.expanded) {
+        this.showFeedback(STORAGE_FULL_MESSAGE);
+      } else {
+        this.pendingStorageFullFeedback = true;
+      }
+    },
+  },
+  created() {
+    // Deliberately non-reactive (not in data()): set when storageFullNotice
+    // flips while the sidebar is collapsed — the feedback line only renders in
+    // the expanded panel — and flushed by expand(). Nothing renders off it.
+    this.pendingStorageFullFeedback = false;
   },
   mounted() {
     this.loadState();
@@ -640,6 +662,12 @@ export default {
       this.pageDraft = this.notebookStore.page || "";
       this.expanded = true;
       this.persistState();
+      // A storage-full notice that arrived while collapsed was deferred (the
+      // feedback line only exists in the expanded panel) — surface it now.
+      if (this.pendingStorageFullFeedback) {
+        this.pendingStorageFullFeedback = false;
+        this.showFeedback(STORAGE_FULL_MESSAGE);
+      }
     },
     collapse() {
       this.flushPageDraft();

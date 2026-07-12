@@ -410,7 +410,7 @@
           <!-- Node Counts -->
           <div v-if="counters.total.node > 0">
             <p class="result-graph__count-summary">
-              Showing {{ counters.total.node }} nodes
+              {{ nodeCountCaption }}
             </p>
             <table class="table table-sm table-borderless result-graph__overview-table">
               <tbody>
@@ -654,6 +654,12 @@ export default {
         rel: 0,
       },
     },
+    // Set from extractGraphFromQueryResult's sampling metadata whenever a
+    // fresh query result is drawn (drawGraph). Left as-is by every subsequent
+    // canvas mutation (expand/collapse/delete) — those already keep
+    // counters.total.node honest via targeted +/-1 updates, and sampling is a
+    // property of the original result, not the live canvas.
+    nodeSampling: { sampled: false, totalNodeCount: 0 },
     draggedNodeDebounceTimer: null,
     expansions: [],
     originalNodeIds: new Set(),
@@ -828,6 +834,16 @@ export default {
       return Object.keys(this.counters.node).sort(
         (a, b) => Number(a === 'VirtualHub') - Number(b === 'VirtualHub')
       );
+    },
+    // "Showing N nodes" unless the last drawn result was downsampled to the
+    // maxNumberOfNodes cap, in which case it becomes "Showing N of M nodes"
+    // (locale-formatted) so the cap is visible instead of silent.
+    nodeCountCaption() {
+      const shown = this.counters.total.node;
+      if (this.nodeSampling.sampled) {
+        return `Showing ${shown.toLocaleString()} of ${this.nodeSampling.totalNodeCount.toLocaleString()} nodes`;
+      }
+      return `Showing ${shown.toLocaleString()} nodes`;
     },
     ...mapStores(useSettingsStore, useModeStore, useNotebookStore),
     labelColor() {
@@ -1284,8 +1300,9 @@ export default {
       if (!this.queryResult) {
         return;
       }
-      let { counters, nodes, edges, } = this.extractGraphFromQueryResultMethod(this.queryResult);
+      let { counters, nodes, edges, sampled, totalNodeCount } = this.extractGraphFromQueryResultMethod(this.queryResult);
       this.counters = counters;
+      this.nodeSampling = { sampled, totalNodeCount };
       // Track original node IDs so they're never removed during collapse
       this.originalNodeIds = new Set(nodes.map(n => n.id));
       // Reset expansion tracking for new query

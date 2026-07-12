@@ -291,6 +291,9 @@ export function buildG6Edge(edgeId, sourceId, targetId, rawRel, settingsStore, s
  *   - edges: Array of G6 edge objects
  *   - nodesMap: Object mapping node ID to node object
  *   - edgesMap: Object mapping edge ID to edge object
+ *   - sampled: boolean, true when the result exceeded maxNumberOfNodes and was downsampled
+ *   - sampledNodeCount: number of nodes actually kept (equals counters.total.node)
+ *   - totalNodeCount: number of nodes present in the result before downsampling
  */
 export function extractGraphFromQueryResult(queryResult, schema, settingsStore, performanceSettings) {
   // The schema arrives asynchronously at boot (and can fail to load outright);
@@ -303,6 +306,9 @@ export function extractGraphFromQueryResult(queryResult, schema, settingsStore, 
       edges: [],
       nodesMap: {},
       edgesMap: {},
+      sampled: false,
+      sampledNodeCount: 0,
+      totalNodeCount: 0,
     };
   }
 
@@ -479,15 +485,28 @@ export function extractGraphFromQueryResult(queryResult, schema, settingsStore, 
     }
   });
 
-  // Enforce max node limit by random sampling
-  if (Object.keys(nodes).length > performanceSettings.maxNumberOfNodes) {
+  // Enforce max node limit with an honest, linear-time random sample: a
+  // Fisher-Yates shuffle of the node IDs followed by a straight truncation.
+  // (The previous approach looped `while (nodeIds.length > max)` picking a
+  // random index and splice()-ing it out one at a time — O(n^2) on large
+  // result sets, and it silently dropped nodes with no trace left for the UI.)
+  const preSampleNodeCount = Object.keys(nodes).length;
+  const sampled = preSampleNodeCount > performanceSettings.maxNumberOfNodes;
+  let sampledNodeCount = preSampleNodeCount;
+  if (sampled) {
     const nodeIds = Object.keys(nodes);
-    while (nodeIds.length > performanceSettings.maxNumberOfNodes) {
-      const indexToRemove = Math.floor(Math.random() * nodeIds.length);
-      const nodeIdToRemove = nodeIds[indexToRemove];
-      delete nodes[nodeIdToRemove];
-      nodeIds.splice(indexToRemove, 1);
+    // Fisher-Yates shuffle.
+    for (let i = nodeIds.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [nodeIds[i], nodeIds[j]] = [nodeIds[j], nodeIds[i]];
     }
+    const keepIds = new Set(nodeIds.slice(0, performanceSettings.maxNumberOfNodes));
+    for (const nodeId of nodeIds) {
+      if (!keepIds.has(nodeId)) {
+        delete nodes[nodeId];
+      }
+    }
+    sampledNodeCount = keepIds.size;
     // Remove edges that reference removed nodes
     for (let key in edges) {
       const edge = edges[key];
@@ -517,14 +536,14 @@ export function extractGraphFromQueryResult(queryResult, schema, settingsStore, 
     relCounters[label] += 1;
   }
 
-  const totalNodeCount = Object.values(nodeCounters).reduce((a, b) => a + b, 0);
+  const postSampleNodeCount = Object.values(nodeCounters).reduce((a, b) => a + b, 0);
   const totalRelCount = Object.values(relCounters).reduce((a, b) => a + b, 0);
 
   const counters = {
     node: nodeCounters,
     rel: relCounters,
     total: {
-      node: totalNodeCount,
+      node: postSampleNodeCount,
       rel: totalRelCount,
     },
   };
@@ -542,7 +561,7 @@ export function extractGraphFromQueryResult(queryResult, schema, settingsStore, 
   });
 
   // Remove labels if too many nodes (performance optimization)
-  if (totalNodeCount > performanceSettings.maxNumberOfNodesWithLabels) {
+  if (postSampleNodeCount > performanceSettings.maxNumberOfNodesWithLabels) {
     for (let key in nodes) {
       const node = nodes[key];
       delete node.style.labelText;
@@ -559,6 +578,9 @@ export function extractGraphFromQueryResult(queryResult, schema, settingsStore, 
     edges: Object.values(edges),
     nodesMap: nodes,
     edgesMap: edges,
+    sampled,
+    sampledNodeCount,
+    totalNodeCount: preSampleNodeCount,
   };
 }
 

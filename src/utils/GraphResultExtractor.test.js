@@ -216,6 +216,9 @@ describe("extractGraphFromQueryResult", () => {
       rel: { PersonOwnership: 1 },
       total: { node: 2, rel: 1 },
     });
+    expect(result.sampled).toBe(false);
+    expect(result.sampledNodeCount).toBe(2);
+    expect(result.totalNodeCount).toBe(2);
   });
 
   const emptyShape = {
@@ -224,6 +227,9 @@ describe("extractGraphFromQueryResult", () => {
     edges: [],
     nodesMap: {},
     edgesMap: {},
+    sampled: false,
+    sampledNodeCount: 0,
+    totalNodeCount: 0,
   };
 
   it("returns an empty result and warns when the schema is null", () => {
@@ -259,5 +265,112 @@ describe("extractGraphFromQueryResult", () => {
     expect(result.nodes).toHaveLength(2);
     expect(result.edges).toHaveLength(0);
     expect(result.counters.total).toEqual({ node: 2, rel: 0 });
+  });
+});
+
+describe("extractGraphFromQueryResult node sampling", () => {
+  // Build a query result with `count` distinct Person nodes and PersonOwnership
+  // edges chaining node i to node i+1 (Person -> Company alternation isn't
+  // needed here — sampling only cares about node identity and edge endpoints).
+  const buildManyNodesResult = (count) => {
+    const people = Array.from({ length: count }, (_, i) => ({
+      _id: { table: 0, offset: i },
+      _label: "Person",
+      name: `Person ${i}`,
+    }));
+    const rows = people.map((p) => ({ p }));
+    // Chain consecutive nodes with an edge so some edges are guaranteed to
+    // reference a sampled-out node — this is what exercises orphan pruning.
+    for (let i = 0; i < count - 1; i++) {
+      rows.push({
+        p: people[i],
+        r: {
+          _id: { table: 2, offset: i },
+          _label: "PersonOwnership",
+          _src: people[i]._id,
+          _dst: people[i + 1]._id,
+        },
+        c: people[i + 1],
+      });
+    }
+    const dataTypes = { p: DATA_TYPES.NODE, r: DATA_TYPES.REL, c: DATA_TYPES.NODE };
+    return { rows, dataTypes };
+  };
+
+  const bigStore = makeSettingsStore({
+    Person: personSettings,
+    PersonOwnership: ownershipSettings,
+  });
+
+  let randomSpy;
+  afterEach(() => {
+    if (randomSpy) {
+      randomSpy.mockRestore();
+      randomSpy = undefined;
+    }
+  });
+
+  it("does not sample when the node count is at or under the cap", () => {
+    const queryResult = buildManyNodesResult(10);
+    const result = extractGraphFromQueryResult(queryResult, schema, bigStore, {
+      maxNumberOfNodes: 10,
+      maxNumberOfNodesWithLabels: 1000,
+    });
+    expect(result.sampled).toBe(false);
+    expect(result.nodes).toHaveLength(10);
+    expect(result.sampledNodeCount).toBe(10);
+    expect(result.totalNodeCount).toBe(10);
+  });
+
+  it("truncates to exactly maxNumberOfNodes and reports honest metadata", () => {
+    const queryResult = buildManyNodesResult(50);
+    const performance = { maxNumberOfNodes: 12, maxNumberOfNodesWithLabels: 1000 };
+    const result = extractGraphFromQueryResult(queryResult, schema, bigStore, performance);
+
+    expect(result.sampled).toBe(true);
+    expect(result.nodes).toHaveLength(12);
+    expect(result.sampledNodeCount).toBe(12);
+    expect(result.totalNodeCount).toBe(50);
+    // The cap is respected exactly, not "at most" — deterministic output length.
+    expect(Object.keys(result.nodesMap)).toHaveLength(12);
+  });
+
+  it("prunes every edge that references a sampled-out node (no dangling endpoints)", () => {
+    const queryResult = buildManyNodesResult(50);
+    const performance = { maxNumberOfNodes: 12, maxNumberOfNodesWithLabels: 1000 };
+    const result = extractGraphFromQueryResult(queryResult, schema, bigStore, performance);
+
+    const keptNodeIds = new Set(result.nodes.map((n) => n.id));
+    for (const edge of result.edges) {
+      expect(keptNodeIds.has(edge.source)).toBe(true);
+      expect(keptNodeIds.has(edge.target)).toBe(true);
+    }
+  });
+
+  it("samples via a linear Fisher-Yates shuffle, not a random-index splice loop", () => {
+    // A splice-based approach calls Math.random() roughly (n - max) times (once
+    // per removal); a Fisher-Yates shuffle calls it (n - 1) times (once per
+    // shuffle step), regardless of how many nodes end up truncated. Pinning the
+    // call count distinguishes the two implementations without depending on
+    // which specific nodes survive.
+    const total = 50;
+    const queryResult = buildManyNodesResult(total);
+    const performance = { maxNumberOfNodes: 5, maxNumberOfNodesWithLabels: 1000 };
+    randomSpy = vi.spyOn(Math, "random");
+    extractGraphFromQueryResult(queryResult, schema, bigStore, performance);
+    expect(randomSpy).toHaveBeenCalledTimes(total - 1);
+  });
+
+  it("is deterministic in output length across repeated runs with mocked randomness", () => {
+    const queryResult = buildManyNodesResult(30);
+    const performance = { maxNumberOfNodes: 7, maxNumberOfNodesWithLabels: 1000 };
+    randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+    const first = extractGraphFromQueryResult(queryResult, schema, bigStore, performance);
+    const second = extractGraphFromQueryResult(buildManyNodesResult(30), schema, bigStore, performance);
+    expect(first.nodes).toHaveLength(7);
+    expect(second.nodes).toHaveLength(7);
+    // Math.random mocked to a constant: the shuffle is fully determined, so the
+    // same input produces the same sampled node set.
+    expect(first.nodes.map((n) => n.id).sort()).toEqual(second.nodes.map((n) => n.id).sort());
   });
 });

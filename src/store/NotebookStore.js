@@ -43,6 +43,11 @@ const DEFAULT_NOTEBOOK_NAME = "Untitled notebook";
 // saved views while still bounding a pathological file.
 const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
 
+// Session-scoped (never persisted, never reset by load()/wipeAll()) latch so a
+// storage-full condition surfaces its quiet warning toast at most once per
+// browser session, no matter how many subsequent mutations fail to persist.
+let hasWarnedStorageFull = false;
+
 /**
  * Stable key for an entity across pins/notes: "Label|pk".
  * Matches the createStableKey format used by InvestigationState.js so a pin
@@ -210,6 +215,11 @@ export const useNotebookStore = defineStore("notebook", {
     return {
       notebooks: [nb],
       activeId: nb.id,
+      // Flips true the first time a persist() call fails in this session (see
+      // hasWarnedStorageFull above). A component can watch this to fire a
+      // one-time warning toast; it is deliberately not part of the persisted
+      // payload and is never reset by load()/wipeAll().
+      storageFullNotice: false,
     };
   },
 
@@ -325,6 +335,12 @@ export const useNotebookStore = defineStore("notebook", {
       } catch (e) {
         // localStorage full or unavailable — nothing else we can safely do.
         console.warn("[NotebookStore] Failed to persist notebooks:", e.message);
+        // Surface a single quiet warning toast per session (latched via the
+        // module-level flag so a run of failed mutations doesn't spam it).
+        if (!hasWarnedStorageFull) {
+          hasWarnedStorageFull = true;
+          this.storageFullNotice = true;
+        }
       }
     },
 

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { setActivePinia, createPinia } from "pinia";
 import { useNotebookStore, entityKey } from "./NotebookStore";
 
@@ -351,6 +351,38 @@ describe("localStorage persistence", () => {
     expect(reloaded.noteFor("Company", "c1")).toBe("flagged");
     expect(reloaded.page).toBe("narrative");
     expect(reloaded.savedViewCount).toBe(1);
+  });
+
+  it("guards a quota failure: warns, never throws, and latches storageFullNotice once per session", () => {
+    const store = freshStore();
+    // happy-dom's localStorage is a Proxy whose ClassMethodBinder copies each
+    // accessed method onto the instance on first use, so a prototype-level spy
+    // stops taking effect after the first real setItem call in the file — spy
+    // on the instance itself.
+    const setItemSpy = vi
+      .spyOn(localStorage, "setItem")
+      .mockImplementation(() => {
+        throw new DOMException("Quota exceeded", "QuotaExceededError");
+      });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(store.storageFullNotice).toBe(false);
+    // A mutation that persists must not throw into the caller despite the
+    // localStorage write failing.
+    expect(() => store.pin("Company", "c1", "Acme")).not.toThrow();
+    expect(warnSpy).toHaveBeenCalled();
+    expect(store.storageFullNotice).toBe(true);
+
+    // A second failure on a fresh store instance (new Pinia state) does not
+    // re-latch — the flag is session-scoped (module-level), not per-store, so
+    // a run of failed mutations only ever warns the UI once.
+    const secondStore = freshStore();
+    expect(secondStore.storageFullNotice).toBe(false);
+    expect(() => secondStore.setNote("Person", "p1", "note")).not.toThrow();
+    expect(secondStore.storageFullNotice).toBe(false);
+
+    setItemSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 });
 

@@ -436,7 +436,13 @@ export const useSettingsStore = defineStore("settings", {
     async uploadSettings() {
       const settings = JSON.parse(JSON.stringify(this.allSettings));
       settings.colors = this.colors;
-      localStorage.setItem("settings", JSON.stringify(settings));
+      try {
+        localStorage.setItem("settings", JSON.stringify(settings));
+      } catch (error) {
+        // localStorage full or unavailable — nothing else we can safely do,
+        // and it must never throw into the calling UI handler.
+        console.warn("[SettingsStore] Failed to persist settings:", error.message);
+      }
       try {
         const response = await Axios.post("/api/session/settings", settings)
         return response.data;
