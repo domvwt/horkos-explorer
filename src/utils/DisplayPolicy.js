@@ -110,6 +110,41 @@ export function nodeTypeDisplayName(name) {
 }
 
 /**
+ * The "possible matches" layer: constraint-vetoed merge candidates. An
+ * AmbiguousLink edge (entity ↔ VirtualHub) records that the resolver
+ * considered two records possibly the same entity and a hard rule rejected
+ * the merge — match diagnostics, NOT a real-world relationship. Membership is
+ * defined here once so canvas styling can never disagree with display copy
+ * about what belongs to the layer. The layer is always RENDERED
+ * (differentiate, don't hide — hiding uncertainty overclaims the rest of the
+ * graph), and the differentiation is deliberately minimal and familiar:
+ * dashed/arrowless edges + the ≈ label prefix. Hub nodes keep their standard
+ * solid rendering.
+ */
+export const AMBIGUOUS_REL_TYPE_NAMES = Object.freeze([
+  "PersonAmbiguousLink",
+  "CompanyAmbiguousLink",
+  "AddressAmbiguousLink",
+]);
+
+export const VIRTUAL_NODE_TYPE_NAMES = Object.freeze(["VirtualHub"]);
+
+export function isAmbiguousRelType(name) {
+  return AMBIGUOUS_REL_TYPE_NAMES.includes(name);
+}
+
+export function isVirtualNodeType(name) {
+  return VIRTUAL_NODE_TYPE_NAMES.includes(name);
+}
+
+/**
+ * Canvas-label prefix for VirtualHub nodes ("≈ Acme Ltd"): the approximation
+ * glyph rides in the label text, so it survives cropped screenshots that a
+ * purely stylistic node treatment would not.
+ */
+export const POSSIBLE_MATCH_LABEL_PREFIX = "≈ ";
+
+/**
  * Direction-aware relationship ROLE labels used by the connected-entities list.
  *
  * These are distinct from REL_TYPE_DISPLAY_NAMES: that map names the edge TYPE

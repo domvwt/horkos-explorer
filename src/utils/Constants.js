@@ -141,6 +141,17 @@ export const LOADING_STATUS = {
 // public launch — a production build hard-fails until they are (see README).
 export { LEGAL } from "../config/legal.config";
 
+// Visual treatment for possible-match edges (see DisplayPolicy for layer
+// membership): dashed, thin, arrowless — the dash carries the tentative
+// semantics; the stroke inherits the shared neutral edge grey. Hub NODES
+// deliberately keep their standard solid rendering: a novel hollow shape
+// would be a new visual vocabulary the viewer must learn, which costs more
+// than it signals.
+export const POSSIBLE_MATCH_STYLE = {
+  EDGE_LINE_WIDTH: 2,
+  EDGE_LINE_DASH: [4, 4],
+};
+
 export const GRAPH_LAYOUTS = {
   D3_FORCE: {
     key: 'd3-force',

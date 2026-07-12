@@ -13,6 +13,13 @@ import {
   sourceSystemDisplayName,
   countRecordsBySystem,
   isPscOnlyProvenance,
+  AMBIGUOUS_REL_TYPE_NAMES,
+  VIRTUAL_NODE_TYPE_NAMES,
+  isAmbiguousRelType,
+  isVirtualNodeType,
+  POSSIBLE_MATCH_LABEL_PREFIX,
+  REL_TYPE_DISPLAY_NAMES,
+  NODE_TYPE_DISPLAY_NAMES,
 } from "./DisplayPolicy";
 
 describe("internal-field filter", () => {
@@ -308,5 +315,42 @@ describe("PSC-only provenance detection", () => {
     expect(isPscOnlyProvenance({ source_records: [] })).toBe(false);
     expect(isPscOnlyProvenance(null)).toBe(false);
     expect(isPscOnlyProvenance(undefined)).toBe(false);
+  });
+});
+
+describe("possible-matches layer membership", () => {
+  it("classifies exactly the three AmbiguousLink rel types", () => {
+    expect(AMBIGUOUS_REL_TYPE_NAMES).toHaveLength(3);
+    AMBIGUOUS_REL_TYPE_NAMES.forEach((name) => {
+      expect(isAmbiguousRelType(name)).toBe(true);
+    });
+    expect(isAmbiguousRelType("PersonOwnership")).toBe(false);
+    expect(isAmbiguousRelType("RegisteredAddress")).toBe(false);
+    expect(isAmbiguousRelType("")).toBe(false);
+    expect(isAmbiguousRelType(undefined)).toBe(false);
+  });
+
+  it("classifies VirtualHub as the only virtual node type", () => {
+    VIRTUAL_NODE_TYPE_NAMES.forEach((name) => {
+      expect(isVirtualNodeType(name)).toBe(true);
+    });
+    expect(isVirtualNodeType("Person")).toBe(false);
+    expect(isVirtualNodeType("")).toBe(false);
+  });
+
+  it("keeps layer membership in sync with the display-name maps", () => {
+    // Every layer member must already have a neutral display name; a new
+    // ambiguous rel table added to one map but not the other would let the
+    // canvas styling and the copy disagree about the layer.
+    AMBIGUOUS_REL_TYPE_NAMES.forEach((name) => {
+      expect(REL_TYPE_DISPLAY_NAMES[name]).toBe("Possible Match");
+    });
+    VIRTUAL_NODE_TYPE_NAMES.forEach((name) => {
+      expect(NODE_TYPE_DISPLAY_NAMES[name]).toBe("Possible Matches");
+    });
+  });
+
+  it("uses the ≈ glyph as the hub canvas-label prefix", () => {
+    expect(POSSIBLE_MATCH_LABEL_PREFIX).toBe("≈ ");
   });
 });

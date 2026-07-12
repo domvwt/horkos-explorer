@@ -15,8 +15,14 @@
 
 import G6Utils from "./G6Utils";
 import ValueFormatter from "./ValueFormatter";
-import { DATA_TYPES, LOOP_POSITIONS, ARC_CURVE_OFFSETS } from "./Constants";
-import { NODE_TYPE_DISPLAY_NAMES, relTypeDisplayName } from "./DisplayPolicy";
+import { DATA_TYPES, LOOP_POSITIONS, ARC_CURVE_OFFSETS, POSSIBLE_MATCH_STYLE } from "./Constants";
+import {
+  NODE_TYPE_DISPLAY_NAMES,
+  relTypeDisplayName,
+  isAmbiguousRelType,
+  isVirtualNodeType,
+  POSSIBLE_MATCH_LABEL_PREFIX,
+} from "./DisplayPolicy";
 
 /**
  * Encode a Kuzu internal ID to a string suitable for G6 node/edge IDs
@@ -62,17 +68,21 @@ export function formatNodeLabel(rawNode, schema, settingsStore) {
   // Person/Company name, an Address `full`) so a representative label shows
   // rather than the raw cluster id. This runs BEFORE the type-name fallback so
   // internal node tables (VirtualHub) that now carry a `name` display it.
-  if (nodeLabelProp && rawNode[nodeLabelProp] !== undefined && rawNode[nodeLabelProp] !== null) {
+  if (nodeLabelProp && rawNode[nodeLabelProp] !== undefined && rawNode[nodeLabelProp] !== null && rawNode[nodeLabelProp] !== "") {
+    // A hub's representative name gets the ≈ prefix so the canvas never shows
+    // it as a second, identically-named real entity (the type-name fallback
+    // below already reads as tentative and takes no prefix).
+    const prefix = isVirtualNodeType(rawNode._label) ? POSSIBLE_MATCH_LABEL_PREFIX : "";
     // Find the property type from the schema for proper formatting.
     const nodeTable = schema?.nodeTables?.find((table) => table.name === rawNode._label);
     if (nodeTable) {
       const property = nodeTable.properties.find((p) => p.name === nodeLabelProp);
       if (property) {
-        return String(ValueFormatter.beautifyValue(rawNode[nodeLabelProp], property.type));
+        return prefix + String(ValueFormatter.beautifyValue(rawNode[nodeLabelProp], property.type));
       }
     }
     // Fallback to string conversion if no schema info.
-    return String(rawNode[nodeLabelProp]);
+    return prefix + String(rawNode[nodeLabelProp]);
   }
 
   // No label-property value: for internal node tables (VirtualHub), fall back to
@@ -239,6 +249,18 @@ export function buildG6Edge(edgeId, sourceId, targetId, rawRel, settingsStore, s
       labelText: relLabel,
     },
   };
+
+  // Possible-match edge: dashed, thin, arrowless. The relation is symmetric
+  // (a candidate match), so an arrowhead would assert a direction that does
+  // not exist; the stroke inherits the shared neutral edge grey so the dash
+  // pattern — not colour weight — carries the differentiation in both themes.
+  if (isAmbiguousRelType(rawRel._label)) {
+    g6Rel.style.lineWidth = POSSIBLE_MATCH_STYLE.EDGE_LINE_WIDTH;
+    // Copy the dash array: G6 receives one array per edge, so no consumer can
+    // mutate the shared constant (and with it every other dashed edge).
+    g6Rel.style.lineDash = [...POSSIBLE_MATCH_STYLE.EDGE_LINE_DASH];
+    g6Rel.style.endArrow = false;
+  }
 
   // Handle self-loops and overlapping edges
   if (sourceId === targetId) {

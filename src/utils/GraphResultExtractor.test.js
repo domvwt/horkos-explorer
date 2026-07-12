@@ -6,7 +6,7 @@ import {
   buildG6Edge,
   extractGraphFromQueryResult,
 } from "./GraphResultExtractor";
-import { DATA_TYPES } from "./Constants";
+import { DATA_TYPES, POSSIBLE_MATCH_STYLE } from "./Constants";
 
 // The extractor degrades (warn + skip) instead of crashing when the schema or
 // per-label settings haven't loaded yet; these tests pin that contract.
@@ -72,7 +72,7 @@ describe("formatNodeLabel", () => {
     expect(formatNodeLabel(rawPerson, schema, makeSettingsStore())).toBe("");
   });
 
-  it("shows a hub node's representative name, not the cluster id", () => {
+  it("shows a hub node's representative name with the ≈ prefix, not the cluster id", () => {
     const rawHub = {
       _id: { table: 3, offset: 0 },
       _label: "VirtualHub",
@@ -80,7 +80,7 @@ describe("formatNodeLabel", () => {
       name: "John Smith",
     };
     const store = makeSettingsStore({ VirtualHub: hubSettings });
-    expect(formatNodeLabel(rawHub, schema, store)).toBe("John Smith");
+    expect(formatNodeLabel(rawHub, schema, store)).toBe("≈ John Smith");
   });
 
   it("falls back to the type display name for a hub with no name (legacy graph)", () => {
@@ -89,6 +89,17 @@ describe("formatNodeLabel", () => {
       _label: "VirtualHub",
       id: "hub_cluster_42",
       name: null,
+    };
+    const store = makeSettingsStore({ VirtualHub: hubSettings });
+    expect(formatNodeLabel(rawHub, schema, store)).toBe("Possible Matches");
+  });
+
+  it("falls back for an empty-string hub name instead of rendering a dangling ≈", () => {
+    const rawHub = {
+      _id: { table: 3, offset: 0 },
+      _label: "VirtualHub",
+      id: "hub_cluster_42",
+      name: "",
     };
     const store = makeSettingsStore({ VirtualHub: hubSettings });
     expect(formatNodeLabel(rawHub, schema, store)).toBe("Possible Matches");
@@ -113,6 +124,22 @@ describe("buildG6Node", () => {
       "Person",
     );
   });
+
+  it("renders a VirtualHub with its standard solid settings styling (no special node treatment)", () => {
+    const rawHub = {
+      _id: { table: 3, offset: 0 },
+      _label: "VirtualHub",
+      id: "hub_cluster_42",
+      name: "John Smith",
+    };
+    const store = makeSettingsStore({ VirtualHub: hubSettings });
+    const node = buildG6Node(encodeId(rawHub._id), rawHub, store);
+    // Deliberate: hubs are ordinary nodes on canvas; the possible-match layer
+    // is carried by the dashed edges and the ≈ label prefix only.
+    expect(node.style.fill).toBe(hubSettings.g6Settings.style.fill);
+    expect(node.style.lineDash).toBeUndefined();
+    expect(node.style.iconText).toBeDefined();
+  });
 });
 
 describe("buildG6Edge", () => {
@@ -132,6 +159,40 @@ describe("buildG6Edge", () => {
       "buildG6Edge: no visual settings for label:",
       "PersonOwnership",
     );
+  });
+
+  it.each([
+    "PersonAmbiguousLink",
+    "CompanyAmbiguousLink",
+    "AddressAmbiguousLink",
+  ])("renders %s dashed, thin, and arrowless", (relType) => {
+    const rawAmbiguous = {
+      _id: { table: 4, offset: 0 },
+      _label: relType,
+      _src: rawPerson._id,
+      _dst: rawCompany._id,
+    };
+    // size: 3 (the production rel default) so the lineWidth assertion can
+    // only pass via the possible-match override, not the settings passthrough.
+    const store = makeSettingsStore({
+      [relType]: { g6Settings: { size: 3, style: { stroke: "#999999" } } },
+    });
+    const edge = buildG6Edge("4_0", "0_0", "1_0", rawAmbiguous, store, schema);
+    expect(edge.style.lineDash).toEqual([4, 4]);
+    // A copy, not the shared constant: mutating one edge's dash in place must
+    // not restyle every other dashed edge for the rest of the session.
+    expect(edge.style.lineDash).not.toBe(POSSIBLE_MATCH_STYLE.EDGE_LINE_DASH);
+    expect(edge.style.lineWidth).toBe(2);
+    // Explicit false per-edge so the graph-level `endArrow: true` default
+    // (graphConfig.js) cannot re-add an arrowhead to a symmetric relation.
+    expect(edge.style.endArrow).toBe(false);
+  });
+
+  it("leaves confirmed relationship edges untouched by the possible-match treatment", () => {
+    const store = makeSettingsStore({ PersonOwnership: ownershipSettings });
+    const edge = buildG6Edge("2_0", "0_0", "1_0", rawOwnership, store, schema);
+    expect(edge.style.lineDash).toBeUndefined();
+    expect(edge.style.endArrow).toBeUndefined();
   });
 });
 
