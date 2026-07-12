@@ -6,6 +6,7 @@ const database = require("./utils/Database");
 const QueryValidator = require("./middleware/QueryValidator");
 const rowBudget = require("./middleware/RowBudget");
 const { sendErrorResponse } = require("./utils/errorResponse");
+const { sanitizeQueryError } = require("./utils/QueryErrorSanitizer");
 const uuid = require("uuid");
 let sessionDb;
 const queryMap = new Map();
@@ -275,8 +276,24 @@ router.post("/", QueryValidator.middleware(database), async (req, res) => {
       logger.warn(`Cypher query timed out: ${err.message}`);
       return res.status(408).send({ error: "Query timed out" });
     }
-    // Do not echo raw Kuzu/binder error text to public clients; log the full
-    // detail server-side and return a generic message (info-disclosure policy).
+    // Info-disclosure policy: by default the raw Kuzu error text is never echoed
+    // to public clients — DB/filesystem/storage strings can leak internal detail
+    // (file paths, buffer/memory internals). The ONE exception is feedback about
+    // the user's OWN query text: a public user who mistypes Cypher needs to see
+    // WHY it failed. QueryErrorSanitizer is an allowlist that relays ONLY Parser
+    // and Binder exception classes (syntax errors, unknown variable/table/
+    // property in the text the user typed), and only after redacting any
+    // filesystem path and capping the length. Every other class (Runtime,
+    // Conversion, Catalog, IO, Buffer manager, Storage, etc.) returns
+    // { relay: false } and falls through to the generic message below. The full
+    // error is always logged server-side regardless.
+    const relay = err && sanitizeQueryError(err.message);
+    if (relay && relay.relay) {
+      logger.error(`Cypher query execution failed: ${err && err.message}`);
+      return res.status(400).send({ error: relay.message });
+    }
+    // Not an allowlisted class (or not sanitizable): log the full detail
+    // server-side and return the fixed generic message.
     return sendErrorResponse(res, err, {
       clientMessage: "Query execution failed",
       logContext: "Cypher query execution failed",
