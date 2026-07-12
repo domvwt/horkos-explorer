@@ -1,446 +1,212 @@
 # Horkos Explorer
 
-> **Note:** This is a fork of [Kuzu Explorer](https://github.com/kuzudb/explorer) customized for the [Horkos OSINT toolkit](https://github.com/domvwt/horkos).
->
-> **Research & Planning Documentation:** See [`research-notes/README.md`](research-notes/README.md) for architecture research, security analysis, and implementation roadmap.
+Horkos Explorer is a browser-based, read-only-by-default web UI for exploring
+graph databases built by the [Horkos OSINT toolkit](https://github.com/domvwt/horkos).
+The graphs hold entity-resolved UK corporate data — companies, people and
+addresses drawn from UK Companies House and the Register of People with
+Significant Control (PSC register) — with the matching results laid out for
+research and note-taking.
 
-Browser-based user interface for the [Kuzu](https://github.com/kuzudb/kuzu) graph database.
+It is a fork of [Kuzu Explorer](https://github.com/kuzudb/explorer), heavily
+customised for safe public deployment.
 
-<img src="src/assets/explorer-graph-view.png">
+## Quick start
 
-
-## Get started
-
-Kuzu Explorer is a web application that is launched from a deployed Docker image.
-Please refer to the [Docker documentation](https://docs.docker.com/get-docker/) for details on how to install and use Docker.
-
-Below we show two different ways to launch Kuzu Explorer. Each of these options make
-Kuzu Explorer accessible on [http://localhost:8000](http://localhost:8000). If the launching is successful, you should see the logs similar to the following in your shell:
-
-```
-Access mode: READ_ONLY
-Version of Kuzu: v0.0.11
-Deployed server started on port: 8000
-```
-
-### Option 1: Using an existing database
-
-To access an existing Kuzu database, you can mount its path to the `/database` directory as follows:
+Horkos Explorer is published as a Docker image. Mount a directory that contains
+a Horkos-built `.kuzu` database at `/database`, name the file with `KUZU_FILE`,
+and open [http://localhost:8000](http://localhost:8000):
 
 ```bash
 docker run -p 8000:8000 \
-           -v {path to the directory containing the database file}:/database \
-           -e KUZU_FILE={database file name} \
-           --rm ghcr.io/domvwt/explorer:latest
+  -v /path/to/data:/database \
+  -e KUZU_FILE=graph.kuzu \
+  --rm ghcr.io/domvwt/explorer:latest
 ```
 
-By mounting local database files to Docker via `-v {path to the directory containing the database file}` and `-e KUZU_FILE={database file name}`, the changes done in the UI will persist to the local database files after the UI is shutdown. If the directory is mounted but the `KUZU_FILE` environment variable is not set, Kuzu Explorer will look for a file named `database.kz` in the mounted directory or create a new database file named `database.kz` in the mounted directory if it does not exist.
+The image ships safe, stateless defaults so no operator-supplied environment
+variables are needed for a public deployment:
 
-The `--rm` flag tells docker that the container should automatically be removed after we close docker.
+- `MODE=READ_ONLY` — the database is opened read-only and write queries are rejected.
+- `DISABLE_SESSION_DB=true` — no server-side session storage; per-user state lives in the browser.
+- `KUZU_QUERY_TIMEOUT=30000` — 30-second per-query wall-clock bound.
+- `KUZU_QUERY_SIZE_LIMIT=10000` — maximum result rows returned per query.
+- `CSP_REPORT_ONLY=false` — the Content-Security-Policy is enforced (not report-only).
+- `KUZU_DIR=/database` — the mount point queried by default.
 
-### Option 2: Start with an empty database
-
-You can also launch Horkos Explorer without specifying an existing database.
-This is simply done by removing the `-v` flag in the example above. If no database path is specified
-with `-v`, the server will be started with an empty database.
-
-```bash
-docker run -p 8000:8000 --rm ghcr.io/domvwt/explorer:latest
-```
-
-### Additional launch configurations
-
-#### Access mode
-
-By default, Horkos Explorer is launched in read-only, stateless mode (`MODE=READ_ONLY` and `DISABLE_SESSION_DB=true`): you can issue read queries and visualize the results, but you cannot run write queries, modify the schema, or persist session state server-side. This is the safe default for public deployments and does not require any operator-supplied environment variables.
-
-If you want to launch Horkos Explorer in read-write mode, you can opt in by setting the `MODE` environment variable to `READ_WRITE` as follows.
+To make changes in the UI (Importer, Reset) during local use, opt in to
+read-write mode:
 
 ```bash
 docker run -p 8000:8000 \
-           -v {path to the directory containing the database file}:/database \
-           -e KUZU_FILE={database file name} \
-           -e MODE=READ_WRITE \
-           --rm ghcr.io/domvwt/explorer:latest
+  -v /path/to/data:/database \
+  -e KUZU_FILE=graph.kuzu \
+  -e MODE=READ_WRITE \
+  --rm ghcr.io/domvwt/explorer:latest
 ```
 
-#### Resource guardrails (public deployments)
+## Configuration
 
-The production Docker image ships with default resource bounds so an unauthenticated user cannot run unbounded queries (DoS) or bulk-exfiltrate the graph. All are operator-overridable via environment variables:
+Every variable below is read by the server; defaults are the effective values
+when the variable is unset. One-line descriptions only — the rationale lives in
+the code comments.
 
-| Guardrail | Env var | Default | Effect |
-| --- | --- | --- | --- |
-| Query timeout | `KUZU_QUERY_TIMEOUT` | `30000` (30s) | Per-query wall-clock bound applied to every pooled connection; no single query runs indefinitely. |
-| Result-size cap | `KUZU_QUERY_SIZE_LIMIT` | `10000` | Max result rows returned per `/api/cypher` query; a broad `MATCH ... RETURN` cannot stream the whole graph. |
-| Request-body limit | `JSON_BODY_LIMIT` | `1mb` | Max JSON request-body size. CSV/Parquet import uploads use multipart streaming and are **not** limited by this. |
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `MODE` | `READ_ONLY` | Access mode: `READ_ONLY` or `READ_WRITE` (`DEMO` and `WASM` exist for in-browser demo builds). Unset or unrecognised values fail closed to `READ_ONLY`. |
+| `KUZU_DIR` | `/database` (image) | Directory containing the `.kuzu` database file. |
+| `KUZU_FILE` | `database.kz` | Database filename within `KUZU_DIR`. |
+| `DUCKDB_FILE` | unset | Path to a DuckDB file with `search.*` tables; enables the `/api/suggest` autocomplete. Omit to disable it. |
+| `KUZU_BUFFER_POOL_SIZE` | unset | Kuzu buffer pool size in bytes; when unset, Kuzu applies its own default sizing. |
+| `KUZU_QUERY_TIMEOUT` | `30000` | Per-query wall-clock timeout in ms, applied to every pooled connection. |
+| `KUZU_QUERY_SIZE_LIMIT` | `10000` | Maximum result rows returned per `/api/cypher` query. |
+| `QUERY_ROW_BUDGET` | `100000` | Cumulative rows one IP may ship from `/api/cypher` per window. Enforced for every mode except `READ_WRITE`. |
+| `QUERY_ROW_BUDGET_WINDOW_MS` | `86400000` | Row-budget window in ms (24h fixed window). |
+| `RATE_LIMIT_WINDOW_MS` | `60000` | Time window for the general API rate limiter. |
+| `RATE_LIMIT_MAX_REQUESTS` | `60` | Maximum general API requests per window per IP. |
+| `QUERY_RATE_LIMIT_WINDOW_MS` | `60000` | Time window for the query rate limiter. |
+| `QUERY_RATE_LIMIT_MAX_REQUESTS` | `30` | Maximum `/api/cypher` queries per window per IP. |
+| `SUGGEST_RATE_LIMIT_WINDOW_MS` | `60000` | Time window for the autocomplete rate limiter. |
+| `SUGGEST_RATE_LIMIT_MAX_REQUESTS` | `120` | Maximum `/api/suggest` requests per window per IP. |
+| `TRUST_PROXY` | `1` | Reverse-proxy hops to trust for `X-Forwarded-For`. Normalised to a finite hop count; `false`/`0`/`off` disables. |
+| `TRUST_PROXY_HOPS` | `1` | Hop count used when `TRUST_PROXY` is unset or `true`. |
+| `JSON_BODY_LIMIT` | `1mb` | Maximum JSON request-body size. Multipart import uploads are not limited by this. |
+| `DISABLE_SESSION_DB` | `true` (image) | Disable server-side session storage; per-user state stays in the browser. |
+| `CSP_REPORT_ONLY` | `false` (image) | When `true`, the CSP is emitted report-only rather than enforced. Other security headers are always enforced. |
 
-The interactive query response is hard-bounded to `KUZU_QUERY_SIZE_LIMIT` rows; there is no separate bulk-export endpoint in the read-only image. Operators needing larger exports should run Kuzu tooling directly against the database file rather than raising the UI cap.
+Development note: when `NODE_ENV=development` the rate limits and the row budget
+are relaxed so hot-reloading does not trip them.
 
-#### Buffer pool size
+## Features
 
-By default, Kuzu Explorer is launched with a maximum buffer pool size of 80% of the available memory. If you want to launch Kuzu Explorer with a different buffer pool size, you can do so by setting the `KUZU_BUFFER_POOL_SIZE` environment variable to the desired value in bytes as follows.
+- **Entity search** with ranked autocomplete over companies, people and
+  addresses. Autocomplete blends full-text ranking with prefix matching and is
+  available when `DUCKDB_FILE` points at a search-table file.
+- **Graph canvas** for visualising query results, with the ability to expand a
+  selected node's neighbours and explore outward.
+- **Notebooks** for saving notes and views. Notebook state is stored only in the
+  browser's `localStorage` — nothing is written server-side.
+- **Possible-match layer**: where the resolver considered two records the same
+  entity but a rule rejected the merge, the relationship is drawn as a
+  dashed, arrowless edge to a hub node whose label carries a `≈` prefix. These
+  are match diagnostics, differentiated from real relationships rather than
+  presented as facts.
+- **Provenance**: each entity carries `source_records` identifiers tracing back
+  to the underlying Companies House and PSC-register records, shown per source
+  system in the entity panel.
+- **External lookups** that open the current entity in Companies House,
+  OpenCorporates, Google, Google News, Wikipedia and Google Maps.
+- **Schema view** for browsing the node and relationship tables in the database.
+- **Privacy notice** page, reachable from the header, presenting the UK GDPR
+  Article 14 disclosure and a data-quality disclaimer.
 
-For example, to launch Kuzu Explorer with a buffer pool size of 1GB, you can run the following command.
+## Security posture
 
-```bash
-docker run -p 8000:8000 \
-           -v {path to the directory containing the database file}:/database \
-           -e KUZU_FILE={database file name} \
-           -e KUZU_BUFFER_POOL_SIZE=1073741824 \
-           --rm ghcr.io/domvwt/explorer:latest
-```
+The public image is built for an unauthenticated, read-only deployment over real
+personal data:
 
-#### In-memory mode
+- **Read-only, fail-closed mode.** The database is opened read-only and an unset
+  or unrecognised `MODE` falls back to `READ_ONLY`.
+- **Server-side query validation.** Incoming Cypher is checked against an
+  allowlist before execution, so write and out-of-scope operations are rejected
+  rather than relying on Kuzu alone.
+- **Rate limits and a per-IP row budget.** Requests and queries are rate-limited
+  per IP, and a cumulative row budget bounds how much of the graph one client
+  can page out over time.
+- **Result-size cap and query timeout.** Each response is capped in rows and each
+  query has a wall-clock timeout, so no single query can stream the whole graph
+  or run indefinitely.
+- **Security headers.** [helmet](https://helmetjs.github.io/) sets a
+  Content-Security-Policy, HSTS, anti-clickjacking, MIME-sniffing and
+  referrer-policy headers at the application layer, as defence in depth behind
+  any reverse proxy.
+- **Stateless.** With `DISABLE_SESSION_DB=true` there is no server-side session
+  store, so users are isolated and nothing per-user persists on the server.
 
-By default, Kuzu Explorer is launched in disk-based mode. If you want to launch Kuzu Explorer in in-memory mode, you can do so by setting the `KUZU_IN_MEMORY` environment variable to `true` as follows.
+## Development
 
-```bash
-docker run -p 8000:8000 \
-           -e KUZU_IN_MEMORY=true \
-           --rm ghcr.io/domvwt/explorer:latest
-```
-
-In in-memory mode, the database is stored in memory and all changes are lost when the server is shut down even if a database directory is mounted. Also, read-only access mode is not supported in in-memory mode.
-
-#### WebAssembly mode
-
-In WebAssembly mode, Kuzu Explorer is launched with `kuzu-wasm`, which runs all the queries directly in browser. If you want to launch Kuzu Explorer in WebAssembly mode, you can do so by setting the `KUZU_WASM` environment variable to `true` as follows.
-
-```bash
-docker run -p 8000:8000 \
-           -e KUZU_WASM=true \
-           --rm ghcr.io/domvwt/explorer:latest
-```
-
-In WebAssembly mode, the database is stored in the current browser session and all changes are lost when the browser tab is closed or when the tab is refreshed. All other configuration parameters are ignored in WebAssembly mode.
-
-#### Dev builds
-
-If you want to launch Kuzu Explorer with the latest development build of Kuzu, you can do so by using the `dev` tag instead of `latest`.
-
-```bash
-docker run -p 8000:8000 \
-           -v {path to the directory containing the database file}:/database \
-           -e KUZU_FILE={database file name} \
-           --rm ghcr.io/domvwt/explorer:dev
-```
-
-The `dev` tag is published only by manually dispatching the build workflow with `isNightly` enabled; it never overwrites release tags.
-
-#### Security headers
-
-As defence-in-depth, the Express app mounts [`helmet`](https://helmetjs.github.io/) to emit HTTP security headers at the application layer, so hardening is present even if a reverse proxy (nginx) in front is bypassed or misconfigured. The following headers are set:
-
-- `X-Content-Type-Options: nosniff` — blocks MIME-sniffing.
-- `X-Frame-Options` and CSP `frame-ancestors 'none'` — anti-clickjacking.
-- `Referrer-Policy` — limits referrer leakage.
-- `Strict-Transport-Security` (HSTS) — safe behind nginx-terminated TLS even when the app is served over plain HTTP, because browsers only honour HSTS received over HTTPS.
-- `Content-Security-Policy` — restricts resource loading to what the frontend actually needs (same-origin scripts plus `wasm-unsafe-eval` for the DuckDB/Kuzu WASM modules, same-origin/blob Web Workers for Monaco/DuckDB, inline styles for Bootstrap/Monaco).
-
-The production image ships the CSP in **enforcing** mode (`CSP_REPORT_ONLY=false`),
-controlled by the `CSP_REPORT_ONLY` environment variable. The policy was validated
-against the real frontend (Monaco editor + workers, DuckDB/Kuzu WASM, Bootstrap
-inline styles, G6 graph) with no violations, so the browser blocks anything the
-policy forbids rather than only reporting it. (The in-code default when the variable
-is unset is report-only, so a bare `node` run outside the image is fail-safe.)
-
-```bash
-# Default image: CSP enforced.
-docker run -p 8000:8000 \
-           -v {path to the directory containing the database file}:/database \
-           -e KUZU_FILE={database file name} \
-           --rm ghcr.io/domvwt/explorer:latest
-
-# Fall back to report-only if a frontend change needs re-validating: the browser
-# reports CSP violations to the console but does NOT block, so a mis-derived
-# policy cannot break the query UI while you check it.
-docker run -p 8000:8000 \
-           -v {path to the directory containing the database file}:/database \
-           -e KUZU_FILE={database file name} \
-           -e CSP_REPORT_ONLY=true \
-           --rm ghcr.io/domvwt/explorer:latest
-```
-
-All the other security headers (HSTS, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`) are always enforced regardless of `CSP_REPORT_ONLY`.
-
-### Updating Kuzu Explorer
-
-When a new version of Kuzu Explorer is released after the initial launch, re-launching the container WILL NOT automatically update the local image to the latest version. To update the local image to the latest version, you can run the following command.
+Requirements: Node.js v20, [pnpm](https://pnpm.io/), JDK 11+ (for grammar
+generation), a C++ toolchain, and Git.
 
 ```bash
-docker pull ghcr.io/domvwt/explorer:latest
-```
-
-After pulling the latest image, you can re-launch the container with the same command as before.
-
-### Launch with Podman
-
-If you are using [Podman](https://podman.io/) instead of Docker, you can launch Kuzu Explorer by replacing `docker` with `podman` in the commands above. However, note that by default Podman maps the default user account to the `root` user in the container. This may cause permission issues when mounting local database files to the container. To avoid this, you can use the `--userns=keep-id` flag to keep the user ID of the current user inside the container, or enable `:U` option for each volume to change the owner and group of the source volume to the current user.
-
-For example:
-
-```bash
-podman run -p 8000:8000 \
-           -v {path to the directory containing the database file}:/database:U \
-           -e KUZU_FILE={database file name} \
-           --rm ghcr.io/domvwt/explorer:latest
-```
-
-or,
-
-```bash
-podman run -p 8000:8000 \
-           -v {path to the directory containing the database file}:/database \
-           -e KUZU_FILE={database file name} \
-           --userns=keep-id \
-           --rm ghcr.io/domvwt/explorer:latest
-```
-
-Please refer to the official Podman docs for [mounting external volumes](https://docs.podman.io/en/latest/markdown/podman-run.1.html#mounting-external-volumes) and [user namespace mode](https://https://docs.podman.io/en/latest/markdown/podman-run.1.html#userns-mode) for more information.
-
-## Documentation
-
-For more information regarding launching and using Kuzu Explorer, please refer to the [documentation](https://docs.kuzudb.com).
-
-## Development (with Kuzu compiled from source)
-
-### Stack
-
-- Server
-  - [Node.js](https://nodejs.org)
-  - [Express.js](https://expressjs.com/)
-  - [Kuzu](https://kuzudb.com)
-- Client
-  - [Vue 3](https://vuejs.org/)
-  - [Bootstrap 5](https://getbootstrap.com/docs/5.0/)
-  - [Monaco Editor](https://microsoft.github.io/monaco-editor/)
-  - [G6](https://github.com/antvis/G6)
-
-### Prerequisite
-
-- [Node.js v20](https://nodejs.org/dist/latest-v20.x/)
-- [pnpm](https://pnpm.io/) (this repo uses pnpm as its package manager: `npm install -g pnpm`)
-- [JDK 11+](https://jdk.java.net/11/)
-- [Toolchain for building Kuzu](https://docs.kuzudb.com/developer-guide/)
-- [Git](https://git-scm.com/)
-
-### Environment setup
-
-#### Install Node.js dependencies
-
-```bash
+# Install dependencies
 pnpm install
-```
 
-#### Download and compile Kuzu
-
-```bash
+# Download and compile Kuzu from source (git submodule; ~10 minutes)
 git submodule update --init --recursive
 npm run build-kuzu
-```
 
-#### Generate grammar files
-
-```bash
+# Generate the Cypher grammar (needs Java on PATH)
 npm run generate-grammar
 ```
 
-### Run development server (with hot-reloading)
+Run the development server with hot-reloading on
+[http://localhost:8080](http://localhost:8080):
 
 ```bash
-# Set environment variables
-export MODE=READ_ONLY                           # Force read-only mode
-export KUZU_DIR=/path/to/database/directory     # Directory containing .kuzu file
-export KUZU_FILE=database.kuzu                  # Database filename
-
-# Required for grammar generation
-export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+export MODE=READ_ONLY
+export KUZU_DIR=/path/to/data
+export KUZU_FILE=graph.kuzu
+export JAVA_HOME=/path/to/jdk
 export PATH=$JAVA_HOME/bin:$PATH
 
-# Switch to Node.js v20 (if using nvm)
-source ~/.nvm/nvm.sh && nvm use 20
-
-# Start server
 npm run serve
 ```
 
-**Quick start:** Use the convenience script:
-```bash
-./scripts/start-dev.sh /path/to/database.kuzu
-```
-
-### Check code style with ESLint
-
-```
-npm run eslint
-```
-
-Include `-fix` for automatic correction of fixable styles.
-
-```
-npm run eslint-fix
-```
-
-### Security Testing
-
-Run the comprehensive security test suite to validate security features:
+Lint and test:
 
 ```bash
-npm run test-security
+npm run eslint       # check style
+npm run eslint-fix   # auto-fix
+npm run test         # run the vitest suite
 ```
 
-This tests:
-- Query validation (blocks CREATE, DROP, DELETE, etc. in READ_ONLY mode)
-- Multi-statement query protection
-- Comment bypass prevention
-- Rate limiting (30 queries/min default)
-- Session storage isolation (when DISABLE_SESSION_DB=true)
-- Security headers presence (helmet: CSP, HSTS, X-Frame-Options/frame-ancestors, X-Content-Type-Options, Referrer-Policy)
+## Releases
 
-**Prerequisites:**
-- Server must be running with security configuration:
-  ```bash
-  export MODE=READ_ONLY
-  export DISABLE_SESSION_DB=true
-  export TRUST_PROXY=1                     # trust exactly one reverse-proxy hop (default)
-  export QUERY_RATE_LIMIT_MAX_REQUESTS=30  # deterministic limit for the XFF-spoofing test
-  npm run serve
-  ```
-  Note: `npm run serve` sets `NODE_ENV=development`, which relaxes the query rate
-  limit to 500/min. The XFF-spoofing test reads the effective limit from the
-  `RateLimit-Limit` header and will SKIP (not fail) if the limit is impractically
-  large, so setting `QUERY_RATE_LIMIT_MAX_REQUESTS=30` keeps that test fast and
-  deterministic.
-- `jq` must be installed: `sudo apt install jq`
+Releases are manual. Nothing builds or publishes on push; a release is cut by
+dispatching the [Build-And-Deploy workflow](.github/workflows/build-and-deploy.yml)
+from the Actions tab (or `gh workflow run Build-And-Deploy`). It builds and pushes
+a multi-platform (`amd64` + `arm64`) image to GitHub Container Registry:
 
-> **Security note on `TRUST_PROXY`.** This app derives the client IP for
-> per-IP rate limiting from the `X-Forwarded-For` (XFF) header. `TRUST_PROXY`
-> is the number of reverse-proxy hops to trust and is **always normalised to a
-> finite hop count** (never "trust the whole chain"). The default of `1` trusts
-> exactly one hop — the nginx directly in front — so Express uses the
-> right-most XFF entry set by that trusted proxy and a client cannot rotate a
-> spoofed left-most XFF value to bypass rate limits. Use `TRUST_PROXY=false` to
-> disable trust entirely (`req.ip` becomes the raw socket address). **The app
-> must sit behind exactly the trusted proxy and must not be exposed directly to
-> the internet.**
+- A release dispatch publishes `ghcr.io/domvwt/explorer:latest` plus an immutable
+  `:<YYYYMMDD>-<shortsha>` tag for pinning.
+- Dispatching with `isNightly=true` publishes `:dev` instead.
+
+The build renders the Article 14 privacy notice from six GitHub Actions
+repository variables (`LEGAL_OPERATOR_NAME`, `LEGAL_CONTACT_EMAIL`,
+`LEGAL_HOSTING_PROVIDER`, `LEGAL_HOSTING_REGION`, `LEGAL_EFFECTIVE_DATE`,
+`LEGAL_REFRESH_CADENCE`). These are set once in repository settings and kept out
+of source. If any is unset, the production build fails on the legal gate
+(defined in `src/config/legal.config.js`, enforced from `vue.config.js`), so an
+incomplete notice can never ship.
 
 ## Troubleshooting
 
-### Kuzu Submodule Initialization Hangs
-
-If `git submodule update --init --recursive` times out or takes too long:
+**Kuzu submodule init hangs.** If `git submodule update --init --recursive`
+stalls, reset and use a shallow clone:
 
 ```bash
-# Clean and use shallow clone instead
 git submodule deinit -f kuzu
 rm -rf .git/modules/kuzu
 git submodule update --init --depth 1
 ```
 
-### Monaco Editor Font Issues
+**Monaco editor font errors.** The project stays on the `monaco-editor` 0.39.x
+line; a webpack error about a missing `codicon.ttf` means it has been upgraded
+past that. Do not upgrade to v0.41.0+, which removes the embedded font.
 
-**Problem:** Webpack error about missing `codicon.ttf`
-
-**Solution:** The project pins `monaco-editor@0.39.0` in package.json. If you see font errors:
-
-```bash
-pnpm add monaco-editor@0.39.0
-```
-
-**Note:** Do NOT upgrade monaco-editor to v0.41.0+ as it removes embedded fonts.
-
-### Java Version Issues
-
-**Problem:** ANTLR grammar generation fails with "UnsupportedClassVersionError"
-
-**Solution:** Use Java 21 (not just JDK 11+):
-
-```bash
-# Check Java version
-java -version
-
-# If needed, set Java 21
-export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
-export PATH=$JAVA_HOME/bin:$PATH
-```
-
-### SQLite3 Binding Errors
-
-**Problem:** "Cannot find module 'node_sqlite3.node'" after switching Node.js versions
-
-**Solution:** Rebuild SQLite3 for your current Node version:
-
-```bash
-source ~/.nvm/nvm.sh && nvm use 20
-npm rebuild sqlite3
-```
-
-### Node.js Version Issues
-
-This project requires **Node.js v20**. If you encounter module loading errors:
-
-```bash
-# Check current version
-node --version
-
-# Switch to v20 (using nvm)
-nvm install 20
-nvm use 20
-```
-
-## Legal / go-live checklist (required before public deploy)
-
-The public deployment must present a complete UK GDPR **Article 14 privacy notice** (the `/privacy` page, reachable
-from the header) and a per-result data-quality disclaimer. The deploy-time values for that notice are supplied at
-**build time** through `VUE_APP_LEGAL_*` environment variables (resolved in `src/config/legal.config.js`). They appear
-publicly on the deployed notice — that is its legal function — but they are deliberately **not committed to this
-repository**. For releases, set them once as GitHub Actions repository variables (Settings → Secrets and variables →
-Actions → Variables); the release workflow maps each `LEGAL_*` variable into the build.
-
-| Actions variable         | Build env var                     | What to set                                              | Art. 14 basis |
-| ------------------------ | --------------------------------- | -------------------------------------------------------- | ------------- |
-| `LEGAL_OPERATOR_NAME`    | `VUE_APP_LEGAL_OPERATOR_NAME`     | Controller's real legal identity (person or company)     | 14(1)(a)      |
-| `LEGAL_CONTACT_EMAIL`    | `VUE_APP_LEGAL_CONTACT_EMAIL`     | Working contact inbox for data-subject / error requests  | 14(1)(a)/(b)  |
-| `LEGAL_HOSTING_PROVIDER` | `VUE_APP_LEGAL_HOSTING_PROVIDER`  | Hosting processor's name                                 | 14(1)(e)      |
-| `LEGAL_HOSTING_REGION`   | `VUE_APP_LEGAL_HOSTING_REGION`    | Hosting region **+ transfer basis if outside the UK**    | 14(1)(f)      |
-| `LEGAL_EFFECTIVE_DATE`   | `VUE_APP_LEGAL_EFFECTIVE_DATE`    | The notice's effective date                              | —             |
-| `LEGAL_REFRESH_CADENCE`  | `VUE_APP_LEGAL_REFRESH_CADENCE`   | How often the data copy is refreshed (e.g. monthly)      | 14(2)(a)      |
-
-> **A production build (`npm run build`) hard-fails** if any of these is unset (the value falls back to a
-> `[SET AT DEPLOY]` placeholder) or the contact email is malformed — the guard in `vue.config.js` refuses to produce a
-> bundle, so an incomplete legal notice can never be shipped. Development (`npm run serve`) is unaffected.
-
-`LAST_REVIEWED` (overridable via `VUE_APP_LEGAL_LAST_REVIEWED`) defaults to a real date ("Last reviewed: …" on the
-notice) rather than a `[SET AT DEPLOY]` placeholder, so it is **not** enforced by the guard. Review and update it
-whenever the notice is materially changed, so the rendered date does not silently go stale.
-
-## Build and serve for production
-
-### Run production server locally
-
-```bash
-npm run build
-env KUZU_DIR={directory containing kuzu database} KUZU_FILE={database file name} npm run serve-prod
-```
-
-### Run production server with Docker
-
-```
-docker build -t ghcr.io/domvwt/explorer:latest .
-docker run -p 8000:8000 \
-           -v {path to the directory containing the database file}:/database \
-           -e KUZU_FILE={database file name} \
-           --rm ghcr.io/domvwt/explorer:latest
-```
-
-## Deployment
-
-Releases are manual: nothing builds or publishes on push. To cut a release, dispatch the
-[Build-And-Deploy workflow](.github/workflows/build-and-deploy.yml) from the Actions tab (or `gh workflow run Build-And-Deploy`),
-which builds and publishes the Docker image to GitHub Container Registry (`ghcr.io/domvwt/explorer`). Release builds carry
-`:latest` plus an immutable `:<YYYYMMDD>-<shortsha>` tag for pinning; dispatching with `isNightly` enabled publishes `:dev`
-instead. The pipeline builds images for both `amd64` and `arm64` platforms.
+**Grammar generation fails.** `generate-grammar` needs JDK 11 or newer on the
+`PATH`; point `JAVA_HOME` at a suitable JDK and prepend `$JAVA_HOME/bin` to
+`PATH`.
 
 ## Contributing
 
-We welcome contributions to Kuzu Explorer. By contributing to Kuzu Explorer, you agree that your contributions will be licensed under the [MIT License](LICENSE).
+This is a purpose-built fork for the Horkos toolkit. Bug reports and small fixes
+are welcome as issues or pull requests on this repository. Features for the
+general-purpose explorer belong upstream in
+[kuzudb/explorer](https://github.com/kuzudb/explorer).
+
+For Cypher query syntax, see the [Kuzu documentation](https://docs.kuzudb.com).
+
+## License
+
+MIT, the same as upstream Kuzu Explorer. See [LICENSE](LICENSE).
