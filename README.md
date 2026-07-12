@@ -10,6 +10,8 @@ research and note-taking.
 It is a fork of [Kuzu Explorer](https://github.com/kuzudb/explorer), heavily
 customised for safe public deployment.
 
+![Horkos Explorer's search view with a company's expanded network on the graph canvas — companies, people and addresses linked by ownership, influence and location edges; node labels are omitted in this image](src/assets/horkos-explorer-graph-view-light.png)
+
 ## Quick start
 
 Horkos Explorer is published as a Docker image. Mount a directory that contains
