@@ -73,6 +73,7 @@
             @settingsSaved="handleSettingsSaved"
           />
           <ImporterMainView
+            v-if="modeStore.isReadWrite"
             v-show="showImporter"
             :schema="schema"
             @reload-schema="reloadSchema"
