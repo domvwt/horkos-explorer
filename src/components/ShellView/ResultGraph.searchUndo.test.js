@@ -19,13 +19,16 @@ import { GraphHistoryManager } from "../../utils/GraphHistoryManager";
 //     component relies on. It deliberately does NOT reproduce the real methods'
 //     counter bookkeeping (this.counters.*) or position-pinning (setting/
 //     stripping fx/fy); those side effects are out of scope here.
-//   - The actual bug fix — the isGraphVisible() gate on the undo/redo *keydown*
-//     handlers, which stops a Ctrl+Z from firing undo on every mounted-but-
-//     hidden ResultGraph instead of only the visible one — needs a real DOM
-//     (offsetParent) and cannot run under this node-only harness. It is verified
-//     in the browser / manually. Reverting that 2-line gate would NOT fail this
-//     suite; these tests only guard the add/remove/re-add membership contract
-//     the gate delivers a correctly-targeted Ctrl+Z to.
+//   - The actual bug fix — the keydown gate (ownsGraphShortcuts(this) &&
+//     isGraphVisible()), which stops a Ctrl+Z from firing undo on every
+//     mounted (or even every *visible*) ResultGraph instead of only the one
+//     the user last interacted with — needs a real DOM (offsetParent,
+//     pointerdown) and cannot run under this node-only harness. It is
+//     verified in the browser / manually; the ownership half's claim/release
+//     semantics are unit-tested in utils/GraphShortcutOwnership.test.js.
+//     Reverting the gate would NOT fail this suite; these tests only guard
+//     the add/remove/re-add membership contract the gate delivers a
+//     correctly-targeted Ctrl+Z to.
 
 // Minimal stand-in for the G6 graph. getNodeData()/getEdgeData() with no
 // argument return the full list (what the diff + removal paths read); with an id

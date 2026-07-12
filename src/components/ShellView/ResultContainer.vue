@@ -2,6 +2,7 @@
   <div
     class="result-container"
     :class="{ maximized: isMaximized, 'is-error-container': errorMessage }"
+    @pointerdown.capture="markGraphInteraction"
   >
     <div
       ref="wrapper"
@@ -458,6 +459,12 @@ export default {
           this.layoutDropdownOpen = false;
         }
       }
+    },
+    // Interacting anywhere in this result view (toolbar, tabs, canvas, side
+    // panel) claims the global graph keyboard shortcuts for this cell's graph,
+    // so undo/redo/Delete never act on a neighbouring cell.
+    markGraphInteraction() {
+      this.$refs.resultGraph?.markInteraction();
     },
   },
 };

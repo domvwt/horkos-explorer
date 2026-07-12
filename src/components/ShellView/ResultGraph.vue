@@ -526,6 +526,11 @@
 import { Graph, GraphEvent } from '@antv/g6';
 import G6Utils from "../../utils/G6Utils";
 import { GraphHistoryManager } from "../../utils/GraphHistoryManager";
+import {
+  claimGraphShortcuts,
+  ownsGraphShortcuts,
+  releaseGraphShortcuts,
+} from "../../utils/GraphShortcutOwnership";
 import { UI_SIZE } from "../../utils/Constants";
 import {
   encodeId,
@@ -981,37 +986,39 @@ export default {
       }
     }, true); // Use capture phase to intercept before G6
 
-    // Keyboard shortcuts for undo/redo. Gated on isGraphVisible() for the same
-    // reason as Delete below: multiple ResultGraph instances stay mounted at
-    // once (hidden Table/Code tabs, other notebook cells) and each keeps its own
-    // live global keydown listener + history stack. Without the gate a Ctrl+Z
-    // meant for the graph the user is looking at would ALSO fire undo on every
-    // hidden cell, silently mutating graphs off-screen — and the add-via-search
-    // path (which can leave focus in the search box of the visible cell) would
-    // undo against the wrong instance. Unlike Delete this deliberately does NOT
-    // gate on isTypingContext(): Ctrl+Z must still undo the graph while focus is
-    // in the node-search box, since a picked suggestion is added additively and
-    // the user expects Ctrl+Z to remove it.
+    // Interacting anywhere inside the graph (canvas, side panel, undo/redo
+    // controls) claims the global shortcuts for this instance; the container
+    // toolbar and the programmatic add paths claim separately.
+    this.$refs.wrapper.addEventListener('pointerdown', this.markInteraction, true);
+
+    // Keyboard shortcuts for undo/redo. Every mounted ResultGraph keeps its
+    // own live global keydown listener + history stack (hidden Table/Code
+    // tabs, other notebook cells), so the handler gates twice: isGraphVisible()
+    // stops hidden instances from acting, and ownsGraphShortcuts(this) —
+    // claimed by the last pointerdown in this graph's container or by a
+    // programmatic add (node search, notebook pin) — narrows "every visible
+    // cell" down to the one graph the user is actually working in, so a single
+    // Ctrl+Z can never mutate a neighbouring cell's canvas. Unlike Delete,
+    // undo/redo deliberately do NOT gate on isTypingContext(): Ctrl+Z must
+    // still undo the graph while focus sits in the node-search box, since a
+    // picked suggestion is added additively and the user expects Ctrl+Z to
+    // remove it (the add itself claims ownership for this instance).
     this.handleKeydown = (e) => {
+      const actsOnShortcuts = ownsGraphShortcuts(this) && this.isGraphVisible();
       // Ctrl+Z (or Cmd+Z on Mac) for undo
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey && this.isGraphVisible()) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey && actsOnShortcuts) {
         e.preventDefault();
         this.undo();
       }
       // Ctrl+Y or Ctrl+Shift+Z (or Cmd variants) for redo
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey)) && this.isGraphVisible()) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey)) && actsOnShortcuts) {
         e.preventDefault();
         this.redo();
       }
-      // Delete (NOT Backspace) removes the currently-selected node, but only
-      // when the graph has focus context — never hijack Delete while the user
-      // is typing in an input/textarea/contenteditable or the Cypher editor.
-      // The isGraphVisible() gate matters because multiple ResultGraph
-      // instances stay mounted at once (hidden Table/Code tabs, other notebook
-      // cells) and each keeps its own live global keydown listener + clickedId;
-      // without it a Delete would silently remove a node from a graph the user
-      // isn't even looking at.
-      if (e.key === 'Delete' && !this.isTypingContext() && this.isGraphVisible() &&
+      // Delete (NOT Backspace) removes the currently-selected node — never
+      // while the user is typing in an input/textarea/contenteditable or the
+      // Cypher editor.
+      if (e.key === 'Delete' && !this.isTypingContext() && actsOnShortcuts &&
           this.clickedId && this.isNodeOnCanvas(this.clickedId)) {
         e.preventDefault();
         this.removeNodeById(this.clickedId);
@@ -1030,6 +1037,8 @@ export default {
     window.removeEventListener("mousemove", this.handleResizeMove);
     window.removeEventListener("mouseup", this.stopResize);
     window.removeEventListener('keydown', this.handleKeydown);
+    this.$refs.wrapper?.removeEventListener('pointerdown', this.markInteraction, true);
+    releaseGraphShortcuts(this);
     // Tear down any live find-connection picker dismissal listeners.
     document.removeEventListener("keydown", this.onConnectionPickerKeydown);
     document.removeEventListener("mousedown", this.onConnectionPickerClickAway, true);
@@ -1344,6 +1353,17 @@ export default {
      */
     isGraphVisible() {
       return !!(this.$refs.graph && this.$refs.graph.offsetParent !== null);
+    },
+
+    /**
+     * Claim the global graph keyboard shortcuts (undo/redo, Delete) for this
+     * instance. Called on pointerdown anywhere inside this graph's wrapper and
+     * its result container (toolbar included), and by programmatic adds that
+     * keep focus outside the graph (node search, notebook pins), so the
+     * shortcuts always follow the graph the user last touched.
+     */
+    markInteraction() {
+      claimGraphShortcuts(this);
     },
 
     /**
@@ -3127,6 +3147,10 @@ export default {
         return;
       }
       this.pinSelectInFlight = true;
+      // A search/pin selection keeps focus in the editor-side search box —
+      // outside this component — so claim the shortcuts here: the Ctrl+Z that
+      // follows an add must target this graph.
+      this.markInteraction();
       try {
         await this.doSelectPinnedEntity(label, pk);
       } finally {
