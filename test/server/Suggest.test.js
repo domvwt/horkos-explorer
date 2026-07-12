@@ -287,3 +287,92 @@ describe("handleSuggest guard rails", () => {
     expect(res.statusCode).toBe(400);
   });
 });
+
+describe("handleSuggest load shedding maps to 503", () => {
+  // A res spy that also records Retry-After set via res.set().
+  function shedRes() {
+    const res = {
+      statusCode: 200,
+      body: null,
+      headers: {},
+      set(name, value) {
+        this.headers[name] = value;
+        return this;
+      },
+      status(code) {
+        this.statusCode = code;
+        return this;
+      },
+      json(payload) {
+        this.body = payload;
+        return this;
+      },
+    };
+    return res;
+  }
+
+  // Shape matches DuckDB.js's LoadShedError (name + status 503).
+  class LoadShedError extends Error {
+    constructor(message) {
+      super(message);
+      this.name = "LoadShedError";
+      this.status = 503;
+    }
+  }
+
+  beforeEach(() => {
+    vi.spyOn(duckdb, "isEnabled").mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("maps a shed query on the fast stage to 503 with Retry-After, no raw text", async () => {
+    vi.spyOn(duckdb, "getCapabilities").mockResolvedValue(
+      caps({ table: "company_names", columns: CONTRACT, fts: true })
+    );
+    vi.spyOn(duckdb, "query").mockRejectedValue(
+      new LoadShedError("too many concurrent autocomplete queries")
+    );
+    const res = shedRes();
+    await handleSuggest(
+      mockReq({ q: "acme", type: "Company", stage: "fast" }),
+      res
+    );
+    expect(res.statusCode).toBe(503);
+    expect(res.headers["Retry-After"]).toBe("1");
+    expect(res.body).toEqual({ error: "Search is busy, please retry shortly" });
+    // Internal message must not leak.
+    expect(JSON.stringify(res.body)).not.toContain("concurrent");
+  });
+
+  it("maps a shed query on the rank stage to 503", async () => {
+    vi.spyOn(duckdb, "getCapabilities").mockResolvedValue(
+      caps({ table: "company_names", columns: CONTRACT, fts: true })
+    );
+    vi.spyOn(duckdb, "query").mockRejectedValue(new LoadShedError("shed"));
+    const res = shedRes();
+    await handleSuggest(
+      mockReq({ q: "acme", type: "Company", stage: "rank" }),
+      res
+    );
+    expect(res.statusCode).toBe(503);
+    expect(res.headers["Retry-After"]).toBe("1");
+  });
+
+  it("a shed on the non-staged ranked path returns 503 without flipping FTS off", async () => {
+    const capabilities = caps({
+      table: "person_names",
+      columns: CONTRACT,
+      fts: true,
+    });
+    vi.spyOn(duckdb, "getCapabilities").mockResolvedValue(capabilities);
+    vi.spyOn(duckdb, "query").mockRejectedValue(new LoadShedError("shed"));
+    const res = shedRes();
+    await handleSuggest(mockReq({ q: "john smith", type: "Person" }), res);
+    expect(res.statusCode).toBe(503);
+    // Transient backpressure must not disable ranked search for everyone.
+    expect(capabilities.tables.person_names.fts).toBe(true);
+  });
+});

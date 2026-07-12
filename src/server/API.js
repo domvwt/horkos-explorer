@@ -3,7 +3,7 @@ const router = express.Router();
 const process = require("process");
 const logger = require("./utils/Logger");
 const MODES = require("./utils/Constants").MODES;
-const { apiLimiter, queryLimiter } = require("./middleware/RateLimit");
+const { apiLimiter, queryLimiter, suggestLimiter } = require("./middleware/RateLimit");
 
 
 const isWasmMode = process.env.KUZU_WASM &&
@@ -50,6 +50,6 @@ router.use("/mode", apiLimiter, mode);
 
 // Autocomplete endpoint (available if DUCKDB_FILE is configured)
 const suggest = require("./Suggest");
-router.use("/suggest", apiLimiter, suggest);
+router.use("/suggest", suggestLimiter, suggest);
 
 module.exports = router;

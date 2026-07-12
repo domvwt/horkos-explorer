@@ -22,6 +22,20 @@ const ENTITY_TYPES = {
 // DuckDB files without them degrade to name-only suggestions.
 const CONTRACT_COLUMNS = ["doc_id", "cluster_id", "canonical_name"];
 
+// True when a query was shed by the DuckDB pool's admission gate (pool + queue
+// full). The route maps this to 503 + Retry-After so the client backs off,
+// distinct from a genuine query failure (500). Never echo the internal message.
+function isShedError(err) {
+  return err && (err.status === 503 || err.name === "LoadShedError");
+}
+
+// Emit the standard 503 shed response. Retry-After: 1 tells the client the
+// backpressure is short-lived (a busy pool frees within seconds).
+function sendShed(res) {
+  res.set("Retry-After", "1");
+  return res.status(503).json({ error: "Search is busy, please retry shortly" });
+}
+
 /**
  * Hybrid ranked query: BM25 full-text score from the table's FTS index,
  * unioned with LIKE-prefix matches so partially-typed tokens still hit
@@ -270,6 +284,9 @@ async function handleSuggest(req, res) {
       );
       return res.json(rows.map((r) => toSuggestion(r, config)));
     } catch (err) {
+      if (isShedError(err)) {
+        return sendShed(res);
+      }
       logger.error(`Ranked suggest upgrade failed (${err.message}) - keeping fast results`);
       return res.status(500).json({ error: "Search failed" });
     }
@@ -284,6 +301,9 @@ async function handleSuggest(req, res) {
       );
       return res.json(rows.map((r) => toSuggestion(r, config)));
     } catch (err) {
+      if (isShedError(err)) {
+        return sendShed(res);
+      }
       logger.error(`Fast suggest query failed: ${err.message}`);
       return res.status(500).json({ error: "Search failed" });
     }
@@ -298,6 +318,11 @@ async function handleSuggest(req, res) {
         );
         return res.json(rows.map((r) => toSuggestion(r, config)));
       } catch (err) {
+        // A shed error is transient backpressure, not a broken FTS index: do
+        // not flip the process-wide FTS flag off, just tell the client to retry.
+        if (isShedError(err)) {
+          return sendShed(res);
+        }
         // e.g. FTS index dropped/rebuilt out from under us - degrade for
         // the rest of this process lifetime rather than failing every call
         logger.error(`Ranked suggest query failed (${err.message}) - degrading to LIKE-only`);
@@ -323,6 +348,9 @@ async function handleSuggest(req, res) {
       score: 0,
     })));
   } catch (err) {
+    if (isShedError(err)) {
+      return sendShed(res);
+    }
     logger.error(`Suggest query failed: ${err.message}`);
     return res.status(500).json({ error: "Search failed" });
   }

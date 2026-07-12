@@ -18,6 +18,8 @@ const apiWindowMs = parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 60 * 1000; // 
 const apiMax = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || (isDevelopment ? 1000 : 60); // Relaxed in dev
 const queryWindowMs = parseInt(process.env.QUERY_RATE_LIMIT_WINDOW_MS) || 60 * 1000; // 1 minute window
 const queryMax = parseInt(process.env.QUERY_RATE_LIMIT_MAX_REQUESTS) || (isDevelopment ? 500 : 30); // Relaxed in dev
+const suggestWindowMs = parseInt(process.env.SUGGEST_RATE_LIMIT_WINDOW_MS) || 60 * 1000; // 1 minute window
+const suggestMax = parseInt(process.env.SUGGEST_RATE_LIMIT_MAX_REQUESTS) || (isDevelopment ? 2000 : 120); // Relaxed in dev
 
 // General API rate limiter (applies to most endpoints)
 const apiLimiter = rateLimit({
@@ -64,6 +66,29 @@ const queryLimiter = rateLimit({
   }
 });
 
+// Dedicated rate limiter for the autocomplete endpoint. /api/suggest is the
+// highest-frequency public surface (one request per keystroke, staged fast +
+// rank), so it gets its own generous bucket rather than sharing the general API
+// limit — otherwise a normal typing burst would exhaust the shared apiLimiter.
+const suggestLimiter = rateLimit({
+  windowMs: suggestWindowMs,
+  max: suggestMax,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'Too many autocomplete requests from this IP, please slow down.',
+    code: 'SUGGEST_RATE_LIMIT_EXCEEDED'
+  },
+  handler: (req, res) => {
+    logger.warn(`Suggest rate limit exceeded for IP: ${req.ip}`);
+    res.status(429).json({
+      error: 'Too many autocomplete requests from this IP, please slow down.',
+      code: 'SUGGEST_RATE_LIMIT_EXCEEDED',
+      retryAfter: req.rateLimit.resetTime
+    });
+  }
+});
+
 // Authentication endpoint rate limiter (prevent brute force if auth is added)
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minute window
@@ -90,16 +115,19 @@ function checkLimiterBounds(name, windowMs, max) {
 
 checkLimiterBounds('API', apiWindowMs, apiMax);
 checkLimiterBounds('Query', queryWindowMs, queryMax);
+checkLimiterBounds('Suggest', suggestWindowMs, suggestMax);
 
 // Log rate limit configuration on startup
 if (process.env.NODE_ENV !== 'test') {
   logger.info('Rate limiting configuration:');
   logger.info(`  API limit: ${apiMax} requests per ${apiWindowMs / 1000}s`);
   logger.info(`  Query limit: ${queryMax} queries per ${queryWindowMs / 1000}s`);
+  logger.info(`  Suggest limit: ${suggestMax} requests per ${suggestWindowMs / 1000}s`);
 }
 
 module.exports = {
   apiLimiter,
   queryLimiter,
+  suggestLimiter,
   authLimiter
 };

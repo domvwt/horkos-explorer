@@ -194,6 +194,12 @@ export default {
       autocompleteAvailable: true,
       debounceTimer: null,
       autocompleteRequestId: 0,
+      // AbortController for the in-flight /api/suggest request(s). A newer
+      // keystroke (or an emptied/cleared input) aborts the superseded request
+      // so a slow BM25 scan is not just discarded on arrival but cancelled on
+      // the wire. The monotonic requestId above remains the stale-response
+      // backstop for any response that lands before the abort takes effect.
+      suggestAbortController: null,
       // Suggestion the user explicitly picked; enables navigation by node
       // id instead of name matching. Cleared as soon as the name is edited.
       selectedSuggestion: null,
@@ -497,6 +503,7 @@ export default {
 
       const query = this.filters.name?.trim();
       if (!this.autocompleteAvailable || !query || query.length < 2) {
+        this.abortInflightSuggest();
         this.suggestions = [];
         this.showSuggestions = false;
         return;
@@ -504,6 +511,7 @@ export default {
 
       // Don't fetch if already using exact match syntax (quoted)
       if (query.startsWith('"')) {
+        this.abortInflightSuggest();
         this.suggestions = [];
         this.showSuggestions = false;
         return;
@@ -514,7 +522,33 @@ export default {
         this.fetchSuggestions(query);
       }, 300);
     },
+    // Abort any in-flight /api/suggest request. Called before a new keystroke
+    // fetches and whenever the input empties/clears, so a superseded request is
+    // cancelled rather than left running.
+    abortInflightSuggest() {
+      if (this.suggestAbortController) {
+        this.suggestAbortController.abort();
+        this.suggestAbortController = null;
+      }
+    },
+
+    // True for an axios cancellation (aborted via AbortController). Such errors
+    // are expected and must be swallowed silently. The default export is an
+    // axios instance (no static isCancel), so key on the CanceledError code,
+    // falling back to the static helper only when it exists.
+    isAbortError(err) {
+      return (
+        err?.code === "ERR_CANCELED" ||
+        (typeof axios.isCancel === "function" && axios.isCancel(err))
+      );
+    },
+
     async fetchSuggestions(query) {
+      // Supersede any in-flight request from the previous keystroke, then open a
+      // fresh controller whose signal both staged calls share.
+      this.abortInflightSuggest();
+      this.suggestAbortController = new AbortController();
+
       // One request id per keystroke. BOTH staged requests (fast + rank) are
       // tagged with it, and every response - fast OR rank - is dropped unless
       // its id still matches the latest keystroke. This is what stops a slow
@@ -561,6 +595,7 @@ export default {
             limit: 10,
             stage,
           },
+          signal: this.suggestAbortController?.signal,
         });
 
         // Drop stale responses: a newer keystroke has superseded this one.
@@ -585,6 +620,13 @@ export default {
         this.selectedSuggestionIndex = -1;
         return true;
       } catch (err) {
+        // Silently swallow cancellations: a superseded request being aborted is
+        // expected, not an error, and must not disable autocomplete or blank
+        // the dropdown.
+        if (this.isAbortError(err)) {
+          return false;
+        }
+
         // Ignore errors from stale requests.
         if (requestId !== this.autocompleteRequestId) {
           return false;
@@ -721,6 +763,7 @@ export default {
       // vs full address), so clear it along with suggestions; bump the
       // request id so any in-flight fetch for the previous type is discarded
       this.autocompleteRequestId++;
+      this.abortInflightSuggest();
       this.filters.name = "";
       this.suggestions = [];
       this.showSuggestions = false;
