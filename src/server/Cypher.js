@@ -9,6 +9,13 @@ const { sendErrorResponse } = require("./utils/errorResponse");
 const uuid = require("uuid");
 let sessionDb;
 const queryMap = new Map();
+// Hard cap on live progress entries. queryMap is keyed by client-supplied uuid
+// for progress polling; without a bound a client could register unbounded
+// distinct uuids (each progress query leaves an entry until its request
+// finishes) and grow the map without limit. At capacity we skip registering
+// NEW keys but still let in-flight queries update their existing entry, so a
+// full map never starves a query already being tracked.
+const MAX_QUERY_MAP_ENTRIES = 1000;
 try {
   sessionDb = require("./utils/SessionDatabase");
 } catch (err) {
@@ -34,14 +41,28 @@ if (querySizeLimit) {
 }
 let schema = null;
 
-const processSingleResult = async (result) => {
+// `remaining` is the per-REQUEST row budget still available (see the statement
+// loop below): the cap is shared across every statement in one request, not
+// applied per statement, so N statements can no longer each ship querySizeLimit
+// rows. A statement reads at most `remaining` rows; if that clips its result
+// short of getNumTuples(), `truncated` is set so the UI can flag it (a fully
+// budget-exhausted downstream statement reads 0 rows but still carries the flag
+// when its result had tuples to give). Single-statement requests pass
+// remaining === querySizeLimit, so their behaviour is unchanged by construction.
+const processSingleResult = async (result, remaining) => {
   let rows;
   const resultSize = result.getNumTuples();
-  if (!querySizeLimit || resultSize <= querySizeLimit) {
+  // `!querySizeLimit` is the historical unset/unbounded guard, preserved
+  // verbatim: read everything, ignore the request budget. Otherwise the row
+  // cap for THIS statement is the smaller of the per-response limit and the
+  // rows still left in the shared request budget (`remaining == null` means no
+  // budget was threaded, i.e. the unbounded case, so fall back to the limit).
+  const cap = remaining == null ? querySizeLimit : Math.min(querySizeLimit, remaining);
+  if (!querySizeLimit || resultSize <= cap) {
     rows = await result.getAll();
   } else {
     rows = [];
-    for (let i = 0; i < querySizeLimit; ++i) {
+    for (let i = 0; i < cap; ++i) {
       rows.push(await result.getNext());
     }
   }
@@ -51,7 +72,13 @@ const processSingleResult = async (result) => {
   columnNames.forEach((name, i) => {
     dataTypes[name] = columnTypes[i];
   });
-  return { rows, dataTypes };
+  const body = { rows, dataTypes };
+  // Only emit the indicator when the shipped rows are genuinely fewer than the
+  // result held, so a non-truncated response stays byte-identical to before.
+  if (resultSize > rows.length) {
+    body.truncated = true;
+  }
+  return body;
 };
 
 // This is a workaround for the JSON stringify issue with BigInt values.
@@ -142,7 +169,17 @@ router.post("/", QueryValidator.middleware(database), async (req, res) => {
     });
   }
   const progressCallback = (pipelineProgress, numPipelinesFinished, numPipelines) => {
-    queryMap.set(req.body.uuid, {
+    const key = req.body.uuid;
+    // No client uuid -> nothing to poll against; never write an `undefined`
+    // key (concurrent no-uuid queries would clobber a single junk slot). When
+    // the map is at capacity, only allow updates to an already-tracked key.
+    if (key == null) {
+      return;
+    }
+    if (!queryMap.has(key) && queryMap.size >= MAX_QUERY_MAP_ENTRIES) {
+      return;
+    }
+    queryMap.set(key, {
       pipelineProgress: pipelineProgress,
       numPipelinesFinished: numPipelinesFinished,
       numPipelines: numPipelines
@@ -179,9 +216,15 @@ router.post("/", QueryValidator.middleware(database), async (req, res) => {
         // still executed.
       }
     }
+    // Per-REQUEST row budget: querySizeLimit is spent across ALL statements in
+    // this request, not per statement, so a multi-statement batch can no longer
+    // ship N x querySizeLimit rows. `null` preserves the legacy unbounded case
+    // when querySizeLimit is falsy (unset). Single-statement requests get the
+    // full budget, so they behave exactly as before.
+    let remaining = querySizeLimit ? querySizeLimit : null;
     let responseBody;
     if (!Array.isArray(result)) {
-      responseBody = await processSingleResult(result);
+      responseBody = await processSingleResult(result, remaining);
       result.close();
       responseBody.isSchemaChanged = isSchemaChanged;
       responseBody.isMultiStatement = false;
@@ -192,8 +235,14 @@ router.post("/", QueryValidator.middleware(database), async (req, res) => {
         results: [],
       };
       for (const singleResult of result) {
-        const singleResultBody = await processSingleResult(singleResult);
+        const singleResultBody = await processSingleResult(singleResult, remaining);
         responseBody.results.push(singleResultBody);
+        // Debit the shared budget by the rows this statement actually read, so
+        // once it hits 0 every downstream statement reads nothing (but still
+        // reports truncated when it had tuples to give).
+        if (remaining != null) {
+          remaining -= singleResultBody.rows.length;
+        }
       }
       result.forEach((singleResult) => singleResult.close());
     }
