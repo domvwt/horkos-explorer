@@ -1,4 +1,14 @@
-FROM node:20-bookworm-slim
+# syntax=docker/dockerfile:1
+
+# =============================================================================
+# Builder stage
+# -----------------------------------------------------------------------------
+# Installs the full toolchain (JDK for grammar generation, dev + prod node
+# deps) and produces the built frontend (dist/) plus a pruned, production-only
+# node_modules. Nothing from this stage's toolchain ships in the runtime image
+# except the artifacts explicitly COPY --from=builder'd below.
+# =============================================================================
+FROM node:20-bookworm-slim AS builder
 
 ARG SKIP_GRAMMAR=false
 ARG SKIP_BUILD_APP=false
@@ -6,37 +16,88 @@ ARG SKIP_BUILD_APP=false
 ENV DEBIAN_FRONTEND=noninteractive
 RUN echo "SKIP_GRAMMAR: $SKIP_GRAMMAR"
 RUN echo "SKIP_BUILD_APP: $SKIP_BUILD_APP"
+
+# libatomic1: runtime dep of the kuzu native addon (kuzujs.node).
 RUN apt-get update && apt-get install -y libatomic1
 
-# Install dependencies
+# openjdk-17: only needed by `generate-grammar-prod` (antlr4ng-cli runs the
+# ANTLR jar). Skipped when grammar generation is skipped so no JDK is pulled.
 RUN if [ "$SKIP_GRAMMAR" != "true" ] ; then apt-get update && apt-get install -y openjdk-17-jdk ; else echo "Skipping openjdk installation as grammar generation is skipped" ; fi
-# Copy app
+
+# Install pnpm globally as root (the `node` user cannot write to
+# /usr/local/lib/node_modules). Matches the repo's documented
+# `npm install -g pnpm`.
+RUN npm install -g pnpm
+
+# Copy app source into the build tree.
 COPY . /home/node/app
 RUN chown -R node:node /home/node/app
 
-# Make data and database directories
-RUN mkdir -p /database
-RUN mkdir -p /data
-RUN chown -R node:node /database
-RUN chown -R node:node /data
-
-# Switch to node user
+# Switch to node user for the install/build (matches runtime user).
 USER node
-
-# Set working directory
 WORKDIR /home/node/app
 
-# Install pnpm
-RUN npm install -g pnpm
-
-# Install dependencies, generate grammar, and reduce size of kuzu node module
-# Done in one step to reduce image size
+# Install deps, generate grammar, and drop kuzu's per-platform prebuilt copies
+# and vendored source (the active native addon is node_modules/kuzu/kuzujs.node
+# at the package root, which is NOT under prebuilt/ or kuzu-source/, so it
+# survives this rm). Done in one layer to keep the builder image lean.
 RUN pnpm install --frozen-lockfile &&\
     if [ "$SKIP_GRAMMAR" != "true" ] ; then npm run generate-grammar-prod ; else echo "Skipping grammar generation" ; fi &&\
     rm -rf node_modules/kuzu/prebuilt node_modules/kuzu/kuzu-source
 
-# Build app
-RUN if [ "$SKIP_BUILD_APP" != "true" ] ; then npm run build ; else echo "Skipping build" ; fi
+# Build the frontend bundle into dist/. `mkdir -p dist` first so the runtime
+# stage's `COPY .../dist` always has a directory to copy even on a
+# SKIP_BUILD_APP=true probe build (a real build fills it; express.static over an
+# empty dist simply 404s static assets and the server still boots).
+RUN mkdir -p dist &&\
+    if [ "$SKIP_BUILD_APP" != "true" ] ; then npm run build ; else echo "Skipping build" ; fi
+
+# Prune dev-only dependencies AFTER the build has consumed them, leaving a
+# production-only node_modules to copy into the runtime stage.
+#
+# `pnpm prune --prod` (not a fresh `pnpm install --prod`) is deliberate: prune
+# only removes dev-only packages from the existing tree and does NOT re-run any
+# package's install/postinstall script. kuzu has a postinstall (install.js)
+# that copies prebuilt/kuzujs-<platform>-<arch>.node -> kuzujs.node and needs
+# both prebuilt/ and kuzu-source/ present; a fresh `--prod` install would
+# re-trigger it, find the (already-removed) prebuilt gone, and fall into the
+# ~10-minute build-from-source path. Prune sidesteps that entirely: the
+# already-built kuzujs.node is preserved and the rm above stays effective.
+RUN pnpm prune --prod
+
+# =============================================================================
+# Runtime stage
+# -----------------------------------------------------------------------------
+# A minimal production image: no JDK, no devDependencies (no webpack /
+# @vue/cli-service), only the built app plus production node_modules.
+# =============================================================================
+FROM node:20-bookworm-slim
+
+# libatomic1: runtime dep of the kuzu native addon. No JDK here.
+RUN apt-get update && apt-get install -y libatomic1 && rm -rf /var/lib/apt/lists/*
+
+# Data/database mount points, owned by the unprivileged node user. The app
+# expects a Kuzu database to be bind-mounted at /database at runtime.
+RUN mkdir -p /database /data && chown -R node:node /database /data
+
+WORKDIR /home/node/app
+
+# Copy only what the server needs at runtime, all owned by node:
+#   - package.json: read by Node for module resolution / metadata.
+#   - node_modules: production-only tree from the builder (pnpm's .pnpm store
+#     symlinks are relative, so a full-directory COPY preserves them). Includes
+#     the built kuzu native addon (kuzujs.node).
+#   - dist/: the built frontend served as static assets.
+#   - src/: the server code (src/server) AND src/utils — src/server/Import.js
+#     requires ../utils/DataImport and ../utils/DataDefinitionLanguage at
+#     module-load time (loaded whenever KUZU_WASM is unset), so src/utils must
+#     be present or the server crashes on startup.
+COPY --from=builder --chown=node:node /home/node/app/package.json ./package.json
+COPY --from=builder --chown=node:node /home/node/app/node_modules ./node_modules
+COPY --from=builder --chown=node:node /home/node/app/dist ./dist
+COPY --from=builder --chown=node:node /home/node/app/src ./src
+
+USER node
 
 # Expose port
 EXPOSE 8000
@@ -64,6 +125,14 @@ ENV KUZU_QUERY_SIZE_LIMIT=10000
 # browser should enforce it rather than only report. Set CSP_REPORT_ONLY=true
 # to fall back to report-only if a future frontend change needs re-validating.
 ENV CSP_REPORT_ONLY=false
+
+# Container-level liveness probe. Uses Node's built-in fetch (Node 18+) so no
+# curl/wget is needed in the image. Reads PORT from the environment so an
+# operator PORT override does not break the probe. The /health route is mounted
+# before the /api router and never touches Kuzu/DuckDB, so this is a pure
+# liveness check.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD node -e "const p=process.env.PORT||8000; fetch('http://127.0.0.1:'+p+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 # Run app
 ENTRYPOINT ["node", "src/server/index.js"]
