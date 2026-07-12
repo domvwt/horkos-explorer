@@ -16,7 +16,8 @@
     "check-cypher-parser-sync": "node src/server/middleware/cypher-parser/check-sync.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test-security": "bash scripts/test-security.sh"
+    "test-security": "bash scripts/test-security.sh",
+    "benchmark-suggest": "node scripts/benchmark-suggest.js"
   },
   "dependencies": {
     "@antv/g6": "^5.0.49",
