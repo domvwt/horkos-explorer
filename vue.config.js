@@ -96,7 +96,10 @@ module.exports = defineConfig({
     plugins: [
       new MonacoWebpackPlugin({
         publicPath: BASE_URL,
-        filename: '[name].worker.js',
+        // Content-hashed so CDN immutable caching can't serve a stale worker
+        // after a Monaco upgrade; the plugin wires the emitted URL into
+        // MonacoEnvironment itself, so no consumer references the filename.
+        filename: '[name].worker.[contenthash:8].js',
         // Only include languages needed for Cypher editor
         // This dramatically reduces build time and bundle size
         languages: ['cypher', 'json'],
