@@ -43,6 +43,9 @@ importers:
       chroma-js:
         specifier: ^3.0.0
         version: 3.2.0
+      compression:
+        specifier: ^1.8.1
+        version: 1.8.1
       core-js:
         specifier: ^3.8.3
         version: 3.48.0

@@ -29,6 +29,7 @@
     "axios": "^1.15.1",
     "bootstrap": "^5.3.1",
     "chroma-js": "^3.0.0",
+    "compression": "^1.8.1",
     "core-js": "^3.8.3",
     "cors": "^2.8.5",
     "dropzone": "^6.0.0-beta.2",

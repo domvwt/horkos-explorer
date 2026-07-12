@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const compression = require("compression");
 const api = require("./API");
 const path = require("path");
 const process = require("process");
@@ -8,6 +9,8 @@ const duckdb = require("./utils/DuckDB");
 const logger = require("./utils/Logger");
 const baseUrl = require("./utils/BaseURL");
 const applyAppSecurity = require("./middleware/AppSecurity");
+const globalErrorHandler = require("./middleware/ErrorHandler");
+const { setStaticCacheHeaders } = require("./utils/staticCache");
 
 // CORS configuration
 // Supports two modes:
@@ -45,6 +48,16 @@ process.on("SIGTERM", () => {
 
 const app = express();
 
+// Keep-alive tuning for every app.listen() call below. headersTimeout MUST
+// exceed keepAliveTimeout (Node requirement: a connection reused within the
+// keep-alive window still needs room to send its next request's headers
+// before the stricter headers timeout would fire on it).
+function applyKeepAlive(server) {
+  server.keepAliveTimeout = 65000;
+  server.headersTimeout = 66000;
+  return server;
+}
+
 // Apply CORS configuration
 if (ALLOWED_ORIGINS && ALLOWED_ORIGINS.length > 0) {
   app.use(cors({
@@ -55,7 +68,11 @@ if (ALLOWED_ORIGINS && ALLOWED_ORIGINS.length > 0) {
       if (ALLOWED_ORIGINS.indexOf(origin) !== -1) {
         callback(null, true);
       } else {
-        callback(new Error('Not allowed by CORS'));
+        const corsError = new Error('Not allowed by CORS');
+        // Marker property so the global error handler can map this to 403
+        // without matching on message text (see middleware/ErrorHandler.js).
+        corsError.isCorsRejection = true;
+        callback(corsError);
       }
     },
     credentials: false,
@@ -73,6 +90,20 @@ if (ALLOWED_ORIGINS && ALLOWED_ORIGINS.length > 0) {
 // for the full rationale (CSP enforce-vs-report, trust-proxy hop clamping, etc.).
 applyAppSecurity(app);
 
+// Compress response bodies (gzip/brotli per Accept-Encoding) before routes and
+// static files, so both API JSON and static assets benefit. Default filter
+// (skips already-compressed/small responses) and threshold are fine here.
+app.use(compression());
+
+// Liveness probe: mounted directly on the app, BEFORE the /api router, so it
+// never passes through any rate limiter and never touches Kuzu/DuckDB - a
+// probe that depended on the DB or a limiter could itself be starved or used
+// to infer DB health from outside.
+app.get(`${baseUrl}health`, (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.status(200).json({ status: "ok" });
+});
+
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 8000;
 // JSON request-body cap. This is a DoS guardrail, not a data path: the largest
 // legitimate JSON body is a Cypher query (already capped at 50KB by
@@ -83,7 +114,20 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT) : 8000;
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "1mb" }));
 app.use(`${baseUrl}api`, api);
 const distPath = path.join(__dirname, "..", "..", "dist");
-app.use(`${baseUrl}`, express.static(distPath, { maxAge: "30d" }));
+// Cache-Control is split by asset kind (see utils/staticCache.js): HTML is
+// always revalidated, webpack content-hashed js/css are cached for a year,
+// everything else (wasm/fonts/unhashed files) gets a short ceiling. maxAge:0
+// is the base so setStaticCacheHeaders is the single source of truth for the
+// actual Cache-Control value; ETags stay on (express.static default).
+app.use(`${baseUrl}`, express.static(distPath, {
+  maxAge: 0,
+  setHeaders: setStaticCacheHeaders,
+}));
+
+// Global JSON error handler. Must be mounted LAST (after the /api router and
+// static middleware) so it catches errors from every route/middleware above,
+// including body-parser failures and the CORS rejection wired above.
+app.use(globalErrorHandler);
 
 const isWasmMode = process.env.KUZU_WASM &&
   process.env.KUZU_WASM.toLowerCase() === "true";
@@ -102,15 +146,15 @@ if (!isWasmMode) {
       if (!isInitialDatabaseEmpty && version.includes("dev")) {
         logger.warn("You are running a dev build of Kuzu Explorer. Please make sure that the database files opened are created by the same version of Kuzu");
       }
-      app.listen(PORT, () => {
+      applyKeepAlive(app.listen(PORT, () => {
         logger.info("Deployed server started on port: " + PORT);
-      });
+      }));
     })
     .catch((err) => {
       logger.error("Error getting version of Kuzu: " + err);
     });
 } else {
-  app.listen(PORT, () => {
+  applyKeepAlive(app.listen(PORT, () => {
     logger.info("Deployed server started on port: " + PORT);
-  });
+  }));
 }

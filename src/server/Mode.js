@@ -9,6 +9,10 @@ const isWasmMode = process.env.KUZU_WASM &&
 
 router.get("/", async (_, res) => {
   const isProduction = true;
+  // The access mode is frozen at server startup (see CLAUDE.md "Access Mode
+  // Immutability") and cannot change without a restart, so the response is
+  // safe for a client (browser/proxy) to cache briefly.
+  res.setHeader("Cache-Control", "private, max-age=300");
   try {
     const mode = database.getAccessModeString();
     if (isWasmMode && mode !== MODES.DEMO) {
