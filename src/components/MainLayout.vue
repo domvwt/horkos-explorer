@@ -69,6 +69,7 @@
             v-if="showSettings"
             ref="settings"
             :schema="schema"
+            @ready="handleSettingsReady"
             @settingsSaved="handleSettingsSaved"
           />
           <ImporterMainView
@@ -150,11 +151,7 @@
 </template>
 
 <script lang="js">
-import SchemaViewMain from "./SchemaView/SchemaViewMain.vue";
-import ShellMainView from "./ShellView/ShellMainView.vue";
-import SettingsMainView from "./SettingsView/SettingsMainView.vue"
-import ImporterMainView from "./ImporterView/ImporterMainView.vue";
-import PrivacyView from "./PrivacyView/PrivacyView.vue";
+import { defineAsyncComponent } from "vue";
 import NotebookSidebar from "./NotebookSidebar.vue";
 import Axios from "@/utils/AxiosWrapper";
 import { useSettingsStore } from "../store/SettingsStore";
@@ -162,8 +159,16 @@ import { useModeStore } from "../store/ModeStore";
 import { useNotebookStore } from "../store/NotebookStore";
 import { mapActions, mapStores } from 'pinia'
 import { Modal } from 'bootstrap';
-import DuckDB from '../utils/DuckDB';
-import Kuzu from '../utils/KuzuWasm';
+
+// The five top-level views carry the heavy frontend deps (Monaco, G6, WASM
+// glue), so load each as its own async chunk instead of the initial bundle.
+// Quiet loading: no spinner, the container is simply empty until the chunk
+// arrives.
+const SchemaViewMain = defineAsyncComponent(() => import("./SchemaView/SchemaViewMain.vue"));
+const ShellMainView = defineAsyncComponent(() => import("./ShellView/ShellMainView.vue"));
+const SettingsMainView = defineAsyncComponent(() => import("./SettingsView/SettingsMainView.vue"));
+const ImporterMainView = defineAsyncComponent(() => import("./ImporterView/ImporterMainView.vue"));
+const PrivacyView = defineAsyncComponent(() => import("./PrivacyView/PrivacyView.vue"));
 
 
 export default {
@@ -204,7 +209,8 @@ export default {
     window.addEventListener("hashchange", this.handleHashChange);
     // Handle initial hash on page load
     this.handleHashChange();
-    window.setTimeout(() => {
+    window.setTimeout(async () => {
+      const DuckDB = (await import('../utils/DuckDB')).default;
       DuckDB.init();
     }, 500);
   },
@@ -225,6 +231,7 @@ export default {
 
     if (this.modeStore.isWasm) {
       this.isKuzuWasmInitialized = false;
+      const Kuzu = (await import('../utils/KuzuWasm')).default;
       await Kuzu.init();
       this.isKuzuWasmInitialized = true;
     }
@@ -313,6 +320,7 @@ export default {
     async getSchema() {
       let schema;
       if (this.modeStore.isWasm) {
+        const Kuzu = (await import('../utils/KuzuWasm')).default;
         schema = await Kuzu.getSchema();
       }
       else {
@@ -454,7 +462,9 @@ export default {
       this.hideAll();
       this.showSchema = true;
       this.$nextTick(() => {
-        this.$refs.schemaView.handleResize();
+        if (this.$refs.schemaView) {
+          this.$refs.schemaView.handleResize();
+        }
       });
     },
     toggleShell() {
@@ -468,10 +478,22 @@ export default {
       }
     },
     showSettingsModal() {
-      this.showSettings = true;
-      this.$nextTick(() => {
+      // showSettings is never reset to false (hideAll leaves it alone), so the
+      // settings view mounts once and stays mounted: every open after the
+      // first finds the ref and shows the modal directly.
+      if (this.$refs.settings) {
         this.$refs.settings.showModal();
-      });
+        return;
+      }
+      // First open: flip the v-if to mount the async settings component. Its
+      // 'ready' event completes the open once the chunk arrives — a nextTick
+      // here would race the chunk load and find the ref still undefined.
+      this.showSettings = true;
+    },
+    handleSettingsReady() {
+      if (this.$refs.settings) {
+        this.$refs.settings.showModal();
+      }
     },
     ...mapActions(useSettingsStore, [
       'initSettings',

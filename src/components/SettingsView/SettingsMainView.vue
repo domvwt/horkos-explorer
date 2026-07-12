@@ -307,6 +307,7 @@ export default {
       default: null,
     },
   },
+  emits: ["ready", "settingsSaved"],
   data: () => ({
     currentSettings: {},
     modal: null,
@@ -323,6 +324,9 @@ export default {
   mounted() {
     this.modal = new Modal(this.$refs.modal);
     this.$refs.modal.addEventListener('hidden.bs.modal', this.handleModalClose);
+    // Tell the parent the modal instance exists: this view is loaded async,
+    // so the parent cannot open the modal on a ref it holds before mount.
+    this.$emit('ready');
   },
   beforeUnmount() {
     this.$refs.modal.removeEventListener('hidden.bs.modal', this.handleModalClose);

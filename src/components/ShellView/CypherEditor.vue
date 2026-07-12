@@ -97,11 +97,16 @@
 <script lang="js">
 import CypherLanguage from "../../utils/CypherLanguage";
 import MonacoCypherLanguage from "../../utils/MonacoCypherLanguage";
-import * as Monaco from "monaco-editor";
 import { UI_SIZE } from "../../utils/Constants";
 import { useModeStore } from "../../store/ModeStore";
 import { mapStores } from "pinia";
 import NodeSearch from "./NodeSearch.vue";
+
+// monaco-editor is heavy, so it is loaded on demand instead of in the initial
+// bundle. This module-level binding is populated the first time an editor
+// mounts and shared across all CypherEditor instances (webpack caches the
+// dynamic chunk); it is kept out of Vue's reactivity system deliberately.
+let Monaco = null;
 
 // Make sure Monaco is not reactive. Otherwise, it will cause the Vue.js
 // app to crash.
@@ -199,6 +204,8 @@ export default {
   },
 
   mounted() {
+    // Fire-and-forget: the container renders immediately and Monaco attaches
+    // once its chunk arrives. initMonacoEditor guards against unmount-before-load.
     this.initMonacoEditor();
     // Set height mutation observer for wrapper element
     let rafId;
@@ -228,6 +235,9 @@ export default {
   },
 
   beforeUnmount() {
+    // Marks a pending async Monaco load as stale so initMonacoEditor bails
+    // instead of attaching an editor to a torn-down container.
+    this.isUnmounted = true;
     if (this.editor) {
       this.editor.dispose();
     }
@@ -290,7 +300,19 @@ export default {
         this.isPanelMinimized = false;
       }
     },
-    initMonacoEditor() {
+    async initMonacoEditor() {
+      // Load monaco-editor on demand (kept out of the initial bundle). The
+      // dynamic chunk is cached by webpack, so the module-level binding is
+      // populated once and reused across every editor instance.
+      if (!Monaco) {
+        Monaco = await import("monaco-editor");
+      }
+      // The import is async, so the component may have been torn down (rapid
+      // tab switching) before it resolved. Bail rather than attach an editor to
+      // a detached container.
+      if (this.isUnmounted || !this.$refs.editor) {
+        return;
+      }
       const theme = document.documentElement.getAttribute('data-bs-theme') === 'dark'
         ? 'vs-dark'
         : 'vs-light';
@@ -321,7 +343,8 @@ export default {
             return this.cypherLanguage.provideCompletionItemsForMonaco(
               model,
               position,
-              this.schema
+              this.schema,
+              Monaco
             );
           },
         });
@@ -343,6 +366,13 @@ export default {
           bottom: 8,
         },
       });
+      // Apply content that arrived while the Monaco chunk was loading. The
+      // undefined sentinel (not truthiness) keeps an empty-string write valid.
+      if (this.pendingEditorContent !== undefined) {
+        const pending = this.pendingEditorContent;
+        this.pendingEditorContent = undefined;
+        this.setEditorContent(pending);
+      }
     },
     toggleMaximize() {
       this.$emit("toggleMaximize");
@@ -354,6 +384,11 @@ export default {
       this.isMaximized = false;
     },
     evaluateCypher() {
+      // No editor yet (Monaco chunk still loading) means nothing the user
+      // could have typed to run.
+      if (!this.editor) {
+        return;
+      }
       const cypher = this.editor.getValue();
       this.$emit("evaluateCypher", cypher, {});
     },
@@ -387,6 +422,15 @@ export default {
       this.$emit("selectEntity", target);
     },
     setEditorContent(content) {
+      // The editor is created only after the async Monaco chunk resolves, so
+      // an external write (e.g. the startup demo-cell/history load) can arrive
+      // before it exists. Buffer the latest content; initMonacoEditor applies
+      // it once the editor is created. Non-reactive instance property, same
+      // convention as this.editor.
+      if (!this.editor) {
+        this.pendingEditorContent = content;
+        return;
+      }
       this.editor.setValue(content);
     },
     removeCell() {

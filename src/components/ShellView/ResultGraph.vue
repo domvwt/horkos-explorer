@@ -523,7 +523,6 @@
 </template>
 
 <script lang="js">
-import { Graph, GraphEvent } from '@antv/g6';
 import G6Utils from "../../utils/G6Utils";
 import { GraphHistoryManager } from "../../utils/GraphHistoryManager";
 import {
@@ -564,6 +563,25 @@ import {
 import Axios from "@/utils/AxiosWrapper";
 import { createGraphConfig, getLayoutConfig } from "./graphConfig";
 import { generateExportCode, parseExportCode } from "@/utils/InvestigationState";
+
+// @antv/g6 is heavy, so it is loaded on demand instead of in the initial
+// bundle. The module and its constructor are cached at module scope and a
+// single in-flight promise is shared across all ResultGraph instances, so
+// several graph cells mounting at once trigger exactly one chunk fetch.
+let G6 = null;
+let g6LoadPromise = null;
+function loadG6() {
+  if (G6) {
+    return Promise.resolve(G6);
+  }
+  if (!g6LoadPromise) {
+    g6LoadPromise = import('@antv/g6').then((module) => {
+      G6 = module;
+      return G6;
+    });
+  }
+  return g6LoadPromise;
+}
 
 export default {
   name: "ResultGraph",
@@ -1127,6 +1145,8 @@ export default {
      * @returns {Promise<void>}
      */
     async initializeEmptyGraph(edges = []) {
+      const { Graph } = await loadG6();
+
       if (this.graphCreated && this.g6Graph) {
         this.g6Graph.destroy();
       }
@@ -1256,6 +1276,8 @@ export default {
     },
 
     async drawGraph() {
+      const { Graph, GraphEvent } = await loadG6();
+
       if (this.graphCreated && this.g6Graph) {
         this.g6Graph.destroy();
       }
@@ -2828,6 +2850,8 @@ export default {
       if (!this.g6Graph) {
         return;
       }
+
+      const { Graph } = await loadG6();
 
       // Stop all running animations before redrawing
       try {

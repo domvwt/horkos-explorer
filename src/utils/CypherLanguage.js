@@ -2,7 +2,6 @@ import { CypherLexer } from "./CypherParser/CypherLexer";
 import { CypherParser } from "./CypherParser/CypherParser";
 import * as c3 from "antlr4-c3";
 import * as antlr4 from "antlr4ng";
-import * as Monaco from "monaco-editor";
 
 // We assume the other symbols are the same as their names
 // in the grammar
@@ -170,7 +169,10 @@ class CypherLanguage {
     return Array.from(keywords);
   }
 
-  provideCompletionItemsForMonaco(model, position, schema) {
+  // Monaco is passed in (rather than imported) so this module stays free of a
+  // static monaco-editor dependency; the editor loads Monaco dynamically and
+  // hands the loaded module to us for the completion-kind enums below.
+  provideCompletionItemsForMonaco(model, position, schema, Monaco) {
     // Get the position of last ";" before the current position
     let lastSemiColonPosition = { lineNumber: 1, column: 1 };
     const found = model.findPreviousMatch(
