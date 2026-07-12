@@ -73,6 +73,8 @@ RUN pnpm prune --prod
 # =============================================================================
 FROM node:20-bookworm-slim
 
+ENV DEBIAN_FRONTEND=noninteractive
+
 # libatomic1: runtime dep of the kuzu native addon. No JDK here.
 RUN apt-get update && apt-get install -y libatomic1 && rm -rf /var/lib/apt/lists/*
 
@@ -130,9 +132,12 @@ ENV CSP_REPORT_ONLY=false
 # curl/wget is needed in the image. Reads PORT from the environment so an
 # operator PORT override does not break the probe. The /health route is mounted
 # before the /api router and never touches Kuzu/DuckDB, so this is a pure
-# liveness check.
+# liveness check. Also reads BASE_URL (src/server/utils/BaseURL.js, default
+# "/") since index.js mounts the route at `${baseUrl}health`, not a hardcoded
+# root path - an operator re-rooting the app with BASE_URL would otherwise
+# leave this probe checking a path that no longer exists.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD node -e "const p=process.env.PORT||8000; fetch('http://127.0.0.1:'+p+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+    CMD node -e "const p=process.env.PORT||8000; const b=process.env.BASE_URL||'/'; fetch('http://127.0.0.1:'+p+b+'health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 # Run app
 ENTRYPOINT ["node", "src/server/index.js"]

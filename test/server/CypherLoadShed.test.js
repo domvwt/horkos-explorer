@@ -131,6 +131,11 @@ describe("Cypher.js real route: admission-control LoadShedError -> 503", () => {
     expect(getConnectionCalls).toBe(1);
     // ...and mapped the shed to a 503.
     expect(res.statusCode).toBe(503);
+    // getConnection() threw before ever handing back a connection, so the
+    // handler's cleanup path must not call releaseConnection() for a
+    // connection it never acquired (that would release a slot it doesn't
+    // hold, corrupting the pool's accounting).
+    expect(releaseConnectionCalls).toBe(0);
     expect(res.body).toEqual({
       error: "Server is at capacity, please retry shortly",
     });

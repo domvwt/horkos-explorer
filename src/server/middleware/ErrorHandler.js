@@ -35,10 +35,17 @@ function globalErrorHandler(err, req, res, next) {
     status = 413;
     message = "Request body too large";
   } else if (
-    (err && err.type === "entity.parse.failed") ||
-    err instanceof SyntaxError
+    err &&
+    err.type === "entity.parse.failed" &&
+    (err.status === 400 || err.statusCode === 400)
   ) {
-    // body-parser: malformed JSON payload.
+    // body-parser: malformed JSON payload. body-parser's read.js wraps the
+    // JSON.parse SyntaxError via http-errors' createError(400, err, { type:
+    // 'entity.parse.failed' }), which mutates the SAME error object in place
+    // with both err.type and err.status/err.statusCode = 400. Keying on
+    // err.type alone (or on `instanceof SyntaxError`) would also catch an
+    // app-thrown bare SyntaxError with neither property set, misclassifying
+    // an internal bug as a 400 client error - so both signals are required.
     status = 400;
     message = "Malformed request body";
   } else if (err && err.isCorsRejection) {
