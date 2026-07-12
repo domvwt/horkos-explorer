@@ -12,17 +12,37 @@ class DuckDB {
     this.db = null;
     this.loadedTables = {};
     this.loadingTablePromises = {};
-    this.initializationPromise = this.init();
+    // Single-flight guard for on-demand engine instantiation. The engine
+    // (duckdb-eh.wasm + worker, ~10MB+ over the wire) is fetched lazily the
+    // first time a consumer needs it, NOT at construction/import time: it only
+    // powers client-side CSV/Parquet parsing in the Importer, which is hidden
+    // outside READ_WRITE. Keeping this null until getDb()/init() runs is what
+    // guarantees a read-only visitor never downloads the WASM bundle.
+    this.initializationPromise = null;
     this.duckdb = duckdb;
     window.duckdb = this; // For debugging
   }
 
   async init() {
-    if (this.initializationPromise) {
-      await this.initializationPromise;
-      delete this.initializationPromise;
+    // Idempotent single-flight: concurrent callers share one in-flight
+    // instantiation, and a completed init returns immediately.
+    if (this.db) {
       return;
     }
+    if (this.initializationPromise) {
+      return this.initializationPromise;
+    }
+    this.initializationPromise = this._instantiate();
+    try {
+      await this.initializationPromise;
+    } catch (error) {
+      // Allow a later caller to retry after a failed instantiation.
+      this.initializationPromise = null;
+      throw error;
+    }
+  }
+
+  async _instantiate() {
     const baseUrl = process.env.BASE_URL;
     const MANUAL_BUNDLES = {
       mvp: {
@@ -52,11 +72,7 @@ class DuckDB {
 
   async getDb() {
     if (!this.db) {
-      if (!this.dbInitPromise) {
-        this.dbInitPromise = this.init();
-      }
-      await this.dbInitPromise;
-      delete this.dbInitPromise;
+      await this.init();
     }
     return this.db;
   }

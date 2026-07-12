@@ -209,10 +209,6 @@ export default {
     window.addEventListener("hashchange", this.handleHashChange);
     // Handle initial hash on page load
     this.handleHashChange();
-    window.setTimeout(async () => {
-      const DuckDB = (await import('../utils/DuckDB')).default;
-      DuckDB.init();
-    }, 500);
   },
   beforeUnmount() {
     this.accessModeModal.dispose();
