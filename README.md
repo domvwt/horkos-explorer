@@ -391,27 +391,28 @@ nvm use 20
 ## Legal / go-live checklist (required before public deploy)
 
 The public deployment must present a complete UK GDPR **Article 14 privacy notice** (the `/privacy` page, reachable
-from the header) and a per-result data-quality disclaimer. The deploy-time values for that notice live in **one place**:
-the `LEGAL` block in **`src/config/legal.config.js`**.
+from the header) and a per-result data-quality disclaimer. The deploy-time values for that notice are supplied at
+**build time** through `VUE_APP_LEGAL_*` environment variables (resolved in `src/config/legal.config.js`). They appear
+publicly on the deployed notice — that is its legal function — but they are deliberately **not committed to this
+repository**. For releases, set them once as GitHub Actions repository variables (Settings → Secrets and variables →
+Actions → Variables); the release workflow maps each `LEGAL_*` variable into the build.
 
-Before a production build, complete every value still marked `[SET AT DEPLOY]`:
+| Actions variable         | Build env var                     | What to set                                              | Art. 14 basis |
+| ------------------------ | --------------------------------- | -------------------------------------------------------- | ------------- |
+| `LEGAL_OPERATOR_NAME`    | `VUE_APP_LEGAL_OPERATOR_NAME`     | Controller's real legal identity (person or company)     | 14(1)(a)      |
+| `LEGAL_CONTACT_EMAIL`    | `VUE_APP_LEGAL_CONTACT_EMAIL`     | Working contact inbox for data-subject / error requests  | 14(1)(a)/(b)  |
+| `LEGAL_HOSTING_PROVIDER` | `VUE_APP_LEGAL_HOSTING_PROVIDER`  | Hosting processor's name                                 | 14(1)(e)      |
+| `LEGAL_HOSTING_REGION`   | `VUE_APP_LEGAL_HOSTING_REGION`    | Hosting region **+ transfer basis if outside the UK**    | 14(1)(f)      |
+| `LEGAL_EFFECTIVE_DATE`   | `VUE_APP_LEGAL_EFFECTIVE_DATE`    | The notice's effective date                              | —             |
+| `LEGAL_REFRESH_CADENCE`  | `VUE_APP_LEGAL_REFRESH_CADENCE`   | How often the data copy is refreshed (e.g. monthly)      | 14(2)(a)      |
 
-| `LEGAL` key        | What to set                                              | Art. 14 basis            |
-| ------------------ | ------------------------------------------------------- | ------------------------ |
-| `OPERATOR_NAME`    | Controller's real legal identity (person or company)    | 14(1)(a)                 |
-| `CONTACT_EMAIL`    | Working contact inbox for data-subject / error requests | 14(1)(a)/(b)             |
-| `HOSTING_PROVIDER` | Hosting processor's name                                | 14(1)(e)                 |
-| `HOSTING_REGION`   | Hosting region **+ transfer basis if outside the UK**   | 14(1)(f)                 |
-| `EFFECTIVE_DATE`   | The notice's effective date                             | —                        |
-| `REFRESH_CADENCE`  | How often the data copy is refreshed (e.g. monthly)     | 14(2)(a)                 |
+> **A production build (`npm run build`) hard-fails** if any of these is unset (the value falls back to a
+> `[SET AT DEPLOY]` placeholder) or the contact email is malformed — the guard in `vue.config.js` refuses to produce a
+> bundle, so an incomplete legal notice can never be shipped. Development (`npm run serve`) is unaffected.
 
-> **A production build (`npm run build`) hard-fails** if any of these still holds a `[SET AT DEPLOY]` placeholder or the
-> contact email is malformed — the guard in `vue.config.js` refuses to produce a bundle, so an incomplete legal notice
-> can never be shipped. Development (`npm run serve`) is unaffected.
-
-`LAST_REVIEWED` in the same `LEGAL` block holds a real date ("Last reviewed: …" on the notice) rather than a
-`[SET AT DEPLOY]` placeholder, so it is **not** enforced by the guard. Review and update it by hand whenever the notice
-is materially changed, so the rendered date does not silently go stale.
+`LAST_REVIEWED` (overridable via `VUE_APP_LEGAL_LAST_REVIEWED`) defaults to a real date ("Last reviewed: …" on the
+notice) rather than a `[SET AT DEPLOY]` placeholder, so it is **not** enforced by the guard. Review and update it
+whenever the notice is materially changed, so the rendered date does not silently go stale.
 
 ## Build and serve for production
 

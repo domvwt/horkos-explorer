@@ -1,30 +1,45 @@
 // Deploy-time legal / operator identity for the Art. 14 privacy notice and the
 // per-result disclaimer.
 //
-// This is the SINGLE place to complete the values marked [SET AT DEPLOY] before
-// public launch. A CommonJS module (not the ESM Constants.js) so it can be the
-// one source of truth for both the app bundle and the build-time guard in
-// vue.config.js, which is CommonJS and cannot require() an ESM module.
+// The deploy values are supplied at BUILD TIME via VUE_APP_LEGAL_* environment
+// variables (for releases: GitHub Actions repository variables wired into the
+// build step of build-and-deploy.yml). They are displayed publicly on the
+// deployed notice — that is the notice's legal function — but they are kept
+// out of the repo source so personal/operator details never live in the
+// public repository. Each read below must stay a STATIC
+// `process.env.VUE_APP_LEGAL_*` member expression: webpack's DefinePlugin
+// only inlines the value into the client bundle for static access, and the
+// same expression reads the real environment when vue.config.js requires
+// this module in Node for the build-time guard. A CommonJS module (not the
+// ESM Constants.js) so it can serve both.
 //
-// A plain constant is used deliberately rather than VUE_APP_* env vars: env vars
-// are inlined into the client bundle in plaintext, so they hide nothing over a
-// constant. The contact address's privacy comes from it being a dedicated inbox.
-//
-// A PRODUCTION build hard-fails (see validateLegalConfig) if any value below is
-// still an unfilled [SET AT DEPLOY] placeholder or the contact email is malformed,
-// so a broken/incomplete legal notice can never be shipped to the public.
+// A PRODUCTION build hard-fails (see validateLegalConfig) if any value below
+// resolves to an unfilled [SET AT DEPLOY] placeholder or the contact email is
+// malformed, so a broken/incomplete legal notice can never be shipped.
 
 const LEGAL = {
   SERVICE_NAME: "horkos",
   // Controller identity (Art. 14(1)(a)) — a real, nameable legal person.
-  OPERATOR_NAME: "Dominic Thorn",
+  OPERATOR_NAME:
+    process.env.VUE_APP_LEGAL_OPERATOR_NAME ||
+    "[SET AT DEPLOY — operator name]",
   // Contact for data-subject requests / error reports / the child-guardian route.
-  CONTACT_EMAIL: "horkos.data@gmail.com",
-  HOSTING_PROVIDER: "[SET AT DEPLOY — hosting provider]",
-  HOSTING_REGION: "[SET AT DEPLOY — hosting region + international-transfer basis if outside the UK]",
-  EFFECTIVE_DATE: "[SET AT DEPLOY — effective date]",
-  LAST_REVIEWED: "June 2026",
-  REFRESH_CADENCE: "[SET AT DEPLOY — refresh cadence, e.g. monthly]",
+  CONTACT_EMAIL:
+    process.env.VUE_APP_LEGAL_CONTACT_EMAIL ||
+    "[SET AT DEPLOY — contact email]",
+  HOSTING_PROVIDER:
+    process.env.VUE_APP_LEGAL_HOSTING_PROVIDER ||
+    "[SET AT DEPLOY — hosting provider]",
+  HOSTING_REGION:
+    process.env.VUE_APP_LEGAL_HOSTING_REGION ||
+    "[SET AT DEPLOY — hosting region + international-transfer basis if outside the UK]",
+  EFFECTIVE_DATE:
+    process.env.VUE_APP_LEGAL_EFFECTIVE_DATE ||
+    "[SET AT DEPLOY — effective date]",
+  LAST_REVIEWED: process.env.VUE_APP_LEGAL_LAST_REVIEWED || "June 2026",
+  REFRESH_CADENCE:
+    process.env.VUE_APP_LEGAL_REFRESH_CADENCE ||
+    "[SET AT DEPLOY — refresh cadence, e.g. monthly]",
   ICO_URL: "https://ico.org.uk",
   COMPANIES_HOUSE_URL: "https://www.gov.uk/government/organisations/companies-house",
 };

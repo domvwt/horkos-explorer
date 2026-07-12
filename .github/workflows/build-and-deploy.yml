@@ -39,7 +39,21 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Prebuild - generate grammar
         run: npm run generate-grammar-prod
+      # Art.14 legal-notice values. Set these once as repository Actions
+      # variables (Settings -> Secrets and variables -> Actions -> Variables):
+      # LEGAL_OPERATOR_NAME, LEGAL_CONTACT_EMAIL, LEGAL_HOSTING_PROVIDER,
+      # LEGAL_HOSTING_REGION, LEGAL_EFFECTIVE_DATE, LEGAL_REFRESH_CADENCE.
+      # They are displayed publicly on the deployed privacy notice but are
+      # deliberately kept out of the repo source. If any is unset the build
+      # FAILS on the legal gate in vue.config.js (fail-closed by design).
       - name: Prebuild - build app
+        env:
+          VUE_APP_LEGAL_OPERATOR_NAME: ${{ vars.LEGAL_OPERATOR_NAME }}
+          VUE_APP_LEGAL_CONTACT_EMAIL: ${{ vars.LEGAL_CONTACT_EMAIL }}
+          VUE_APP_LEGAL_HOSTING_PROVIDER: ${{ vars.LEGAL_HOSTING_PROVIDER }}
+          VUE_APP_LEGAL_HOSTING_REGION: ${{ vars.LEGAL_HOSTING_REGION }}
+          VUE_APP_LEGAL_EFFECTIVE_DATE: ${{ vars.LEGAL_EFFECTIVE_DATE }}
+          VUE_APP_LEGAL_REFRESH_CADENCE: ${{ vars.LEGAL_REFRESH_CADENCE }}
         run: npm run build
       # actions/upload-artifact@v4 drops dotfiles, so the docker build context
       # produced by "Upload current directory" below has no .dockerignore, and
