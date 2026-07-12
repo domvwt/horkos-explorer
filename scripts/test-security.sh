@@ -872,10 +872,10 @@ test_pruned_routes() {
     code=$(curl -s -o /dev/null -w "%{http_code}" "$SERVER_URL/api/schema")
     [ "$code" = "200" ] && print_pass "/api/schema -> 200" || print_fail "/api/schema returned $code (expected 200)"
 
-    # In READ_ONLY, the RW-only routes must not be mounted (404).
-    print_test "POST /api/reset returns 404 in READ_ONLY (RW-gated)"
+    # The reset route was removed outright; it must 404 in every mode.
+    print_test "POST /api/reset returns 404 (route removed)"
     code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$SERVER_URL/api/reset")
-    [ "$code" = "404" ] && print_pass "/api/reset -> 404 in READ_ONLY" || print_fail "/api/reset returned $code (expected 404 in READ_ONLY)"
+    [ "$code" = "404" ] && print_pass "/api/reset -> 404" || print_fail "/api/reset returned $code (expected 404)"
 }
 # --- end TASK-105 / TASK-123 ---
 

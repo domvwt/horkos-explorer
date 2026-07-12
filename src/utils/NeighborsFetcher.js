@@ -1,6 +1,5 @@
 import Axios from "@/utils/AxiosWrapper";
 import DataDefinitionLanguage from "./DataDefinitionLanguage";
-import Kuzu from "./KuzuWasm";
 
 // Max number of source pks bound into a single batched neighbour-count query.
 //
@@ -54,11 +53,8 @@ class NeighborsFetcher {
     return Boolean(result && result.__failed);
   }
 
-  async _runQuery(query, params, isWasm) {
+  async _runQuery(query, params) {
     try {
-      if (isWasm) {
-        return await Kuzu.query(query, params);
-      }
       const response = await Axios.post("api/cypher", { query, params });
       return response.data;
     } catch (err) {
@@ -111,7 +107,6 @@ class NeighborsFetcher {
     primaryKeyValue,
     relTables,
     sizeLimit = 100,
-    isWasm = false,
   }) {
     if (!Array.isArray(relTables)) {
       throw new Error("fetchNeighbors requires relTables (schema.relTables)");
@@ -139,8 +134,8 @@ class NeighborsFetcher {
       );
 
     const [inboundResults, outboundResults] = await Promise.all([
-      Promise.all(inboundQueries.map(query => this._runQuery(query, params, isWasm))),
-      Promise.all(outboundQueries.map(query => this._runQuery(query, params, isWasm))),
+      Promise.all(inboundQueries.map(query => this._runQuery(query, params))),
+      Promise.all(outboundQueries.map(query => this._runQuery(query, params))),
     ]);
 
     // Cap each direction at sizeLimit so the per-type LIMITs don't multiply
@@ -228,7 +223,6 @@ class NeighborsFetcher {
     primaryKeyName,
     primaryKeyValues,
     relTables,
-    isWasm = false,
   }) {
     if (!Array.isArray(primaryKeyValues)) {
       throw new Error("fetchNeighborNodesBatched requires primaryKeyValues array");
@@ -258,7 +252,7 @@ class NeighborsFetcher {
 
     const results = await Promise.all(
       chunks.flatMap(chunk =>
-        queries.map(query => this._runQuery(query, { pks: chunk }, isWasm))
+        queries.map(query => this._runQuery(query, { pks: chunk }))
       )
     );
 
@@ -338,7 +332,6 @@ class NeighborsFetcher {
     primaryKeyName,
     primaryKeyValues,
     relTables,
-    isWasm = false,
   }) {
     if (!Array.isArray(primaryKeyValues)) {
       throw new Error("fetchNeighborsBatched requires primaryKeyValues array");
@@ -364,7 +357,7 @@ class NeighborsFetcher {
 
     const results = await Promise.all(
       chunks.flatMap(chunk =>
-        queries.map(query => this._runQuery(query, { pks: chunk }, isWasm))
+        queries.map(query => this._runQuery(query, { pks: chunk }))
       )
     );
 
@@ -451,7 +444,6 @@ class NeighborsFetcher {
     focusPkValue,
     others,
     relTables,
-    isWasm = false,
   }) {
     if (!Array.isArray(others)) {
       throw new Error("fetchRelsBetweenNodeAndMany requires an others array");
@@ -473,7 +465,7 @@ class NeighborsFetcher {
         relTables,
       });
       queries.forEach(query => {
-        requests.push(this._runQuery(query, { pk1, pks2: values }, isWasm));
+        requests.push(this._runQuery(query, { pk1, pks2: values }));
       });
     });
 
@@ -541,7 +533,6 @@ class NeighborsFetcher {
   async fetchRelsAmongNodes({
     nodes,
     relTables,
-    isWasm = false,
   }) {
     if (!Array.isArray(nodes)) {
       throw new Error("fetchRelsAmongNodes requires a nodes array");
@@ -573,7 +564,7 @@ class NeighborsFetcher {
         });
         queries.forEach(query => {
           requests.push(
-            this._runQuery(query, { pksA: a.primaryKeyValues, pksB: b.primaryKeyValues }, isWasm)
+            this._runQuery(query, { pksA: a.primaryKeyValues, pksB: b.primaryKeyValues })
           );
         });
       }
@@ -596,7 +587,6 @@ class NeighborsFetcher {
     primaryKeyNameB,
     primaryKeyValueB,
     relTables,
-    isWasm = false,
   }) {
     if (!Array.isArray(relTables)) {
       throw new Error("fetchRelsBetween requires relTables (schema.relTables)");
@@ -622,7 +612,7 @@ class NeighborsFetcher {
       );
 
     const results = await Promise.all(
-      queries.map(query => this._runQuery(query, params, isWasm))
+      queries.map(query => this._runQuery(query, params))
     );
     return this._mergeResults(results);
   }

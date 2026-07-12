@@ -90,10 +90,9 @@ WORKDIR /home/node/app
 #     symlinks are relative, so a full-directory COPY preserves them). Includes
 #     the built kuzu native addon (kuzujs.node).
 #   - dist/: the built frontend served as static assets.
-#   - src/: the server code (src/server) AND src/utils — src/server/Import.js
-#     requires ../utils/DataImport and ../utils/DataDefinitionLanguage at
-#     module-load time (loaded whenever KUZU_WASM is unset), so src/utils must
-#     be present or the server crashes on startup.
+#   - src/: the server code. Only src/server is required at runtime (its
+#     ../utils requires resolve to src/server/utils); the full src tree is
+#     copied for simplicity.
 COPY --from=builder --chown=node:node /home/node/app/package.json ./package.json
 COPY --from=builder --chown=node:node /home/node/app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /home/node/app/dist ./dist
@@ -122,9 +121,9 @@ ENV KUZU_QUERY_TIMEOUT=30000
 ENV KUZU_QUERY_SIZE_LIMIT=10000
 
 # Ship the Content-Security-Policy in enforcing mode. The derived policy was
-# validated against the real frontend (Monaco workers, DuckDB/Kuzu WASM,
-# Bootstrap inline styles, G6 data:/blob: images) with no violations, so the
-# browser should enforce it rather than only report. Set CSP_REPORT_ONLY=true
+# validated against the real frontend (Monaco workers, Bootstrap inline
+# styles, G6 data:/blob: images) with no violations, so the browser should
+# enforce it rather than only report. Set CSP_REPORT_ONLY=true
 # to fall back to report-only if a future frontend change needs re-validating.
 ENV CSP_REPORT_ONLY=false
 

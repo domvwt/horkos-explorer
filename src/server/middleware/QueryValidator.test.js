@@ -164,15 +164,15 @@ describe("allowlist fails CLOSED on mode — enforce unless READ_WRITE (TASK-168
     ).toThrow();
   });
 
-  it("REJECTS LOAD FROM under DEMO mode (fail closed)", () => {
+  it("REJECTS LOAD FROM under the removed DEMO mode value (fail closed)", () => {
     expect(() =>
-      QueryValidator.validateQuery(LOAD_FROM_QUERY, MODES.DEMO)
+      QueryValidator.validateQuery(LOAD_FROM_QUERY, "DEMO")
     ).toThrow();
   });
 
-  it("REJECTS LOAD FROM under WASM mode (fail closed)", () => {
+  it("REJECTS LOAD FROM under the removed WASM mode value (fail closed)", () => {
     expect(() =>
-      QueryValidator.validateQuery(LOAD_FROM_QUERY, MODES.WASM)
+      QueryValidator.validateQuery(LOAD_FROM_QUERY, "WASM")
     ).toThrow();
   });
 

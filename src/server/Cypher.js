@@ -23,8 +23,6 @@ try {
   // SessionDatabase is optional (absent in stateless deployments); sessionDb stays undefined.
 }
 
-const DEMO_MODE = MODES.DEMO;
-
 // Fail-closed default: if KUZU_QUERY_SIZE_LIMIT is unset or invalid, results are
 // still hard-capped to a finite number of rows so a broad MATCH cannot stream the
 // whole graph (exfiltration). Operators can raise the cap via the env var.
@@ -112,12 +110,6 @@ router.post("/", QueryValidator.middleware(database), async (req, res) => {
     return res
       .status(400)
       .send({ error: "The query must be a string with length > 0" });
-  }
-  const isQueryCopy = query.trim().toUpperCase().startsWith("COPY");
-  if (mode === DEMO_MODE && isQueryCopy) {
-    return res
-      .status(400)
-      .send({ error: "COPY command is not allowed in demo mode" });
   }
   const params = req.body.params;
   if (params && typeof params !== "object") {

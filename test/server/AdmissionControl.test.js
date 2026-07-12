@@ -1,17 +1,15 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
 
-// Database.js ends with `module.exports = new Database()`, and the constructor
-// opens a real Kuzu database. BUT the constructor early-returns immediately when
-// KUZU_WASM === "true" (case-insensitive), BEFORE opening any DB and BEFORE
-// initialising the counter/pool fields. So we import it with KUZU_WASM=true to
-// get a BARE singleton, then hand-build the state the admission-control methods
-// read and exercise the REAL prototype methods (getConnection/releaseConnection)
-// against it. This tests the actual self-DoS invariant with no DB.
+// Database.js ends with `module.exports = new Database()`. With KUZU_DIR
+// unset the constructor opens an in-memory database (Kuzu's Node API defers
+// the heavy native init until a connection is used, so the import stays
+// cheap). We then hand-build the state the admission-control methods read and
+// exercise the REAL prototype methods (getConnection/releaseConnection)
+// against it. This tests the actual self-DoS invariant with no DB round-trip.
 
 let db;
 
 beforeAll(async () => {
-  vi.stubEnv("KUZU_WASM", "true");
   vi.stubEnv("MODE", "READ_ONLY");
   const mod = await import("../../src/server/utils/Database.js");
   db = mod.default;

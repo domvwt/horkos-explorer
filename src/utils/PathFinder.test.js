@@ -1,11 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// PathFinder pulls in the Axios wrapper and the Kuzu WASM module at load time;
-// both are browser-only. Stub them so the pure query-builder / result-shaping
-// logic can be exercised under node without a DOM or network. findShortestPath
-// tests spy on _runQuery directly, so the stubs stay uncalled there.
+// PathFinder pulls in the Axios wrapper at load time; it is browser-only.
+// Stub it so the pure query-builder / result-shaping logic can be exercised
+// under node without a DOM or network. findShortestPath tests spy on
+// _runQuery directly, so the stub stays uncalled there.
 vi.mock("@/utils/AxiosWrapper", () => ({ default: { post: vi.fn() } }));
-vi.mock("./KuzuWasm", () => ({ default: { query: vi.fn() } }));
 
 import PathFinder, {
   buildDiscoveryQuery,
@@ -347,10 +346,9 @@ describe("findShortestPath (discovery -> hydration dispatch)", () => {
 
     // Two queries ran; discovery first with the bound endpoint params.
     expect(spy).toHaveBeenCalledTimes(2);
-    const [discQuery, discParams, discWasm] = spy.mock.calls[0];
+    const [discQuery, discParams] = spy.mock.calls[0];
     expect(discQuery).toContain("SHORTEST 1..12");
     expect(discParams).toEqual({ aid: "p1", bid: "c1" });
-    expect(discWasm).toBe(false);
     const [, hydParams] = spy.mock.calls[1];
     expect(hydParams).toEqual({ pk0: "p1", pk1: "c1" });
   });
@@ -361,23 +359,6 @@ describe("findShortestPath (discovery -> hydration dispatch)", () => {
     expect(result).toEqual({ found: false, hops: 0, maxHops: 12 });
     // Only discovery ran — no second query.
     expect(spy).toHaveBeenCalledTimes(1);
-  });
-
-  it("passes the isWasm flag through to both queries", async () => {
-    const discoveryResponse = {
-      rows: [{ nodeIds: [], nodeLabels: [], relLabels: ["PersonOwnership"] }],
-    };
-    const hydrationResponse = {
-      rows: [{ n0: { _id: {} }, r0: { _id: {} }, n1: { _id: {} } }],
-      dataTypes: { n0: "NODE", r0: "REL", n1: "NODE" },
-    };
-    const spy = vi
-      .spyOn(PathFinder, "_runQuery")
-      .mockResolvedValueOnce(discoveryResponse)
-      .mockResolvedValueOnce(hydrationResponse);
-    await PathFinder.findShortestPath({ ...baseArgs, isWasm: true });
-    expect(spy.mock.calls[0][2]).toBe(true);
-    expect(spy.mock.calls[1][2]).toBe(true);
   });
 
   it("throws (not no-path) when discovery finds a path but hydration returns 0 rows", async () => {

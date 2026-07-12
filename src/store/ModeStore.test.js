@@ -17,8 +17,6 @@ describe("fail-closed boot default", () => {
     expect(store.currentMode).toBe(MODES.READ_ONLY);
     expect(store.isReadOnly).toBe(true);
     expect(store.isReadWrite).toBe(false);
-    expect(store.isDemo).toBe(false);
-    expect(store.isWasm).toBe(false);
   });
 });
 
@@ -28,24 +26,24 @@ describe("setMode", () => {
     store.setMode(MODES.READ_WRITE);
     expect(store.isReadOnly).toBe(false);
     expect(store.isReadWrite).toBe(true);
-    expect(store.isWasm).toBe(false);
   });
 
-  it("treats DEMO as writable wasm", () => {
+  it("fails closed to READ_ONLY on the removed DEMO mode", () => {
     const store = freshStore();
-    store.setMode(MODES.DEMO);
-    expect(store.isDemo).toBe(true);
-    expect(store.isWasm).toBe(true);
-    expect(store.isReadWrite).toBe(true);
-    expect(store.isReadOnly).toBe(false);
+    store.setMode(MODES.READ_WRITE);
+    store.setMode("DEMO");
+    expect(store.currentMode).toBe(MODES.READ_ONLY);
+    expect(store.isReadOnly).toBe(true);
+    expect(store.isReadWrite).toBe(false);
   });
 
-  it("treats WASM as writable wasm, not demo", () => {
+  it("fails closed to READ_ONLY on the removed WASM mode", () => {
     const store = freshStore();
-    store.setMode(MODES.WASM);
-    expect(store.isDemo).toBe(false);
-    expect(store.isWasm).toBe(true);
-    expect(store.isReadWrite).toBe(true);
+    store.setMode(MODES.READ_WRITE);
+    store.setMode("WASM");
+    expect(store.currentMode).toBe(MODES.READ_ONLY);
+    expect(store.isReadOnly).toBe(true);
+    expect(store.isReadWrite).toBe(false);
   });
 
   it("falls back to READ_ONLY on an unrecognised mode", () => {

@@ -138,10 +138,6 @@ export default {
       required: false,
       default: null,
     },
-    isWasm: {
-      type: Boolean,
-      default: false,
-    },
     settingsStore: {
       type: Object,
       required: true,
@@ -253,7 +249,6 @@ export default {
           primaryKeyValue,
           relTables: this.schema.relTables,
           sizeLimit: this.maxResults + 1,
-          isWasm: this.isWasm,
         });
 
         // Discard stale response if user selected a different node while fetching

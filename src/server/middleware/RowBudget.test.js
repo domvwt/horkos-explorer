@@ -260,12 +260,12 @@ describe("RowBudget — mode gating (fail closed unless READ_WRITE)", () => {
     expect(mod.isEnforced(MODES.READ_ONLY)).toBe(true);
   });
 
-  it("ENFORCES DEMO (fail closed)", () => {
-    expect(mod.isEnforced(MODES.DEMO)).toBe(true);
+  it("ENFORCES the removed DEMO mode value (fail closed)", () => {
+    expect(mod.isEnforced("DEMO")).toBe(true);
   });
 
-  it("ENFORCES WASM (fail closed)", () => {
-    expect(mod.isEnforced(MODES.WASM)).toBe(true);
+  it("ENFORCES the removed WASM mode value (fail closed)", () => {
+    expect(mod.isEnforced("WASM")).toBe(true);
   });
 
   it("ENFORCES an unrecognised / garbage mode (fail closed)", () => {

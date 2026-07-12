@@ -1,11 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 
-// NeighborsFetcher pulls in the Axios wrapper and the Kuzu WASM module at load
-// time; both are browser-only. Stub them so the pure query-builder / merge
-// logic can be exercised under node without a DOM or network. Every test that
-// touches _runQuery spies on it directly, so these stubs are never called.
+// NeighborsFetcher pulls in the Axios wrapper at load time; it is
+// browser-only. Stub it so the pure query-builder / merge logic can be
+// exercised under node without a DOM or network. Every test that touches
+// _runQuery spies on it directly, so the stub is never called.
 vi.mock("@/utils/AxiosWrapper", () => ({ default: { post: vi.fn() } }));
-vi.mock("./KuzuWasm", () => ({ default: { query: vi.fn() } }));
 
 import NeighborsFetcher from "./NeighborsFetcher";
 import { encodeId } from "./GraphResultExtractor";

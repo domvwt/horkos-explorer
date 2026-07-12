@@ -44,9 +44,6 @@
 import CypherEditor from "./CypherEditor.vue";
 import ResultContainer from "./ResultContainer.vue";
 import Axios from "@/utils/AxiosWrapper";
-import { useModeStore } from "../../store/ModeStore";
-import { mapStores } from "pinia";
-import Kuzu from "@/utils/KuzuWasm";
 import { LOADING_STATUS } from "@/utils/Constants";
 import { selectEntityThroughCell } from "@/utils/NotebookSidebarLogic";
 
@@ -91,7 +88,6 @@ export default {
   }),
 
   computed: {
-    ...mapStores(useModeStore),
     isMaximizable() {
       return (
         (this.queryResults &&
@@ -120,69 +116,53 @@ export default {
       this.isLoading = true;
       this.loadingText = LOADING_STATUS.EVAL;
 
-      // TODO: Refactor
-      if (this.modeStore.isWasm) {
-        Kuzu.query(query).then(data => {
-          this.handleEvaluationDataChange(data, query, params);
-        }).catch(error => {
-          this.errorMessage = error.message;
-          this.$nextTick(() => {
-            const errorContainer = this.$refs.resultErrorContainer;
-            errorContainer.handleDataChange(this.schema, null, this.errorMessage, null);
-          });
+      let intervalId = setInterval(() => {
+        Axios.get(`/api/cypher/progress/${this.cellId}`).then((res) => {
+          this.loadingText = `Pipelines Finished: ${res.data.numPipelinesFinished}/${res.data.numPipelines}
+          Current Pipeline Progress: ${Math.round(res.data.pipelineProgress * 100)}%`;
+        }).catch((error) => {
+          if (error.response && error.response.status === 404 && this.loadingText !== LOADING_STATUS.EVAL) {
+            this.loadingText = LOADING_STATUS.PROCESS;
+          }
+        });
+      }, 500);
+      Axios.post("/api/cypher",
+        {
+          query,
+          params,
+          uuid: this.cellId,
+          isQueryGenerationMode: false,
+          updateHistory: true,
+          progress: true
+        })
+        .then((res) => {
+          this.handleEvaluationDataChange(res.data, query, params);
+        })
+        .catch((error) => {
+          if (!error.response) {
+            this.errorMessage = "The application is disconnected from the server. Please try to restart the server.";
+          }
+          else {
+            try {
+              this.errorMessage = error.response.data.error.trim();
+              console.error(error.response.data.error.trim());
+            } catch (e) {
+              const httpStatus = error.response.status;
+              this.errorMessage = `The request failed with HTTP status code ${httpStatus}.`;
+              console.error(this.errorMessage);
+            }
+          }
+          if (this.errorMessage) {
+            this.$nextTick(() => {
+              const errorContainer = this.$refs.resultErrorContainer;
+              errorContainer.handleDataChange(this.schema, null, this.errorMessage, null);
+            });
+          }
         }).finally(() => {
+          clearInterval(intervalId);
           this.isLoading = false;
         });
-      }
-      else {
-        let intervalId = setInterval(() => {
-          Axios.get(`/api/cypher/progress/${this.cellId}`).then((res) => {
-            this.loadingText = `Pipelines Finished: ${res.data.numPipelinesFinished}/${res.data.numPipelines}
-            Current Pipeline Progress: ${Math.round(res.data.pipelineProgress * 100)}%`;
-          }).catch((error) => {
-            if (error.response && error.response.status === 404 && this.loadingText !== LOADING_STATUS.EVAL) {
-              this.loadingText = LOADING_STATUS.PROCESS;
-            }
-          });
-        }, 500);
-        Axios.post("/api/cypher",
-          {
-            query,
-            params,
-            uuid: this.cellId,
-            isQueryGenerationMode: false,
-            updateHistory: true,
-            progress: true
-          })
-          .then((res) => {
-            this.handleEvaluationDataChange(res.data, query, params);
-          })
-          .catch((error) => {
-            if (!error.response) {
-              this.errorMessage = "The application is disconnected from the server. Please try to restart the server.";
-            }
-            else {
-              try {
-                this.errorMessage = error.response.data.error.trim();
-                console.error(error.response.data.error.trim());
-              } catch (e) {
-                const httpStatus = error.response.status;
-                this.errorMessage = `The request failed with HTTP status code ${httpStatus}.`;
-                console.error(this.errorMessage);
-              }
-            }
-            if (this.errorMessage) {
-              this.$nextTick(() => {
-                const errorContainer = this.$refs.resultErrorContainer;
-                errorContainer.handleDataChange(this.schema, null, this.errorMessage, null);
-              });
-            }
-          }).finally(() => {
-            clearInterval(intervalId);
-            this.isLoading = false;
-          });
 
-      }
       this.isEvaluated = true;
     },
     handleEvaluationDataChange(data, query, params = {}) {

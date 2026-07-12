@@ -62,11 +62,6 @@ const os = require("os");
 
 class Database {
   constructor() {
-    const isWasmMode = process.env.KUZU_WASM &&
-      process.env.KUZU_WASM.toLowerCase() === "true";
-    if (isWasmMode) {
-      return;
-    }
     const dbDir = process.env.KUZU_DIR;
     const isInMemory = (process.env.KUZU_IN_MEMORY &&
       process.env.KUZU_IN_MEMORY.toLowerCase() === "true") ||
@@ -207,7 +202,7 @@ class Database {
     if (!Object.prototype.hasOwnProperty.call(MODES, mode)) {
       logger.warn(
         `Unrecognised MODE value "${process.env.MODE}", defaulting to READ_ONLY for safety. ` +
-        "Valid values are DEMO, READ_ONLY, READ_WRITE."
+        "Valid values are READ_ONLY, READ_WRITE."
       );
       return MODES.READ_ONLY;
     }

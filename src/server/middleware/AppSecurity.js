@@ -109,7 +109,7 @@ function applyAppSecurity(app) {
   //
   // CSP enforce-vs-report decision:
   //   A too-strict CSP silently breaks the query UI (Monaco editor Web Workers,
-  //   G6 canvas, Bootstrap inline styles, DuckDB/Kuzu WASM). Because we cannot
+  //   G6 canvas, Bootstrap inline styles). Because we cannot
   //   safely confirm the policy under enforcement without booting the full dev
   //   server and driving the browser, the CSP DEFAULTS TO Report-Only mode so
   //   the header is emitted (defence-in-depth / telemetry) without risking a
@@ -136,15 +136,15 @@ function applyAppSecurity(app) {
         // Baseline: only same-origin resources unless a directive widens it.
         defaultSrc: ["'self'"],
         // Scripts are served same-origin (webpack bundles + lazily-loaded chunks,
-        // Monaco worker files under js/). 'wasm-unsafe-eval' is REQUIRED: browsers
-        // gate WebAssembly compilation (DuckDB WASM src/utils/DuckDB.js, Kuzu WASM
-        // src/utils/KuzuWasm.js) behind either 'wasm-unsafe-eval' or the far
-        // broader 'unsafe-eval'. We deliberately grant only 'wasm-unsafe-eval'
-        // and NOT 'unsafe-eval' — no application code calls eval()/new Function().
+        // Monaco worker files under js/). 'wasm-unsafe-eval' is retained as a
+        // conservative allowance for WebAssembly compilation (it is far narrower
+        // than 'unsafe-eval'); the in-browser query engines that required it have
+        // been removed, so it can be dropped after the policy is re-validated in
+        // a browser. No application code calls eval()/new Function().
         scriptSrc: ["'self'", "'wasm-unsafe-eval'"],
-        // Web Workers: Monaco editor and DuckDB (new Worker(...) in DuckDB.js) and
-        // the Kuzu WASM worker load from same-origin js/ files; blob: is included
-        // because Monaco/webpack worker bootstrapping can wrap workers in blob URLs.
+        // Web Workers: Monaco editor workers load from same-origin js/ files;
+        // blob: is included because Monaco/webpack worker bootstrapping can wrap
+        // workers in blob URLs.
         workerSrc: ["'self'", "blob:"],
         // Bootstrap and Monaco inject inline <style>/style attributes at runtime;
         // 'unsafe-inline' for styles is unavoidable for Vue+Bootstrap+Monaco apps.

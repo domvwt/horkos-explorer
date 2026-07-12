@@ -314,7 +314,6 @@
             :node-properties="clickedProperties"
             :schema="schema"
             :g6-graph="g6Graph"
-            :is-wasm="modeStore.isWasm"
             :settings-store="settingsStore"
             @select-node="handleConnectedNodeClick"
             @add-node="handleAddConnectedNode"
@@ -1685,7 +1684,6 @@ export default {
             primaryKeyNameB: newNodePkName,
             primaryKeyValueB: newNodePkValue,
             relTables: this.schema.relTables,
-            isWasm: this.modeStore.isWasm,
           });
 
           if (result && result.rows) {
@@ -1767,7 +1765,6 @@ export default {
         const amongResult = await NeighborsFetcher.fetchRelsAmongNodes({
           nodes: others,
           relTables: this.schema.relTables,
-          isWasm: this.modeStore.isWasm,
         });
         if (!amongResult || !amongResult.rows || amongResult.rows.length === 0) {
           return [];
@@ -1881,7 +1878,6 @@ export default {
           primaryKeyName,
           primaryKeyValues: [primaryKeyValue],
           relTables: this.schema.relTables,
-          isWasm: this.modeStore.isWasm,
         });
 
         const neighborNodes = neighborsByPk[String(primaryKeyValue)] || [];
@@ -1947,7 +1943,6 @@ export default {
                 primaryKeyName: group.primaryKeyName,
                 primaryKeyValues: group.entries.map(e => e.primaryKeyValue),
                 relTables: this.schema.relTables,
-                isWasm: this.modeStore.isWasm,
               });
 
               group.entries.forEach(entry => {
@@ -1998,7 +1993,6 @@ export default {
           primaryKeyValue,
           relTables: this.schema.relTables,
           sizeLimit,
-          isWasm: this.modeStore.isWasm,
         });
       } catch (e) {
         // Ignore error for now. Just don't expand if the core does not execute the query.
@@ -2165,7 +2159,6 @@ export default {
             primaryKeyName: group.primaryKeyName,
             primaryKeyValues: group.entries.map(e => e.primaryKeyValue),
             relTables: this.schema.relTables,
-            isWasm: this.modeStore.isWasm,
           })
         )
       );
@@ -3237,8 +3230,8 @@ export default {
      * remaining failure path).
      */
     async fetchAndAddPinnedEntity(label, pk) {
-      // Refetch full node properties (dual server/WASM path, preserved via
-      // refetchNodeProperties). Returns a { pk -> rawNode } map.
+      // Refetch full node properties via refetchNodeProperties. Returns a
+      // { pk -> rawNode } map.
       // rethrowQueryErrors keeps a transient query/network failure distinct
       // from a genuinely empty result, so "no longer in this database" is only
       // ever shown when the database really answered with no rows.
@@ -3273,7 +3266,6 @@ export default {
             focusPkValue: rawNode[focusPkName],
             others,
             relTables: this.schema.relTables,
-            isWasm: this.modeStore.isWasm,
           });
           if (relResult && relResult.rows) {
             relResult.rows.forEach(row => {
@@ -3441,12 +3433,11 @@ export default {
             nodeLabelSet: this.getValidNodeLabels(),
             relLabelSet: this.getValidEdgeLabels(),
             maxHops: MAX_HOPS,
-            isWasm: this.modeStore.isWasm,
           });
         } catch (e) {
           // A DB / network error must never be reported as "no connection". A
           // 408 (query timeout) gets its own banner status; anything else is a
-          // generic error. WASM has no query timeout, so it never yields 408.
+          // generic error.
           console.warn('Find-connection query failed:', e);
           const status = (e && e.response && e.response.status === 408)
             ? 'timeout'
@@ -4006,14 +3997,8 @@ export default {
         const queryParams = { pkList: pks };
 
         try {
-          let response;
-          if (this.modeStore.isWasm) {
-            const Kuzu = (await import('@/utils/KuzuWasm')).default;
-            response = await Kuzu.query(query, queryParams);
-          } else {
-            const res = await Axios.post('/api/cypher', { query, params: queryParams, updateHistory: false });
-            response = res.data;
-          }
+          const res = await Axios.post('/api/cypher', { query, params: queryParams, updateHistory: false });
+          const response = res.data;
           if (response?.rows) {
             response.rows.forEach(row => {
               if (row.n?.id) results[row.n.id] = row.n;
@@ -4066,14 +4051,8 @@ export default {
         const queryParams = { pkList: pks };
 
         try {
-          let response;
-          if (this.modeStore.isWasm) {
-            const Kuzu = (await import('@/utils/KuzuWasm')).default;
-            response = await Kuzu.query(query, queryParams);
-          } else {
-            const res = await Axios.post('/api/cypher', { query, params: queryParams, updateHistory: false });
-            response = res.data;
-          }
+          const res = await Axios.post('/api/cypher', { query, params: queryParams, updateHistory: false });
+          const response = res.data;
           if (response?.rows) {
             response.rows.forEach(row => {
               if (row.r?.id) results[row.r.id] = row.r;

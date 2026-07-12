@@ -1,10 +1,6 @@
 const { defineConfig } = require("@vue/cli-service");
-const path = require("path");
-const DUCKDB_DIST = path.dirname(require.resolve("@duckdb/duckdb-wasm"));
-const KUZUDB_WASM_DIST = path.dirname(require.resolve("kuzu-wasm"));
 const configureAPI = require("./src/server/Configure");
 const MonacoWebpackPlugin = require("monaco-editor-webpack-plugin");
-const CopyWebpackPlugin = require("copy-webpack-plugin");
 const BASE_URL = require("./src/server/utils/BaseURL");
 const { assertLegalConfigDeployable } = require("./src/config/legal.config");
 
@@ -31,17 +27,6 @@ module.exports = defineConfig({
     ? true
     : ['@antv', 'antlr4ng'],
   publicPath: BASE_URL,
-  chainWebpack: (config) => {
-    // Exclude Kuzu WASM worker from Terser minification (has malformed JS)
-    config.optimization.minimizer('terser').tap((args) => {
-      if (args[0]) {
-        args[0].exclude = args[0].exclude
-          ? [].concat(args[0].exclude, /kuzu_wasm_worker\.js$/)
-          : /kuzu_wasm_worker\.js$/;
-      }
-      return args;
-    });
-  },
   pages: {
     index: {
       entry: "src/main.js",
@@ -117,28 +102,6 @@ module.exports = defineConfig({
           'wordHighlighter',
           'wordOperations',
         ],
-      }),
-      new CopyWebpackPlugin({
-        patterns: [
-          {
-            from: DUCKDB_DIST,
-            to: "js",
-          },
-        ],
-        options: {
-          concurrency: 100,
-        },
-      }),
-      new CopyWebpackPlugin({
-        patterns: [
-          {
-            from: KUZUDB_WASM_DIST,
-            to: "js",
-          },
-        ],
-        options: {
-          concurrency: 100,
-        },
       }),
     ],
   }

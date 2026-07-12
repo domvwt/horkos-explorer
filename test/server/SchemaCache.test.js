@@ -1,14 +1,14 @@
 import { describe, it, expect, beforeAll, vi } from "vitest";
 
-// Imported DB-free via the KUZU_WASM early-return (see AdmissionControl.test.js
-// for the rationale). getSchema() calls this._computeSchema() as a separate
-// prototype method, which is the clean seam: we replace it with a spy and count
-// calls to prove the READ_ONLY caching contract without any DB round-trip.
+// Imported with KUZU_DIR unset so the singleton opens an in-memory database
+// (see AdmissionControl.test.js for why the import stays cheap). getSchema()
+// calls this._computeSchema() as a separate prototype method, which is the
+// clean seam: we replace it with a spy and count calls to prove the READ_ONLY
+// caching contract without any DB round-trip.
 
 let db;
 
 beforeAll(async () => {
-  vi.stubEnv("KUZU_WASM", "true");
   vi.stubEnv("MODE", "READ_ONLY");
   const mod = await import("../../src/server/utils/Database.js");
   db = mod.default;

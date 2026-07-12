@@ -48,7 +48,7 @@ export PATH=$JAVA_HOME/bin:$PATH
 # Database configuration
 export MODE=READ_ONLY                                         # Access mode. If MODE is unset/empty or unrecognised, the
                                                              # server fails closed to READ_ONLY (safe default). To enable
-                                                             # writes (e.g. Importer/Reset in local dev) you MUST set
+                                                             # writes (Cypher writes through the editor) you MUST set
                                                              # MODE=READ_WRITE explicitly; a bare run is read-only.
 export KUZU_DIR=/home/domvwt/projects/horkos/data            # Directory containing .kuzu database
 export KUZU_FILE=horkos_dev_pl_graph.kuzu                    # Database filename (use dev database for development)
@@ -69,8 +69,7 @@ export QUERY_ROW_BUDGET=100000           # Cumulative rows one IP may ship from 
                                           # default, NEVER disabled. Enforced for every mode except MODE=READ_WRITE.
 export QUERY_ROW_BUDGET_WINDOW_MS=86400000  # Row-budget window in ms (default: 86400000 = 24h). Fixed window, resets on elapse.
 export KUZU_NUM_CONNECTIONS=4            # Connection pool size
-export JSON_BODY_LIMIT=1mb               # Max JSON request-body size (default: 1mb). CSV/Parquet import uploads use
-                                          # multipart/multer and are NOT limited by this; only JSON bodies (queries, import config) are.
+export JSON_BODY_LIMIT=1mb               # Max JSON request-body size (default: 1mb), applied to all JSON bodies (queries).
 
 # Security configuration for public deployments
 export DISABLE_SESSION_DB=true           # Disable server-side session storage (recommended for public deployments)
@@ -91,8 +90,8 @@ export TRUST_PROXY_HOPS=1                 # Explicit hop count used when TRUST_P
 export CSP_REPORT_ONLY=false             # CSP enforce-vs-report mode. In-code default when UNSET is true
                                           # (report-only) so a bare node run is fail-safe; the production
                                           # Docker image sets this to false to ship the CSP ENFORCING, since
-                                          # the policy was validated against the real frontend (Monaco/WASM/
-                                          # G6/Bootstrap) with no violations. When true, the CSP is emitted as
+                                          # the policy was validated against the real frontend (Monaco/G6/
+                                          # Bootstrap) with no violations. When true, the CSP is emitted as
                                           # report-only (browser reports violations but does not block) — use
                                           # that to re-validate after a frontend change. All other helmet
                                           # headers (HSTS, X-Frame-Options, X-Content-Type-Options,
@@ -212,8 +211,7 @@ src/
 │   │   ├── ResultGraph.vue          # G6 graph visualization
 │   │   ├── ResultTable.vue          # Tabular results display
 │   │   └── ShellCell.vue            # Combined editor + results
-│   ├── SchemaView/         # Schema visualization/editing
-│   ├── ImporterView/       # CSV data import (hidden in READ_ONLY)
+│   ├── SchemaView/         # Schema visualization (read-only)
 │   └── MainLayout.vue      # App shell, navigation
 ├── server/
 │   ├── index.js            # Express server entry point
@@ -225,7 +223,7 @@ src/
 │       ├── Database.js              # Kuzu connection pool manager
 │       └── SessionDatabase.js       # SQLite session storage (TO BE REMOVED)
 └── store/
-    ├── ModeStore.js        # Access mode (READ_ONLY, READ_WRITE, DEMO, WASM)
+    ├── ModeStore.js        # Access mode (READ_ONLY, READ_WRITE)
     └── SettingsStore.js    # UI settings
 ```
 
@@ -249,7 +247,7 @@ The `Database.js` singleton manages a connection pool to Kuzu:
 - **Webpack**: Configured via `vue.config.js`
 - **Monaco Editor**: Requires custom webpack plugin for web workers
 - **Font Assets**: TTF files handled as `asset/resource` type (required for Monaco v0.39.0)
-- **WebAssembly**: DuckDB and Kuzu WASM files copied to `dist/js/`
+- **Monaco workers**: bundled via the Monaco webpack plugin (no WASM engines are shipped)
 
 ## Important Development Notes
 
@@ -324,21 +322,21 @@ when touching a surface that predates these rules, bring it into line.
 
 1. **Session Storage**: The production Docker image defaults to `DISABLE_SESSION_DB=true`, disabling server-side session storage (shared across all users). When disabled, query history and settings are stored only in browser `localStorage`, providing proper multi-user isolation. Local/dev runs outside the image must set this explicitly.
 2. **Query Validation**: Currently relies on Kuzu to reject writes in READ_ONLY mode - SHOULD add server-side validation to reject `CREATE`, `DROP`, `DELETE`, etc. before execution
-3. **Schema Editor**: Must be hidden in READ_ONLY mode (check `MainLayout.vue`)
+3. **Schema Editor**: Removed entirely — the schema view is a read-only browser in every mode
 4. **Rate Limiting**: Add Express rate limiting middleware for public deployments
 5. **CORS**: Configure `ALLOWED_ORIGINS` environment variable for production
 6. **Resource guardrails (DoS / exfiltration)**: The production Docker image ships with default resource bounds so an unauthenticated user cannot run unbounded queries or bulk-exfiltrate the graph:
    - **Query timeout**: `KUZU_QUERY_TIMEOUT=30000` (30s). Applied to every pooled connection at init (`Database.js`), so no single query runs indefinitely.
    - **Result-size cap**: `KUZU_QUERY_SIZE_LIMIT=10000` rows. Enforced in `Cypher.js` (`processSingleResult`): when a result exceeds the cap, only the first N rows are read back, bounding response size. 10000 rows is a generous ceiling for interactive graph exploration while still preventing whole-graph streaming; operators handling larger legitimate exports should raise it deliberately.
    - **Per-IP row budget (anti-bulk-scrape)**: `QUERY_ROW_BUDGET=100000` cumulative rows per `QUERY_ROW_BUDGET_WINDOW_MS=86400000` (24h) window per client IP on `/api/cypher`. Enforced by `src/server/middleware/RowBudget.js`: the result-size cap bounds a single response and the query rate limit bounds request COUNT, but neither bounds how much of the corpus one client can paginate out across requests (e.g. `... ORDER BY p.id SKIP $n LIMIT 10000` repeated at the rate limit). The budget is pre-checked before the connection pool is touched and debited with the rows *actually shipped* (post-cap) on the success path; errored/timed-out queries debit nothing. The IP key uses the same trusted-proxy resolution as the rate limiter (right-most X-Forwarded-For + IPv6 /56 mask via `express-rate-limit`'s `ipKeyGenerator`), so a spoofed left-most XFF cannot reset the budget. Defaults are fail-closed (unset/invalid/<=0 -> default, never disabled) and relaxed to 10000000 rows when `NODE_ENV=development`. Enforced for every mode except `MODE=READ_WRITE`. **Admit-then-debit** means a single request can overshoot by up to `KUZU_QUERY_SIZE_LIMIT-1` rows (worst-case cumulative total = budget + querySizeLimit - 1). The store is **in-process and single-replica**: state lives in one process's memory, so it resets on restart and each replica holds an independent budget — a multi-replica deployment would need a shared store or IP-sticky routing to bound the aggregate.
-   - **Request-body limit**: JSON bodies are capped at `1mb` (`JSON_BODY_LIMIT`, `index.js`). The largest legitimate JSON body is a Cypher query (already capped at 50KB by `QueryValidator`) or a small import-plan config. Bulk CSV/Parquet import uploads use multipart/multer streaming to disk and are **not** affected by this limit.
+   - **Request-body limit**: JSON bodies are capped at `1mb` (`JSON_BODY_LIMIT`, `index.js`). The largest legitimate JSON body is a Cypher query (already capped at 50KB by `QueryValidator`).
    - **Max result / export size decision**: interactive `/api/cypher` responses are hard-bounded to `KUZU_QUERY_SIZE_LIMIT` rows. There is no separate bulk-export endpoint in the public read-only image; operators needing large exports should run Kuzu tooling directly against the database file rather than raising the UI cap. All three bounds are operator-overridable via the env vars above.
 7. **Security Headers (helmet)**: The Express app mounts [`helmet`](https://helmetjs.github.io/) early in the middleware chain (`src/server/index.js`) as **defence-in-depth**, so header hardening is present even if the nginx proxy is bypassed or misconfigured. Headers set:
    - `X-Content-Type-Options: nosniff` (blocks MIME-sniffing) — enforced.
    - `X-Frame-Options` + CSP `frame-ancestors 'none'` (anti-clickjacking) — enforced.
    - `Referrer-Policy` — enforced.
    - `Strict-Transport-Security` (HSTS) — enforced. Safe behind nginx-terminated TLS even when the app itself is served over plain HTTP, because browsers only honour HSTS received over HTTPS.
-   - **Content-Security-Policy** — see `CSP_REPORT_ONLY` below. The policy is derived from actual frontend usage: `script-src 'self' 'wasm-unsafe-eval'` (DuckDB/Kuzu WASM need `wasm-unsafe-eval`; no `unsafe-eval` — the app never calls `eval`/`new Function`), `worker-src 'self' blob:` (Monaco/DuckDB/Kuzu Web Workers), `style-src 'self' 'unsafe-inline'` (Bootstrap/Monaco inline styles), `img-src`/`font-src 'self' data:`, `connect-src 'self'`, `object-src 'none'`, `frame-ancestors 'none'`, `base-uri 'self'`, `form-action 'self'`.
+   - **Content-Security-Policy** — see `CSP_REPORT_ONLY` below. The policy is derived from actual frontend usage: `script-src 'self' 'wasm-unsafe-eval'` (`wasm-unsafe-eval` is retained from the removed in-browser WASM engines pending a browser re-validation before dropping it; no `unsafe-eval` — the app never calls `eval`/`new Function`), `worker-src 'self' blob:` (Monaco Web Workers), `style-src 'self' 'unsafe-inline'` (Bootstrap/Monaco inline styles), `img-src`/`font-src 'self' data:`, `connect-src 'self'`, `object-src 'none'`, `frame-ancestors 'none'`, `base-uri 'self'`, `form-action 'self'`.
 
    **`CSP_REPORT_ONLY` env var** (default `true`): controls only the CSP header's enforce-vs-report mode. When `true` (default), the CSP is emitted as `Content-Security-Policy-Report-Only` — the browser reports violations but does **not** block, so a mis-derived policy cannot break the query UI (Monaco, G6 graph, Bootstrap, WASM). After validating the app in a browser under the real policy, an operator can set `CSP_REPORT_ONLY=false` to switch to the enforcing `Content-Security-Policy` header. All the other headers above are always enforced regardless of this flag.
 

@@ -53,7 +53,7 @@ the code comments.
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `MODE` | `READ_ONLY` | Access mode: `READ_ONLY` or `READ_WRITE` (`DEMO` and `WASM` exist for in-browser demo builds). Unset or unrecognised values fail closed to `READ_ONLY`. |
+| `MODE` | `READ_ONLY` | Access mode: `READ_ONLY` or `READ_WRITE`. Unset or unrecognised values fail closed to `READ_ONLY`. |
 | `KUZU_DIR` | `/database` (image) | Directory containing the `.kuzu` database file. |
 | `KUZU_FILE` | `database.kz` | Database filename within `KUZU_DIR`. |
 | `DUCKDB_FILE` | unset | Path to a DuckDB file with `search.*` tables; enables the `/api/suggest` autocomplete. Omit to disable it. |
@@ -70,7 +70,7 @@ the code comments.
 | `SUGGEST_RATE_LIMIT_MAX_REQUESTS` | `120` | Maximum `/api/suggest` requests per window per IP. |
 | `TRUST_PROXY` | `1` | Reverse-proxy hops to trust for `X-Forwarded-For`. Normalised to a finite hop count; `false`/`0`/`off` disables. |
 | `TRUST_PROXY_HOPS` | `1` | Hop count used when `TRUST_PROXY` is unset or `true`. |
-| `JSON_BODY_LIMIT` | `1mb` | Maximum JSON request-body size. Multipart import uploads are not limited by this. |
+| `JSON_BODY_LIMIT` | `1mb` | Maximum JSON request-body size. |
 | `DISABLE_SESSION_DB` | `true` (image) | Disable server-side session storage; per-user state stays in the browser. |
 | `CSP_REPORT_ONLY` | `false` (image) | When `true`, the CSP is emitted report-only rather than enforced. Other security headers are always enforced. |
 

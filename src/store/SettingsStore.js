@@ -3,8 +3,6 @@ import chroma from 'chroma-js';
 import Axios from "@/utils/AxiosWrapper";
 import {
   SHOW_REL_LABELS_OPTIONS,
-  PLACEHOLDER_NODE_TABLE,
-  PLACEHOLDER_REL_TABLE,
 } from "../utils/Constants";
 import G6Utils from "../utils/G6Utils";
 
@@ -407,22 +405,6 @@ export const useSettingsStore = defineStore("settings", {
         this.graphViz.rels[newName] = rel;
         delete this.graphViz.rels[oldName];
       }
-    },
-
-    setPlaceholderNodeTable(label) {
-      this.renameNodeTable(label, PLACEHOLDER_NODE_TABLE);
-    },
-
-    setPlaceholderRelTable(label) {
-      this.renameRelTable(label, PLACEHOLDER_REL_TABLE);
-    },
-
-    unsetPlaceholderNodeTable(originalLabel) {
-      this.renameNodeTable(PLACEHOLDER_NODE_TABLE, originalLabel);
-    },
-
-    unsetPlaceholderRelTable(originalLabel) {
-      this.renameRelTable(PLACEHOLDER_REL_TABLE, originalLabel);
     },
 
     loadSettingsFromLocalStorage() {

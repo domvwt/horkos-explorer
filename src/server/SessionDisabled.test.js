@@ -108,7 +108,7 @@ describe("API.js — DISABLE_SESSION_DB=true mounts the JSON-404 stub (env gatin
   let server;
   let base;
   const savedEnv = {};
-  const ENV_KEYS = ["DISABLE_SESSION_DB", "KUZU_WASM", "NODE_ENV"];
+  const ENV_KEYS = ["DISABLE_SESSION_DB", "NODE_ENV"];
   const databaseId = require.resolve("./utils/Database");
   const apiId = require.resolve("./API");
 
@@ -117,7 +117,6 @@ describe("API.js — DISABLE_SESSION_DB=true mounts the JSON-404 stub (env gatin
       savedEnv[k] = process.env[k];
     }
     process.env.DISABLE_SESSION_DB = "true";
-    delete process.env.KUZU_WASM; // force the non-WASM branch where the gate lives
     process.env.NODE_ENV = "test";
 
     // API.js calls database.getAccessModeString() at require time and the real

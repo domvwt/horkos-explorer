@@ -3,13 +3,6 @@
     <div>
       <div class="d-flex justify-content-between">
         <h5>Node Tables</h5>
-        <button
-          v-if="modeStore.isReadWrite"
-          class="btn btn-sm btn-[var(--bs-body-accent)]"
-          @click="$emit('addNodeTable')"
-        >
-          Add
-        </button>
       </div>
       <hr>
       <table
@@ -32,38 +25,9 @@
                 {{ nodeTable.properties.length }} properties
               </small>
             </td>
-            <td
-              v-if="modeStore.isReadWrite"
-              class="schema_side-panel__overview-table-buttons-container"
-            >
-              <div>
-                <button
-                  class="btn btn-sm btn-outline-[var(--bs-body-accent)]"
-                  @click="editTable(nodeTable.name)"
-                >
-                  <i class="fa-solid fa-pencil" />
-                </button>
-                &nbsp;
-                <button
-                  class="btn btn-sm btn-outline-[var(--bs-body-accent)]"
-                  @click="dropTable(nodeTable.name)"
-                >
-                  <i class="fa-solid fa-trash-can" />
-                </button>
-              </div>
-            </td>
           </tr>
           <tr v-if="schema.nodeTables.length === 0">
-            <td
-              v-if="modeStore.isReadWrite"
-              colspan="2"
-            >
-              There are no node tables in this schema. Click "Add" to add one.
-            </td>
-            <td
-              v-else
-              colspan="2"
-            >
+            <td colspan="2">
               There are no node tables in this schema.
             </td>
           </tr>
@@ -75,13 +39,6 @@
     <div>
       <div class="d-flex justify-content-between">
         <h5>Relationship Tables</h5>
-        <button
-          v-if="modeStore.isReadWrite"
-          class="btn btn-sm btn-[var(--bs-body-accent)]"
-          @click="$emit('addRelTable')"
-        >
-          Add
-        </button>
       </div>
       <hr>
       <table
@@ -110,38 +67,9 @@
                 &nbsp;&nbsp; <b>{{ relTable.group }} </b> group
               </small>
             </td>
-            <td
-              v-if="modeStore.isReadWrite && !relTable.group"
-              class="schema_side-panel__overview-table-buttons-container"
-            >
-              <div>
-                <button
-                  class="btn btn-sm btn-outline-[var(--bs-body-accent)]"
-                  @click="editTable(relTable.name)"
-                >
-                  <i class="fa-solid fa-pencil" />
-                </button>
-                &nbsp;
-                <button
-                  class="btn btn-sm btn-outline-[var(--bs-body-accent)]"
-                  @click="dropTable(relTable.name)"
-                >
-                  <i class="fa-solid fa-trash-can" />
-                </button>
-              </div>
-            </td>
           </tr>
           <tr v-if="schema.relTables.length === 0">
-            <td
-              v-if="modeStore.isReadWrite"
-              colspan="2"
-            >
-              There are no relationship tables in this schema. Click "Add" to add one.
-            </td>
-            <td
-              v-else
-              colspan="2"
-            >
+            <td colspan="2">
               There are no relationship tables in this schema.
             </td>
           </tr>
@@ -154,7 +82,6 @@
 
 <script lang="js">
 import { useSettingsStore } from "../../store/SettingsStore";
-import { useModeStore } from "../../store/ModeStore";
 import { mapStores } from 'pinia'
 import { chipStyle } from "../../utils/ChipContrast";
 export default {
@@ -165,21 +92,14 @@ export default {
       required: true,
     },
   },
-  emits: ["dropTable", "editTable", "addNodeTable", "addRelTable",],
   computed: {
-    ...mapStores(useSettingsStore, useModeStore)
+    ...mapStores(useSettingsStore)
   },
   methods: {
     // Theme-adaptive chip wash for entity colours (shared util).
     chipStyle,
     getColor(label) {
       return this.settingsStore.colorForLabel(label);
-    },
-    dropTable(tableName) {
-      this.$emit("dropTable", tableName);
-    },
-    editTable(tableName) {
-      this.$emit("editTable", tableName);
     },
   },
 };

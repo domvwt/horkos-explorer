@@ -1,6 +1,5 @@
 import Axios from "@/utils/AxiosWrapper";
 import DataDefinitionLanguage from "./DataDefinitionLanguage";
-import Kuzu from "./KuzuWasm";
 
 /**
  * PathFinder — shortest-path discovery between two entities.
@@ -36,8 +35,8 @@ import Kuzu from "./KuzuWasm";
  * Safety:
  *   - The endpoint primary keys (discovery) and every node pk (hydration) are
  *     always bound as $-params (never interpolated), so a pk value cannot
- *     inject Cypher — identical to how the server (Cypher.js) and WASM
- *     (KuzuWasm.query) prepare statements.
+ *     inject Cypher — identical to how the server (Cypher.js) prepares
+ *     statements.
  *   - Label, primary-key-column and rel-type identifiers ARE interpolated
  *     (params can't stand in for identifiers in Cypher), so they are escaped
  *     with DataDefinitionLanguage._escapeName; hydration additionally validates
@@ -312,17 +311,14 @@ export function buildHydrationQuery({
 
 class PathFinder {
   /**
-   * Run a query through the same dual path NeighborsFetcher._runQuery uses:
-   * KuzuWasm.query in WASM mode, POST /api/cypher otherwise. Both prepare the
-   * statement and bind params, so the pk VALUES are never interpolated in
-   * either mode. Unlike NeighborsFetcher._runQuery this RETHROWS on failure so
-   * the caller can tell a query/network ERROR apart from a genuine no-path
-   * result (a DB error must never masquerade as "no connection").
+   * Run a query via POST /api/cypher (same path NeighborsFetcher._runQuery
+   * uses). The statement is prepared server-side with bound params, so the pk
+   * VALUES are never interpolated. Unlike NeighborsFetcher._runQuery this
+   * RETHROWS on failure so the caller can tell a query/network ERROR apart
+   * from a genuine no-path result (a DB error must never masquerade as "no
+   * connection").
    */
-  async _runQuery(query, params, isWasm) {
-    if (isWasm) {
-      return await Kuzu.query(query, params);
-    }
+  async _runQuery(query, params) {
     const response = await Axios.post("api/cypher", {
       query,
       params,
@@ -353,15 +349,12 @@ class PathFinder {
    * @param {Set<string>} args.nodeLabelSet valid node table names (schema)
    * @param {Set<string>} args.relLabelSet  valid rel table names (schema)
    * @param {number} [args.maxHops]         requested upper hop bound (clamped)
-   * @param {boolean} [args.isWasm=false]   use the WASM query path
    */
   async findShortestPath(args) {
-    const isWasm = Boolean(args.isWasm);
     const discovery = buildDiscoveryQuery(args);
     const discoveryResponse = await this._runQuery(
       discovery.query,
-      discovery.params,
-      isWasm
+      discovery.params
     );
     const found = extractDiscoveryResult(discoveryResponse);
     if (!found.found) {
@@ -380,8 +373,7 @@ class PathFinder {
     });
     const hydrationResponse = await this._runQuery(
       hydration.query,
-      hydration.params,
-      isWasm
+      hydration.params
     );
     const rows =
       hydrationResponse && Array.isArray(hydrationResponse.rows)

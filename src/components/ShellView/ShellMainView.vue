@@ -37,7 +37,6 @@
 import ShellCell from "./ShellCell.vue";
 import { v4 as uuidv4 } from 'uuid';
 import Axios from "@/utils/AxiosWrapper";
-import { MODES } from "@/utils/Constants";
 import { useModeStore } from "@/store/ModeStore";
 import {
   saveViewThroughCell,
@@ -79,8 +78,6 @@ export default {
       },
     ],
     isCellAddedToTheEnd: false,
-    isWasm: false,
-    isDemo: false,
     maximizedCellIndex: -1,
     isRestoringInvestigation: false,
     isDemoCellFinalized: false,
@@ -107,16 +104,8 @@ export default {
     },
   },
 
-  async mounted() {
-    try {
-      const response = await Axios.get("/api/mode");
-      this.isWasm = response.data.mode === MODES.WASM || response.data.mode === MODES.DEMO;
-      this.isDemo = response.data.mode === MODES.DEMO;
-    } catch (e) {
-      // Ignore
-    }
-
-    // Normal loading - load demo or history
+  mounted() {
+    // Seed the first cell with the example query, then load any saved history.
     this.$nextTick(() => {
       this.loadDemoCell();
     });
@@ -152,9 +141,6 @@ export default {
       });
     },
     removeCellFromHistory(uuid) {
-      if (this.isWasm) {
-        return Promise.resolve();
-      }
       return Axios.delete(`/api/session/history/${uuid}`).catch(() => {
         // Session endpoint not available (DISABLE_SESSION_DB=true) - ignore
         console.debug('Server-side history delete not available');
@@ -164,9 +150,6 @@ export default {
       return Axios.get("/api/session/history").then(res => res.data);
     },
     async loadCellsFromHistory() {
-      if (this.isWasm) {
-        return;
-      }
       try {
         const history = await this.loadCellHistoryFromServer();
         history.map(cell => {

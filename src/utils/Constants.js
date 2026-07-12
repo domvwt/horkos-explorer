@@ -62,17 +62,6 @@ for (const nestedType of NESTED_DATA_TYPES) {
 delete basicDataTypes.SERIAL;
 export const BASIC_DATA_TYPES = basicDataTypes;
 
-export const SCHEMA_ACTION_TYPES = {
-  DROP_TABLE: "dropTable",
-  DROP_PROPERTY: "dropProperty",
-  RENAME_PROPERTY: "renameProperty",
-  RENAME_NODE_TABLE: "renameNodeTable",
-  RENAME_REL_TABLE: "renameRelTable",
-  ADD_PROPERTY: "addProperty",
-  ADD_NODE_TABLE: "addNodeTable",
-  ADD_REL_TABLE: "addRelTable",
-};
-
 export const UI_SIZE = {
   DEFAULT_MARGIN: 20,
   SHELL_TOOL_BAR_WIDTH: 40,
@@ -86,14 +75,10 @@ export const SHOW_REL_LABELS_OPTIONS = {
 };
 
 export const MODES = {
-  DEMO: "DEMO",
   READ_WRITE: "READ_WRITE",
   READ_ONLY: "READ_ONLY",
-  WASM: "WASM",
 };
 
-export const PLACEHOLDER_NODE_TABLE = "__placeholder_node_table__";
-export const PLACEHOLDER_REL_TABLE = "__placeholder_rel_table__";
 
 
 export const ARC_CURVE_OFFSETS = [
@@ -110,19 +95,6 @@ export const LOOP_POSITIONS = [
   "left",
   "top-left",
 ];
-
-export const IMPORT_ACTIONS = {
-  CREATE: "Create Table",
-  UPLOAD: "Upload File",
-  COPY: "Copy Table",
-};
-
-export const JOB_STATUS = {
-  PENDING: "PENDING",
-  PROCESSING: "PROCESSING",
-  SUCCESS: "SUCCESS",
-  ERROR: "ERROR",
-};
 
 export const TABLE_TYPES = {
   NODE: "NODE",

@@ -107,16 +107,14 @@ app.get(`${baseUrl}health`, (req, res) => {
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 8000;
 // JSON request-body cap. This is a DoS guardrail, not a data path: the largest
 // legitimate JSON body is a Cypher query (already capped at 50KB by
-// QueryValidator) or an import plan config (small). Bulk CSV/Parquet uploads for
-// the importer go through multer's multipart/disk handling (src/server/Import.js)
-// and do NOT pass through this parser, so a small limit here does not break
-// import. Operators can override via the JSON_BODY_LIMIT env var if needed.
+// QueryValidator). Operators can override via the JSON_BODY_LIMIT env var if
+// needed.
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "1mb" }));
 app.use(`${baseUrl}api`, api);
 const distPath = path.join(__dirname, "..", "..", "dist");
 // Cache-Control is split by asset kind (see utils/staticCache.js): HTML is
 // always revalidated, webpack content-hashed js/css are cached for a year,
-// everything else (wasm/fonts/unhashed files) gets a short ceiling. maxAge:0
+// everything else (fonts/unhashed files) gets a short ceiling. maxAge:0
 // is the base so setStaticCacheHeaders is the single source of truth for the
 // actual Cache-Control value; ETags stay on (express.static default).
 app.use(`${baseUrl}`, express.static(distPath, {
@@ -129,32 +127,23 @@ app.use(`${baseUrl}`, express.static(distPath, {
 // including body-parser failures and the CORS rejection wired above.
 app.use(globalErrorHandler);
 
-const isWasmMode = process.env.KUZU_WASM &&
-  process.env.KUZU_WASM.toLowerCase() === "true";
-
 // Initialize DuckDB for autocomplete (optional - gracefully degrades if not configured)
 duckdb.init();
 
-if (!isWasmMode) {
-  database.getDbVersion()
-    .then((res) => {
-      const version = res.version;
-      const storageVersion = res.storageVersion;
-      const isInitialDatabaseEmpty = database.isInitialDatabaseEmpty;
-      logger.info("Version of Kuzu: " + version);
-      logger.info("Storage version of Kuzu: " + storageVersion);
-      if (!isInitialDatabaseEmpty && version.includes("dev")) {
-        logger.warn("You are running a dev build of Kuzu Explorer. Please make sure that the database files opened are created by the same version of Kuzu");
-      }
-      applyKeepAlive(app.listen(PORT, () => {
-        logger.info("Deployed server started on port: " + PORT);
-      }));
-    })
-    .catch((err) => {
-      logger.error("Error getting version of Kuzu: " + err);
-    });
-} else {
-  applyKeepAlive(app.listen(PORT, () => {
-    logger.info("Deployed server started on port: " + PORT);
-  }));
-}
+database.getDbVersion()
+  .then((res) => {
+    const version = res.version;
+    const storageVersion = res.storageVersion;
+    const isInitialDatabaseEmpty = database.isInitialDatabaseEmpty;
+    logger.info("Version of Kuzu: " + version);
+    logger.info("Storage version of Kuzu: " + storageVersion);
+    if (!isInitialDatabaseEmpty && version.includes("dev")) {
+      logger.warn("You are running a dev build of Kuzu Explorer. Please make sure that the database files opened are created by the same version of Kuzu");
+    }
+    applyKeepAlive(app.listen(PORT, () => {
+      logger.info("Deployed server started on port: " + PORT);
+    }));
+  })
+  .catch((err) => {
+    logger.error("Error getting version of Kuzu: " + err);
+  });

@@ -185,7 +185,7 @@ function sweepExpired() {
 
 /**
  * Mode gating: enforce the budget for EVERY mode except the explicit local-dev
- * READ_WRITE. DEMO / WASM / unset / garbage all fall through to enforcement, so
+ * READ_WRITE. An unset / typo / garbage mode falls through to enforcement, so
  * a mis-set MODE on a live backend cannot disable the anti-scrape control. Same
  * fail-closed pattern as QueryValidator.validateQuery.
  * @param {string} mode

@@ -10,8 +10,8 @@
  *  2. Webpack-hashed assets (js/css emitted with a content hash in the
  *     filename, e.g. `app.4f3a9c21.js`) - `immutable, max-age=31536000`
  *     (1 year). Safe forever: any content change produces a new filename.
- *  3. Everything else (WASM binaries, fonts, the unhashed Monaco worker
- *     files, unhashed copies) - `max-age=86400` (1 day). These can change
+ *  3. Everything else (fonts, any unhashed worker files or copies) -
+ *     `max-age=86400` (1 day). These can change
  *     across a deploy without their filename changing, so they get a much
  *     shorter ceiling than the hashed tier.
  */

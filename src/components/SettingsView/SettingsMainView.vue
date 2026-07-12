@@ -68,7 +68,7 @@
                   :key="index"
                 >
                   <td>
-                    {{ node.name === placeholderNodeTable ? getPlaceholderNodeLabel() : node.name }}
+                    {{ node.name }}
                   </td>
                   <td>
                     <input
@@ -133,7 +133,7 @@
                   :key="index"
                 >
                   <td>
-                    {{ rel.name === placeholderRelTable ? getPlaceholderRelLabel() : rel.name }}
+                    {{ rel.name }}
                   </td>
                   <td>
                     <input
@@ -294,8 +294,6 @@ import { mapStores } from 'pinia';
 import { Modal } from 'bootstrap';
 import {
   SHOW_REL_LABELS_OPTIONS,
-  PLACEHOLDER_NODE_TABLE,
-  PLACEHOLDER_REL_TABLE,
 } from "../../utils/Constants";
 
 export default {
@@ -312,10 +310,6 @@ export default {
     currentSettings: {},
     modal: null,
     showRelLabelsOptions: SHOW_REL_LABELS_OPTIONS,
-    placeholderNodeTable: PLACEHOLDER_NODE_TABLE,
-    placeholderRelTable: PLACEHOLDER_REL_TABLE,
-    databaseResetStateText: "",
-    databaseResetStateClass: "primary",
     wasSaved: false,
   }),
   computed: {
@@ -338,7 +332,6 @@ export default {
     },
     showModal() {
       this.copyCurrentSettings();
-      this.databaseResetStateText = "";
       this.wasSaved = false;
       this.modal.show();
     },
@@ -358,9 +351,7 @@ export default {
       });
     },
     getCaptionOptions(entity, isNode) {
-      const name = entity.name === this.placeholderNodeTable ? this.getPlaceholderNodeLabel() :
-        (entity.name === this.placeholderRelTable ?
-          this.getPlaceholderRelLabel() : entity.name);
+      const name = entity.name;
       const properties = (isNode ? this.schema.nodeTables : this.schema.relTables)
         .find(
           (table) => table.name === name
@@ -382,12 +373,6 @@ export default {
         });
       });
       return options;
-    },
-    getPlaceholderNodeLabel() {
-      return this.schema.nodeTables.find(t => t.isPlaceholder).name;
-    },
-    getPlaceholderRelLabel() {
-      return this.schema.relTables.find(t => t.isPlaceholder).name;
     },
     handleModalClose() {
       // If settings were saved, emit event to redraw all graphs
