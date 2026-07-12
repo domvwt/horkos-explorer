@@ -33,8 +33,7 @@ variables are needed for a public deployment:
 - `CSP_REPORT_ONLY=false` — the Content-Security-Policy is enforced (not report-only).
 - `KUZU_DIR=/database` — the mount point queried by default.
 
-To make changes in the UI (Importer, Reset) during local use, opt in to
-read-write mode:
+To enable write operations during local use, opt in to read-write mode:
 
 ```bash
 docker run -p 8000:8000 \
