@@ -37,8 +37,12 @@ jobs:
           version: 10
       - name: Prebuild - install dependencies
         run: pnpm install --frozen-lockfile
-      - name: Prebuild - generate grammar
-        run: npm run generate-grammar-prod
+      # No grammar generation here: src/utils/CypherParser/ is COMMITTED and is
+      # the parser that local dev, eslint, and vitest actually exercise.
+      # Regenerating in CI (generate-grammar-prod) deletes it and emits code
+      # from the current antlr4ng-cli, which is version-skewed against the
+      # pinned antlr4ng runtime (TS2551 getRuleContext build failures). If the
+      # Kuzu grammar changes, regenerate locally and commit the result.
       # Art.14 legal-notice values. Set these once as repository Actions
       # variables (Settings -> Secrets and variables -> Actions -> Variables):
       # LEGAL_OPERATOR_NAME, LEGAL_CONTACT_EMAIL, LEGAL_HOSTING_PROVIDER,
