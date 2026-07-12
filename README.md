@@ -125,7 +125,7 @@ docker run -p 8000:8000 \
            --rm ghcr.io/domvwt/explorer:dev
 ```
 
-The `dev` tag is updated daily, approximately two hours after the latest dev build of Kuzu is released.
+The `dev` tag is published only by manually dispatching the build workflow with `isNightly` enabled; it never overwrites release tags.
 
 #### Security headers
 
@@ -434,9 +434,10 @@ docker run -p 8000:8000 \
 
 ## Deployment
 
-A [GitHub actions pipeline](.github/workflows/build-and-deploy.yml) has been configured to automatically build and deploy
-the Docker image to [Docker Hub](https://hub.docker.com/) upon pushing to the master branch. The pipeline will build images
-for both `amd64` and `arm64` platforms.
+A [GitHub actions pipeline](.github/workflows/build-and-deploy.yml) has been configured to automatically build and publish
+the Docker image to GitHub Container Registry (`ghcr.io/domvwt/explorer`) upon pushing to the master branch. Release builds
+carry `:latest` plus an immutable `:<YYYYMMDD>-<shortsha>` tag for pinning. The pipeline builds images for both `amd64` and
+`arm64` platforms.
 
 ## Contributing
 
