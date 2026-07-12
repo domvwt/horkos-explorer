@@ -434,10 +434,11 @@ docker run -p 8000:8000 \
 
 ## Deployment
 
-A [GitHub actions pipeline](.github/workflows/build-and-deploy.yml) has been configured to automatically build and publish
-the Docker image to GitHub Container Registry (`ghcr.io/domvwt/explorer`) upon pushing to the master branch. Release builds
-carry `:latest` plus an immutable `:<YYYYMMDD>-<shortsha>` tag for pinning. The pipeline builds images for both `amd64` and
-`arm64` platforms.
+Releases are manual: nothing builds or publishes on push. To cut a release, dispatch the
+[Build-And-Deploy workflow](.github/workflows/build-and-deploy.yml) from the Actions tab (or `gh workflow run Build-And-Deploy`),
+which builds and publishes the Docker image to GitHub Container Registry (`ghcr.io/domvwt/explorer`). Release builds carry
+`:latest` plus an immutable `:<YYYYMMDD>-<shortsha>` tag for pinning; dispatching with `isNightly` enabled publishes `:dev`
+instead. The pipeline builds images for both `amd64` and `arm64` platforms.
 
 ## Contributing
 
