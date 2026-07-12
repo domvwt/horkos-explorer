@@ -101,11 +101,13 @@ import { UI_SIZE } from "../../utils/Constants";
 import { useModeStore } from "../../store/ModeStore";
 import { mapStores } from "pinia";
 import NodeSearch from "./NodeSearch.vue";
+import { loadMonaco } from "../../utils/MonacoLoader";
 
 // monaco-editor is heavy, so it is loaded on demand instead of in the initial
-// bundle. This module-level binding is populated the first time an editor
-// mounts and shared across all CypherEditor instances (webpack caches the
-// dynamic chunk); it is kept out of Vue's reactivity system deliberately.
+// bundle via the shared single-flight loadMonaco() (see MonacoLoader.js).
+// This module-level binding caches the resolved module so the Cypher-language
+// registration below only ever runs once, shared across all CypherEditor
+// instances; it is kept out of Vue's reactivity system deliberately.
 let Monaco = null;
 
 // Make sure Monaco is not reactive. Otherwise, it will cause the Vue.js
@@ -301,11 +303,11 @@ export default {
       }
     },
     async initMonacoEditor() {
-      // Load monaco-editor on demand (kept out of the initial bundle). The
-      // dynamic chunk is cached by webpack, so the module-level binding is
-      // populated once and reused across every editor instance.
+      // Load monaco-editor on demand via the shared single-flight loader
+      // (kept out of the initial bundle). ResultCode awaits the same loader,
+      // so both callers share one dynamic import and neither races the other.
       if (!Monaco) {
-        Monaco = await import("monaco-editor");
+        Monaco = await loadMonaco();
       }
       // The import is async, so the component may have been torn down (rapid
       // tab switching) before it resolved. Bail rather than attach an editor to

@@ -221,10 +221,25 @@ export default {
     // Read the demo cell's current editor buffer, or null if unavailable.
     // There is no higher-level getter for a single cell's live text, so we
     // reach through the cell -> CypherEditor -> Monaco instance directly.
+    // Monaco loads on demand (see MonacoLoader.js), so writeDemoCell can run
+    // before the editor exists yet: CypherEditor.setEditorContent buffers
+    // that write in its non-reactive `pendingEditorContent` (undefined
+    // sentinel = nothing buffered) and flushes it once the editor is
+    // created. Reading only `cell.$refs.editor.editor` misses that buffered
+    // write entirely - the pristine check would see null, treat the cell as
+    // "unreadable", and finalize without ever applying the schema-derived
+    // upgrade. Fall back to the pending buffer whenever the editor isn't up
+    // yet.
     getDemoCellText() {
       const cell = this.$refs[this.getCellRef(0)] && this.$refs[this.getCellRef(0)][0];
-      const monaco = cell && cell.$refs.editor && cell.$refs.editor.editor;
-      return monaco ? monaco.getValue() : null;
+      const cypherEditor = cell && cell.$refs.editor;
+      if (!cypherEditor) {
+        return null;
+      }
+      if (cypherEditor.editor) {
+        return cypherEditor.editor.getValue();
+      }
+      return cypherEditor.pendingEditorContent !== undefined ? cypherEditor.pendingEditorContent : null;
     },
     writeDemoCell(query) {
       const cell = this.$refs[this.getCellRef(0)] && this.$refs[this.getCellRef(0)][0];

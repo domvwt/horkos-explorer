@@ -14,6 +14,8 @@
 <script lang="js">
 // Make sure Monaco is not reactive. Otherwise, it will cause the Vue.js
 // app to crash.
+import { loadMonaco } from "../../utils/MonacoLoader";
+
 export default {
   name: "ResultCode",
   props: {
@@ -39,10 +41,15 @@ export default {
   },
 
   mounted() {
+    // Fire-and-forget: initMonacoEditor awaits the shared loader and guards
+    // against unmount-before-resolve (same isUnmounted pattern CypherEditor
+    // uses), so a ResultCode that mounts before the monaco-editor chunk has
+    // resolved no longer throws "Monaco is not initialized."
     this.initMonacoEditor();
   },
 
   beforeUnmount() {
+    this.isUnmounted = true;
     if (this.editor) {
       this.editor.dispose();
     }
@@ -80,8 +87,20 @@ export default {
       return this.queryResult;
     },
 
-    initMonacoEditor() {
-      const Monaco = window.Monaco;
+    async initMonacoEditor() {
+      // Await the shared single-flight loader instead of reading
+      // window.Monaco synchronously: ResultCode can mount before
+      // CypherEditor's dynamic import("monaco-editor") has resolved (e.g. a
+      // saved view restored straight into JSON view), and reading
+      // window.Monaco at that point used to throw. loadMonaco() resolves to
+      // the same module either way, whoever loads it first.
+      const Monaco = await loadMonaco();
+      // The import is async, so the component may have been torn down
+      // (result view switched away, cell removed) before it resolved. Bail
+      // rather than attach an editor to a detached container.
+      if (this.isUnmounted || !this.$refs.editor) {
+        return;
+      }
       const theme = document.documentElement.getAttribute('data-bs-theme') === 'dark'
         ? 'vs-dark'
         : 'vs-light';
@@ -93,13 +112,6 @@ export default {
       };
       const displayData = this.getDisplayData();
       const queryResultString = JSON.stringify(displayData, int128Replacer, 2);
-      // The query result should only be displayed after a query is executed.
-      // This means the editor for Cypher query should have been initialized.
-      // If not, there is something wrong with the app. The Monaco editor should
-      // not be initialized here as it does not have Cypher-related definition.
-      if (!Monaco) {
-        throw new Error("Monaco is not initialized.");
-      }
       this.editor = Monaco.editor.create(this.$refs.editor, {
         value: queryResultString,
         language: "json",

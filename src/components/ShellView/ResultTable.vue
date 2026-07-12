@@ -3,6 +3,12 @@
     class="result-table__wrapper"
     :style="{ height: containerHeight }"
   >
+    <p
+      v-if="truncatedCaption"
+      class="result-table__truncated-caption"
+    >
+      {{ truncatedCaption }}
+    </p>
     <div
       v-if="totalPages > 1"
       class="result-table__pagination__wrapper"
@@ -213,6 +219,19 @@ export default {
     itemsPerPage() {
       return this.settingsStore && this.settingsStore.tableView ? this.settingsStore.tableView.rowsPerPage : 10;
     },
+    // queryResult.truncated is the response-level flag /api/cypher sets when
+    // the server cut the result to KUZU_QUERY_SIZE_LIMIT rows (see
+    // processSingleResult in src/server/Cypher.js) — distinct from the
+    // per-result `truncated` NeighborsFetcher/ConnectedEntitiesPanel use for
+    // neighbour-expansion caps. Only rendered when the server actually
+    // truncated the response, so a normal result stays byte-identical.
+    truncatedCaption() {
+      if (!this.queryResult || !this.queryResult.truncated) {
+        return "";
+      }
+      const shownRows = this.queryResult.rows.length;
+      return `Truncated to ${shownRows} rows by the server limit`;
+    },
     ...mapStores(useSettingsStore, useNotebookStore),
   },
   watch: {
@@ -338,6 +357,12 @@ export default {
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
+}
+
+.result-table__truncated-caption {
+  font-size: 0.85rem;
+  color: var(--bs-body-text-secondary);
+  margin: 0 0 0.5rem;
 }
 
 .result-table__pagination__wrapper {

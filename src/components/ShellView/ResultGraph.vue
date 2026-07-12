@@ -655,10 +655,10 @@ export default {
       },
     },
     // Set from extractGraphFromQueryResult's sampling metadata whenever a
-    // fresh query result is drawn (drawGraph). Left as-is by every subsequent
-    // canvas mutation (expand/collapse/delete) — those already keep
-    // counters.total.node honest via targeted +/-1 updates, and sampling is a
-    // property of the original result, not the live canvas.
+    // fresh query result is drawn (drawGraph). Sampling is a property of the
+    // original result, not the live canvas, so every subsequent canvas
+    // mutation (expand/add/remove/restore) resets this to sampled:false —
+    // once the canvas diverges the "Showing X of Y" denominator would lie.
     nodeSampling: { sampled: false, totalNodeCount: 0 },
     draggedNodeDebounceTimer: null,
     expansions: [],
@@ -2537,6 +2537,14 @@ export default {
       // Update graph with filtered data
       this.g6Graph.setData({ nodes: pinnedNodes, edges: filteredEdges });
       await this.render();
+
+      // Every removal path (single-node remove, clearCanvas, collapse, and
+      // every undo/redo command that removes) funnels through here, and the
+      // early return above guarantees this point is only reached for a real
+      // mutation. The sampling caption's denominator only ever described the
+      // initial drawGraph() result, so once the canvas has been edited it's
+      // stale — clear it so the caption disappears instead of lying.
+      this.nodeSampling = { sampled: false, totalNodeCount: 0 };
     },
 
     collapseSelectedNode() {
@@ -2628,6 +2636,17 @@ export default {
       };
       this.g6Graph.setData(newData);
       await this.render();
+
+      // The sampling caption's denominator (nodeSampling.totalNodeCount) was
+      // only ever true of the initial drawGraph() result. Any real addition
+      // here (expand, add-connected-node, pinned-entity add, batch expand -
+      // every one of them funnels through addData) makes that denominator
+      // stale, so clear the sampling state and let the caption disappear
+      // rather than keep lying. A no-op call (every node/edge already on
+      // canvas) leaves it untouched.
+      if (nodesToAdd.length > 0 || edgesToAdd.length > 0) {
+        this.nodeSampling = { sampled: false, totalNodeCount: 0 };
+      }
 
       // Trigger neighbor count update for any new leaf nodes
       this.$nextTick(() => {
@@ -3845,6 +3864,10 @@ export default {
         this.g6Graph.addData({ nodes, edges });
         await this.render();
         this.calculateCountersFromGraphData({ nodes, edges });
+        // The canvas was just wholly replaced by a restored view - any
+        // sampling caption from a prior drawGraph() no longer describes
+        // what's on screen, so clear it rather than leave it lying.
+        this.nodeSampling = { sampled: false, totalNodeCount: 0 };
       } else {
         this.showToast('Import failed: could not initialize graph', 5000);
         return;
@@ -4356,6 +4379,14 @@ export default {
       this.g6Graph.setData(newData);
       await this.render();
 
+      // A redo of add-connected-node is a programmatic add that bypasses
+      // addData, so it needs its own sampling-clear (see addData's identical
+      // comment): the caption's denominator only ever described the initial
+      // drawGraph() result.
+      if (data.addedNodes.length > 0 || data.addedEdges.length > 0) {
+        this.nodeSampling = { sampled: false, totalNodeCount: 0 };
+      }
+
       this.$nextTick(() => {
         this.$refs.connectedEntitiesPanel?.refreshInGraphStatus();
         this.updateNeighborCounts();
@@ -4406,6 +4437,16 @@ export default {
 
       this.g6Graph.setData(newData);
       await this.render();
+
+      // Undo-remove/undo-collapse/redo-expand/redo-expandGraph all restore
+      // through here — a canvas mutation like every other add/remove path,
+      // so the sampling caption's stale denominator (only ever true of the
+      // initial drawGraph() result) is cleared the same way addData and
+      // removeFromGraph clear it.
+      if (nodesToRestore.length > 0 || edgesToRestore.length > 0) {
+        this.nodeSampling = { sampled: false, totalNodeCount: 0 };
+      }
+
       this.syncPinBadges();
     },
 
