@@ -31,7 +31,7 @@ To access an existing Kuzu database, you can mount its path to the `/database` d
 docker run -p 8000:8000 \
            -v {path to the directory containing the database file}:/database \
            -e KUZU_FILE={database file name} \
-           --rm kuzudb/explorer:latest
+           --rm ghcr.io/domvwt/explorer:latest
 ```
 
 By mounting local database files to Docker via `-v {path to the directory containing the database file}` and `-e KUZU_FILE={database file name}`, the changes done in the UI will persist to the local database files after the UI is shutdown. If the directory is mounted but the `KUZU_FILE` environment variable is not set, Kuzu Explorer will look for a file named `database.kz` in the mounted directory or create a new database file named `database.kz` in the mounted directory if it does not exist.
@@ -45,7 +45,7 @@ This is simply done by removing the `-v` flag in the example above. If no databa
 with `-v`, the server will be started with an empty database.
 
 ```bash
-docker run -p 8000:8000 --rm kuzudb/explorer:latest
+docker run -p 8000:8000 --rm ghcr.io/domvwt/explorer:latest
 ```
 
 ### Additional launch configurations
@@ -61,7 +61,7 @@ docker run -p 8000:8000 \
            -v {path to the directory containing the database file}:/database \
            -e KUZU_FILE={database file name} \
            -e MODE=READ_WRITE \
-           --rm kuzudb/explorer:latest
+           --rm ghcr.io/domvwt/explorer:latest
 ```
 
 #### Resource guardrails (public deployments)
@@ -87,7 +87,7 @@ docker run -p 8000:8000 \
            -v {path to the directory containing the database file}:/database \
            -e KUZU_FILE={database file name} \
            -e KUZU_BUFFER_POOL_SIZE=1073741824 \
-           --rm kuzudb/explorer:latest
+           --rm ghcr.io/domvwt/explorer:latest
 ```
 
 #### In-memory mode
@@ -97,7 +97,7 @@ By default, Kuzu Explorer is launched in disk-based mode. If you want to launch 
 ```bash
 docker run -p 8000:8000 \
            -e KUZU_IN_MEMORY=true \
-           --rm kuzudb/explorer:latest
+           --rm ghcr.io/domvwt/explorer:latest
 ```
 
 In in-memory mode, the database is stored in memory and all changes are lost when the server is shut down even if a database directory is mounted. Also, read-only access mode is not supported in in-memory mode.
@@ -109,7 +109,7 @@ In WebAssembly mode, Kuzu Explorer is launched with `kuzu-wasm`, which runs all 
 ```bash
 docker run -p 8000:8000 \
            -e KUZU_WASM=true \
-           --rm kuzudb/explorer:latest
+           --rm ghcr.io/domvwt/explorer:latest
 ```
 
 In WebAssembly mode, the database is stored in the current browser session and all changes are lost when the browser tab is closed or when the tab is refreshed. All other configuration parameters are ignored in WebAssembly mode.
@@ -122,7 +122,7 @@ If you want to launch Kuzu Explorer with the latest development build of Kuzu, y
 docker run -p 8000:8000 \
            -v {path to the directory containing the database file}:/database \
            -e KUZU_FILE={database file name} \
-           --rm kuzudb/explorer:dev
+           --rm ghcr.io/domvwt/explorer:dev
 ```
 
 The `dev` tag is updated daily, approximately two hours after the latest dev build of Kuzu is released.
@@ -149,7 +149,7 @@ is unset is report-only, so a bare `node` run outside the image is fail-safe.)
 docker run -p 8000:8000 \
            -v {path to the directory containing the database file}:/database \
            -e KUZU_FILE={database file name} \
-           --rm kuzudb/explorer:latest
+           --rm ghcr.io/domvwt/explorer:latest
 
 # Fall back to report-only if a frontend change needs re-validating: the browser
 # reports CSP violations to the console but does NOT block, so a mis-derived
@@ -158,7 +158,7 @@ docker run -p 8000:8000 \
            -v {path to the directory containing the database file}:/database \
            -e KUZU_FILE={database file name} \
            -e CSP_REPORT_ONLY=true \
-           --rm kuzudb/explorer:latest
+           --rm ghcr.io/domvwt/explorer:latest
 ```
 
 All the other security headers (HSTS, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`) are always enforced regardless of `CSP_REPORT_ONLY`.
@@ -168,7 +168,7 @@ All the other security headers (HSTS, `X-Frame-Options`, `X-Content-Type-Options
 When a new version of Kuzu Explorer is released after the initial launch, re-launching the container WILL NOT automatically update the local image to the latest version. To update the local image to the latest version, you can run the following command.
 
 ```bash
-docker pull kuzudb/explorer:latest
+docker pull ghcr.io/domvwt/explorer:latest
 ```
 
 After pulling the latest image, you can re-launch the container with the same command as before.
@@ -183,7 +183,7 @@ For example:
 podman run -p 8000:8000 \
            -v {path to the directory containing the database file}:/database:U \
            -e KUZU_FILE={database file name} \
-           --rm kuzudb/explorer:latest
+           --rm ghcr.io/domvwt/explorer:latest
 ```
 
 or,
@@ -193,7 +193,7 @@ podman run -p 8000:8000 \
            -v {path to the directory containing the database file}:/database \
            -e KUZU_FILE={database file name} \
            --userns=keep-id \
-           --rm kuzudb/explorer:latest
+           --rm ghcr.io/domvwt/explorer:latest
 ```
 
 Please refer to the official Podman docs for [mounting external volumes](https://docs.podman.io/en/latest/markdown/podman-run.1.html#mounting-external-volumes) and [user namespace mode](https://https://docs.podman.io/en/latest/markdown/podman-run.1.html#userns-mode) for more information.
@@ -425,11 +425,11 @@ env KUZU_DIR={directory containing kuzu database} KUZU_FILE={database file name}
 ### Run production server with Docker
 
 ```
-docker build -t kuzudb/explorer:latest .
+docker build -t ghcr.io/domvwt/explorer:latest .
 docker run -p 8000:8000 \
            -v {path to the directory containing the database file}:/database \
            -e KUZU_FILE={database file name} \
-           --rm kuzudb/explorer:latest
+           --rm ghcr.io/domvwt/explorer:latest
 ```
 
 ## Deployment

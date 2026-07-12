@@ -176,20 +176,20 @@ The production image defaults to `MODE=READ_ONLY` and `DISABLE_SESSION_DB=true` 
 
 ```bash
 # Build Docker image
-docker build -t kuzudb/explorer:latest .
+docker build -t ghcr.io/domvwt/explorer:latest .
 
 # Run Docker container with database mount (read-only, stateless by default)
 docker run -p 8000:8000 \
   -v /path/to/database:/database \
   -e KUZU_FILE=database.kuzu \
-  --rm kuzudb/explorer:latest
+  --rm ghcr.io/domvwt/explorer:latest
 
 # Opt in to read-write mode
 docker run -p 8000:8000 \
   -v /path/to/database:/database \
   -e KUZU_FILE=database.kuzu \
   -e MODE=READ_WRITE \
-  --rm kuzudb/explorer:latest
+  --rm ghcr.io/domvwt/explorer:latest
 ```
 
 ## Architecture

@@ -4,14 +4,6 @@ on:
   push:
     branches:
       - master
-      - next
-
-  schedule:
-    # Schedule a nightly build two hours after publishing the daily build
-    # of kuzu (see https://github.com/kuzudb/kuzu/blob/master/.github/workflows/build-and-deploy.yml)
-    # The kuzu daily build is scheduled at 8:00 UTC. The two hours delay
-    # should give enough time for the kuzu build to finish.
-    - cron: "0 10 * * *"
 
   workflow_dispatch:
     inputs:
@@ -32,14 +24,8 @@ jobs:
     name: Prebuild
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (default branch)
+      - name: Checkout
         uses: actions/checkout@v4
-        if: ${{ github.event_name != 'schedule'}}
-      - name: Checkout (next branch)
-        uses: actions/checkout@v4
-        with:
-          ref: next
-        if: ${{ github.event_name == 'schedule'}}
       - name: Prebuild - install node
         uses: actions/setup-node@v3
         with:
@@ -48,30 +34,19 @@ jobs:
         uses: pnpm/action-setup@v4
         with:
           version: 10
-      - name: Prebuild - update dev version
-        if: ${{ github.event_name == 'schedule' || github.event.inputs.isNightly == 'true' || github.ref_name == 'next' }}
-        working-directory: scripts
-        run: node UpdateDevVersion
       - name: Prebuild - install dependencies
         run: pnpm install --frozen-lockfile
       - name: Prebuild - generate grammar
         run: npm run generate-grammar-prod
       - name: Prebuild - build app
         run: npm run build
+      # actions/upload-artifact@v4 drops dotfiles, so the docker build context
+      # produced by "Upload current directory" below has no .dockerignore, and
+      # the prebuilt dist/ enters the image via `COPY .` in the docker job
+      # (which builds with SKIP_BUILD_APP=true). Removing .dockerignore here
+      # makes that load-bearing behaviour deliberate instead of accidental.
       - name: Prebuild - cleanup
-        run: rm -rf node_modules .git explorer.db
-      - name: Prebuild - get version
-        shell: bash
-        run: |
-          VERSION=$(node -e 'fs=require("fs");console.log(JSON.parse(fs.readFileSync("package.json")).dependencies.kuzu)')
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-      - name: Prebuild - write version to file
-        run: echo $VERSION > version.txt
-      - name: Upload version
-        uses: actions/upload-artifact@v4
-        with:
-          path: version.txt
-          name: version
+        run: rm -rf node_modules .git explorer.db .dockerignore
       - name: Upload current directory
         uses: actions/upload-artifact@v4
         with:
@@ -87,32 +62,20 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: explorer-prebuild
-      - name: Install Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: "20"
-      - name: Get version
-        shell: bash
-        run: |
-          VERSION=$(node -e 'fs=require("fs");console.log(JSON.parse(fs.readFileSync("package.json")).dependencies.kuzu)')
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
       - name: Set tag for nightly build
-        if: ${{ github.event_name == 'schedule' || github.event.inputs.isNightly == 'true' || github.ref_name == 'next' }}
-        run: echo "TAGS=kuzudb/explorer:dev,ghcr.io/${{ github.repository_owner }}/explorer:dev" >> $GITHUB_ENV
+        if: ${{ github.event.inputs.isNightly == 'true' }}
+        run: echo "TAGS=ghcr.io/${{ github.repository_owner }}/explorer:dev" >> $GITHUB_ENV
       - name: Set tag for release build
-        if: ${{ github.event_name != 'schedule' && github.event.inputs.isNightly != 'true' && github.ref_name != 'next' }}
-        run: echo "TAGS=kuzudb/explorer:latest,kuzudb/explorer:${{ env.VERSION }},ghcr.io/${{ github.repository_owner }}/explorer:latest,ghcr.io/${{ github.repository_owner }}/explorer:${{ env.VERSION }}" >> $GITHUB_ENV
+        if: ${{ github.event.inputs.isNightly != 'true' }}
+        run: |
+          VERSION_TAG=$(date -u +%Y%m%d)-${GITHUB_SHA::7}
+          echo "TAGS=ghcr.io/${{ github.repository_owner }}/explorer:latest,ghcr.io/${{ github.repository_owner }}/explorer:${VERSION_TAG}" >> $GITHUB_ENV
       - name: Show tags
         run: echo $TAGS
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -129,103 +92,3 @@ jobs:
           build-args: |
             SKIP_GRAMMAR=true
             SKIP_BUILD_APP=true
-
-  windows:
-    needs: prebuild
-    name: Build and push Windows deployment package
-    runs-on: windows-latest
-    steps:
-      - name: Download prebuild
-        uses: actions/download-artifact@v4
-        with:
-          name: explorer-prebuild
-      - name: Install Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: "20"
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Upload current directory
-        uses: actions/upload-artifact@v4
-        with:
-          path: .
-          name: explorer-windows-x64
-
-  linux-x64:
-    needs: prebuild
-    name: Build and push Linux x64 deployment package
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download prebuild
-        uses: actions/download-artifact@v4
-        with:
-          name: explorer-prebuild
-      - name: Install Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: "20"
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Upload current directory
-        uses: actions/upload-artifact@v4
-        with:
-          path: .
-          name: explorer-linux-x64
-
-  mac-arm64:
-    needs: prebuild
-    name: Build and push macOS arm64 deployment package
-    runs-on: macos-latest
-    steps:
-      - name: Download prebuild
-        uses: actions/download-artifact@v4
-        with:
-          name: explorer-prebuild
-      - name: Install Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: "20"
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Upload current directory
-        uses: actions/upload-artifact@v4
-        with:
-          path: .
-          name: explorer-mac-arm64
-  
-  mac-x64:
-    needs: prebuild
-    name: Build and push macOS x64 deployment package
-    runs-on: macos-13
-    steps:
-      - name: Download prebuild
-        uses: actions/download-artifact@v4
-        with:
-          name: explorer-prebuild
-      - name: Install Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: "20"
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Upload current directory
-        uses: actions/upload-artifact@v4
-        with:
-          path: .
-          name: explorer-mac-x64
