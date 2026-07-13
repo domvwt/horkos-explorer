@@ -32,22 +32,15 @@ const relTables = [
 ];
 
 describe("_buildNeighborCountQueries", () => {
-  it("emits exactly two queries (one per direction), independent of rel-type count", () => {
+  it("emits exactly two queries (one per direction)", () => {
     const queries = NeighborsFetcher._buildNeighborCountQueries({
       tableName: "Company",
       primaryKeyName: "id",
-      relTables,
     });
     // A wildcard `-[]-` binds every incident rel type in one traversal, so the
     // query count is one inbound + one outbound regardless of how many rel types
-    // touch Company. The same holds for a single rel type or a dozen.
+    // touch Company.
     expect(queries).toHaveLength(2);
-    const single = NeighborsFetcher._buildNeighborCountQueries({
-      tableName: "Company",
-      primaryKeyName: "id",
-      relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
-    });
-    expect(single).toHaveLength(2);
   });
 
   it("does not scale query count with the number of source nodes", () => {
@@ -56,7 +49,6 @@ describe("_buildNeighborCountQueries", () => {
     const queries = NeighborsFetcher._buildNeighborCountQueries({
       tableName: "Company",
       primaryKeyName: "id",
-      relTables,
     });
     // No query contains any literal pk value; all use UNWIND $pks.
     queries.forEach(q => {
@@ -69,7 +61,6 @@ describe("_buildNeighborCountQueries", () => {
     const queries = NeighborsFetcher._buildNeighborCountQueries({
       tableName: "Company",
       primaryKeyName: "id",
-      relTables,
     });
     queries.forEach(q => {
       // Returns pk + dst node only.
@@ -88,7 +79,6 @@ describe("_buildNeighborCountQueries", () => {
     const queries = NeighborsFetcher._buildNeighborCountQueries({
       tableName: "Weird Table",
       primaryKeyName: "pk name",
-      relTables: [{ name: "Rel Type", connectivity: [{ src: "Weird Table", dst: "Other" }] }],
     });
     expect(queries).toHaveLength(2);
     queries.forEach(q => {
@@ -101,18 +91,11 @@ describe("_buildNeighborCountQueries", () => {
     const queries = NeighborsFetcher._buildNeighborCountQueries({
       tableName: "Company",
       primaryKeyName: "id",
-      relTables,
     });
     expect(queries).toEqual([
       "UNWIND $pks AS pk MATCH (dst) -[]-> (src:`Company`) WHERE src.`id` = pk RETURN src.`id` AS pk, dst;",
       "UNWIND $pks AS pk MATCH (src:`Company`) -[]-> (dst) WHERE src.`id` = pk RETURN src.`id` AS pk, dst;",
     ]);
-  });
-
-  it("throws when relTables is not an array", () => {
-    expect(() =>
-      NeighborsFetcher._buildNeighborCountQueries({ tableName: "Company", primaryKeyName: "id" })
-    ).toThrow();
   });
 });
 
@@ -127,14 +110,10 @@ describe("fetchNeighborNodesBatched", () => {
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValues: pks,
-      relTables: [
-        { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
-        { name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] },
-      ],
     });
 
     // One wildcard query per direction (inbound + outbound) -> exactly 2
-    // requests, regardless of the 2 rel types or the 3 pks.
+    // requests, regardless of the rel types or the 3 pks.
     expect(runSpy).toHaveBeenCalledTimes(2);
     runSpy.mock.calls.forEach(([, params]) => {
       expect(params).toEqual({ pks: ["c1", "c2", "c3"] });
@@ -154,7 +133,6 @@ describe("fetchNeighborNodesBatched", () => {
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValues: ["c1", "c2", "c3"],
-      relTables,
     });
     expect(runSpy).toHaveBeenCalledTimes(2);
     runSpy.mockRestore();
@@ -186,10 +164,6 @@ describe("fetchNeighborNodesBatched", () => {
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValues: ["c1", "c2"],
-      relTables: [
-        { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
-        { name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] },
-      ],
     });
 
     expect(byPk.c1.map(n => encodeId(n._id)).sort()).toEqual(["1_10", "1_11", "2_5"]);
@@ -209,9 +183,6 @@ describe("fetchNeighborNodesBatched", () => {
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValues: pks,
-      relTables: [
-        { name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] },
-      ],
     });
 
     expect(runSpy).toHaveBeenCalledTimes(6);
@@ -257,9 +228,6 @@ describe("fetchNeighborNodesBatched", () => {
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValues: pks,
-      relTables: [
-        { name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] },
-      ],
     });
 
     // 2 chunks x 2 wildcard direction-queries = 4 requests; only the first two
@@ -292,10 +260,6 @@ describe("fetchNeighborNodesBatched", () => {
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValues: ["c1"],
-      relTables: [
-        { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
-        { name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] },
-      ],
     });
 
     expect(byPk.c1.map(n => encodeId(n._id)).sort()).toEqual(["1_10", "2_5"]);
@@ -308,7 +272,6 @@ describe("fetchNeighborNodesBatched", () => {
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValues: [],
-      relTables,
     });
     expect(byPk).toEqual({});
     expect(runSpy).not.toHaveBeenCalled();
@@ -327,10 +290,6 @@ describe("fetchNeighborNodesBatched", () => {
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValues: ["c1"],
-      relTables: [
-        { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
-        { name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] },
-      ],
     });
     expect(byPk.c1).toHaveLength(1);
     runSpy.mockRestore();
@@ -723,19 +682,6 @@ describe("new-only neighbour count semantics", () => {
 });
 
 describe("fetchNeighbors query collapse", () => {
-  // A schema-realistic set where the focus table is incident to MANY rel types
-  // in both directions — the fan-out the wildcard collapse targets. Company is
-  // src of RegisteredAddress + both self-referential rels, and dst of two more.
-  const denseRels = [
-    { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
-    { name: "PersonOwnership", connectivity: [{ src: "Person", dst: "Company" }] },
-    { name: "PersonInfluence", connectivity: [{ src: "Person", dst: "Company" }] },
-    { name: "CorporateOwnership", connectivity: [{ src: "Company", dst: "Company" }] },
-    { name: "CorporateInfluence", connectivity: [{ src: "Company", dst: "Company" }] },
-    { name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] },
-    { name: "CompanyAmbiguousLink", connectivity: [{ src: "Company", dst: "VirtualHub" }] },
-  ];
-
   it("issues exactly two queries (one per direction) instead of one per rel type", async () => {
     const runSpy = vi
       .spyOn(NeighborsFetcher, "_runQuery")
@@ -747,7 +693,6 @@ describe("fetchNeighbors query collapse", () => {
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValue: "c1",
-      relTables: denseRels,
       sizeLimit: 100,
     });
 
@@ -786,7 +731,6 @@ describe("fetchNeighbors query collapse", () => {
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValue: "c1",
-      relTables: denseRels,
       sizeLimit: 100,
     });
 
@@ -828,9 +772,6 @@ describe("fetchNeighbors truncation flag", () => {
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValue: "c1",
-      relTables: [
-        { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
-      ],
       sizeLimit: 5,
     });
 
@@ -863,10 +804,6 @@ describe("fetchNeighbors truncation flag", () => {
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValue: "c1",
-      relTables: [
-        { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
-        { name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] },
-      ],
       sizeLimit: 5,
     });
 
@@ -896,10 +833,6 @@ describe("fetchNeighbors truncation flag", () => {
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValue: "c1",
-      relTables: [
-        { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
-        { name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] },
-      ],
       sizeLimit: 3,
     });
 
@@ -909,29 +842,21 @@ describe("fetchNeighbors truncation flag", () => {
 });
 
 describe("_buildNeighborQueries", () => {
-  it("emits exactly two queries (one per direction), independent of rel-type count", () => {
+  it("emits exactly two queries (one per direction)", () => {
     const queries = NeighborsFetcher._buildNeighborQueries({
       tableName: "Company",
       primaryKeyName: "id",
-      relTables,
     });
     // A wildcard `-[r]-` binds every incident rel type in one traversal, so it
     // is one inbound + one outbound query regardless of how many rel types touch
-    // Company — and the same for a single rel type.
+    // Company.
     expect(queries).toHaveLength(2);
-    const single = NeighborsFetcher._buildNeighborQueries({
-      tableName: "Company",
-      primaryKeyName: "id",
-      relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
-    });
-    expect(single).toHaveLength(2);
   });
 
   it("projects the pk, the edge r, AND the neighbour node dst", () => {
     const queries = NeighborsFetcher._buildNeighborQueries({
       tableName: "Company",
       primaryKeyName: "id",
-      relTables,
     });
     queries.forEach(q => {
       expect(q).toContain("UNWIND $pks AS pk");
@@ -947,7 +872,6 @@ describe("_buildNeighborQueries", () => {
     const queries = NeighborsFetcher._buildNeighborQueries({
       tableName: "Company",
       primaryKeyName: "id",
-      relTables,
     });
     expect(queries).toEqual([
       "UNWIND $pks AS pk MATCH (dst) -[r]-> (src:`Company`) WHERE src.`id` = pk RETURN src.`id` AS pk, r, dst;",
@@ -959,7 +883,6 @@ describe("_buildNeighborQueries", () => {
     const queries = NeighborsFetcher._buildNeighborQueries({
       tableName: "Weird Table",
       primaryKeyName: "pk name",
-      relTables: [{ name: "Rel Type", connectivity: [{ src: "Weird Table", dst: "Other" }] }],
     });
     expect(queries).toHaveLength(2);
     queries.forEach(q => {
@@ -967,20 +890,9 @@ describe("_buildNeighborQueries", () => {
       expect(q).toContain("`pk name`");
     });
   });
-
-  it("throws when relTables is not an array", () => {
-    expect(() =>
-      NeighborsFetcher._buildNeighborQueries({ tableName: "Company", primaryKeyName: "id" })
-    ).toThrow();
-  });
 });
 
 describe("fetchNeighborsBatched", () => {
-  const companyRels = [
-    { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
-    { name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] },
-  ];
-
   it("binds the whole pk list as a single $pks param, once per direction, and merges rows", async () => {
     const rowP = { pk: "c1", r: { _id: { table: 5, offset: 1 }, _label: "Directorship" }, dst: { _id: { table: 2, offset: 1 }, _label: "Person" } };
     const rowA = { pk: "c1", r: { _id: { table: 6, offset: 1 }, _label: "RegisteredAddress" }, dst: { _id: { table: 1, offset: 1 }, _label: "Address" } };
@@ -993,10 +905,9 @@ describe("fetchNeighborsBatched", () => {
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValues: ["c1", "c2", "c3"],
-      relTables: companyRels,
     });
 
-    // 2 rel types (1 inbound + 1 outbound) -> 2 requests, regardless of 3 pks.
+    // One wildcard query per direction -> 2 requests, regardless of 3 pks.
     expect(runSpy).toHaveBeenCalledTimes(2);
     runSpy.mock.calls.forEach(([, params]) => {
       expect(params).toEqual({ pks: ["c1", "c2", "c3"] });
@@ -1021,7 +932,6 @@ describe("fetchNeighborsBatched", () => {
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValues: pks,
-      relTables: [{ name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] }],
     });
 
     expect(runSpy).toHaveBeenCalledTimes(6);
@@ -1047,7 +957,6 @@ describe("fetchNeighborsBatched", () => {
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValues: ["c1"],
-      relTables: companyRels,
     });
 
     expect(result.incomplete).toBe(true);
@@ -1063,7 +972,6 @@ describe("fetchNeighborsBatched", () => {
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValues: ["c1"],
-      relTables: companyRels,
     });
 
     expect(result.incomplete).toBe(true);
@@ -1071,28 +979,76 @@ describe("fetchNeighborsBatched", () => {
     runSpy.mockRestore();
   });
 
-  it("flags truncated when a chunk returns at least the row cap", async () => {
-    // Fabricate a chunk result at the cap size to simulate a server-side cap.
-    const capRows = Array.from({ length: 10000 }, (_, i) => ({
-      pk: "c1",
-      r: { _id: { table: 6, offset: i }, _label: "RegisteredAddress" },
-      dst: { _id: { table: 1, offset: i }, _label: "Address" },
-    }));
-    // The inbound wildcard query returns the capped chunk; the outbound one
+  it("flags truncated from the server flag on a chunk of just a few rows (cap-agnostic)", async () => {
+    // Truncation is detected from the server's authoritative `truncated` flag,
+    // NOT from the row count, so even a handful of rows carrying the flag counts.
+    // The inbound wildcard query returns the flagged chunk; the outbound one
     // returns an honest empty result (so incomplete stays false).
+    const fewRows = [
+      { pk: "c1", r: { _id: { table: 6, offset: 1 }, _label: "RegisteredAddress" }, dst: { _id: { table: 1, offset: 1 }, _label: "Address" } },
+      { pk: "c1", r: { _id: { table: 5, offset: 1 }, _label: "Directorship" }, dst: { _id: { table: 2, offset: 1 }, _label: "Person" } },
+    ];
     const runSpy = vi
       .spyOn(NeighborsFetcher, "_runQuery")
-      .mockResolvedValueOnce({ rows: capRows, dataTypes: { pk: "STRING", r: "REL", dst: "NODE" } })
+      .mockResolvedValueOnce({ rows: fewRows, dataTypes: { pk: "STRING", r: "REL", dst: "NODE" }, truncated: true })
       .mockResolvedValueOnce({ rows: [], dataTypes: { pk: "STRING", r: "REL", dst: "NODE" } });
 
     const result = await NeighborsFetcher.fetchNeighborsBatched({
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValues: ["c1"],
-      relTables: [{ name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] }],
     });
 
     expect(result.truncated).toBe(true);
+    expect(result.incomplete).toBe(false);
+    runSpy.mockRestore();
+  });
+
+  it("flags truncated below the old 10000 heuristic (lower-cap regression)", async () => {
+    // The exact case the old `rows.length >= 10000` heuristic missed: a server
+    // configured with a lower KUZU_QUERY_SIZE_LIMIT clips a chunk at ~5000 rows
+    // and sets the flag; the old row-count check would have reported false.
+    const clippedRows = Array.from({ length: 5000 }, (_, i) => ({
+      pk: "c1",
+      r: { _id: { table: 6, offset: i }, _label: "RegisteredAddress" },
+      dst: { _id: { table: 1, offset: i }, _label: "Address" },
+    }));
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValueOnce({ rows: clippedRows, dataTypes: { pk: "STRING", r: "REL", dst: "NODE" }, truncated: true })
+      .mockResolvedValueOnce({ rows: [], dataTypes: { pk: "STRING", r: "REL", dst: "NODE" } });
+
+    const result = await NeighborsFetcher.fetchNeighborsBatched({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValues: ["c1"],
+    });
+
+    expect(result.truncated).toBe(true);
+    expect(result.incomplete).toBe(false);
+    runSpy.mockRestore();
+  });
+
+  it("does NOT flag truncated on a high row count the server did not clip", async () => {
+    // 10000+ rows but no server flag -> not truncated. Volume alone must never
+    // be a false positive; only the server's authoritative flag counts.
+    const manyRows = Array.from({ length: 10001 }, (_, i) => ({
+      pk: "c1",
+      r: { _id: { table: 6, offset: i }, _label: "RegisteredAddress" },
+      dst: { _id: { table: 1, offset: i }, _label: "Address" },
+    }));
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValueOnce({ rows: manyRows, dataTypes: { pk: "STRING", r: "REL", dst: "NODE" } })
+      .mockResolvedValueOnce({ rows: [], dataTypes: { pk: "STRING", r: "REL", dst: "NODE" } });
+
+    const result = await NeighborsFetcher.fetchNeighborsBatched({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValues: ["c1"],
+    });
+
+    expect(result.truncated).toBe(false);
     expect(result.incomplete).toBe(false);
     runSpy.mockRestore();
   });
@@ -1103,7 +1059,6 @@ describe("fetchNeighborsBatched", () => {
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValues: [],
-      relTables: companyRels,
     });
     expect(result).toEqual({ rows: [], dataTypes: [], incomplete: false, truncated: false });
     expect(runSpy).not.toHaveBeenCalled();
@@ -1115,7 +1070,6 @@ describe("fetchNeighborsBatched", () => {
       NeighborsFetcher.fetchNeighborsBatched({
         tableName: "Company",
         primaryKeyName: "id",
-        relTables: companyRels,
       })
     ).rejects.toThrow();
   });
@@ -1133,7 +1087,6 @@ describe("fetchNeighbors incomplete flag", () => {
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValue: "c1",
-      relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
       sizeLimit: 5,
     });
     // All sub-queries succeeded and matched zero rows. The result must NOT be
@@ -1154,10 +1107,6 @@ describe("fetchNeighbors incomplete flag", () => {
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValue: "c1",
-      relTables: [
-        { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
-        { name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] },
-      ],
       sizeLimit: 5,
     });
 
@@ -1175,7 +1124,6 @@ describe("fetchNeighbors incomplete flag", () => {
       tableName: "Company",
       primaryKeyName: "id",
       primaryKeyValue: "c1",
-      relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
       sizeLimit: 5,
     });
 

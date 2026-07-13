@@ -1872,12 +1872,11 @@ export default {
         const nodeData = this.g6Graph.getNodeData(nodeId);
         const { tableName, primaryKeyName, primaryKeyValue } = this.getInfoForExpansion(nodeData);
 
-        // One request per rel type, covering just this node.
+        // One wildcard query per direction, covering just this node.
         const neighborsByPk = await NeighborsFetcher.fetchNeighborNodesBatched({
           tableName,
           primaryKeyName,
           primaryKeyValues: [primaryKeyValue],
-          relTables: this.schema.relTables,
         });
 
         const neighborNodes = neighborsByPk[String(primaryKeyValue)] || [];
@@ -1932,9 +1931,10 @@ export default {
         });
 
         // Fire one batched fetch per node-table group; within a group the
-        // fetcher issues one query per rel type covering ALL nodes in the
-        // group. Total requests scale with (groups x rel types), independent of
-        // the number of leaf nodes. Runs in the background.
+        // fetcher issues one wildcard query per direction (chunked) covering ALL
+        // nodes in the group. Total requests scale with (groups x directions x
+        // chunks), independent of the number of leaf nodes. Runs in the
+        // background.
         Promise.all(
           Array.from(groups.values()).map(async group => {
             try {
@@ -1942,7 +1942,6 @@ export default {
                 tableName: group.tableName,
                 primaryKeyName: group.primaryKeyName,
                 primaryKeyValues: group.entries.map(e => e.primaryKeyValue),
-                relTables: this.schema.relTables,
               });
 
               group.entries.forEach(entry => {
@@ -1991,7 +1990,6 @@ export default {
           tableName,
           primaryKeyName,
           primaryKeyValue,
-          relTables: this.schema.relTables,
           sizeLimit,
         });
       } catch (e) {
@@ -2148,9 +2146,9 @@ export default {
         }
       });
 
-      // FETCH ALL GROUPS FIRST, MUTATE NOTHING YET. Each group makes O(rel types
-      // x directions x chunks) requests, independent of leaf count, so a large
-      // expand can no longer trip the server's in-flight load-shed guard.
+      // FETCH ALL GROUPS FIRST, MUTATE NOTHING YET. Each group makes O(directions
+      // x chunks) requests, independent of leaf count and rel-type count, so a
+      // large expand can no longer trip the server's in-flight load-shed guard.
       const groupList = Array.from(groups.values());
       const groupResults = await Promise.all(
         groupList.map(group =>
@@ -2158,7 +2156,6 @@ export default {
             tableName: group.tableName,
             primaryKeyName: group.primaryKeyName,
             primaryKeyValues: group.entries.map(e => e.primaryKeyValue),
-            relTables: this.schema.relTables,
           })
         )
       );

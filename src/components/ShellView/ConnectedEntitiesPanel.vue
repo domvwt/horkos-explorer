@@ -253,7 +253,6 @@ export default {
           tableName,
           primaryKeyName,
           primaryKeyValue,
-          relTables: this.schema.relTables,
           sizeLimit: this.maxResults + 1,
         });
 

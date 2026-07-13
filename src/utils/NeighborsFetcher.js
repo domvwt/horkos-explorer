@@ -9,33 +9,23 @@ import DataDefinitionLanguage from "./DataDefinitionLanguage";
 // KUZU_QUERY_SIZE_LIMIT (default 10000 rows) and SILENTLY truncates the rest.
 // So a chunk's row count is `chunkSize x (total neighbours of the source across
 // all rel types, per direction)`. Chunking the pk list keeps each request well
-// under the cap so a dense group can't be truncated and undercounted.
+// under the cap so a dense group is less likely to be truncated in the first
+// place.
 //
-// 25 leaves generous headroom: a chunk only risks the 10000-row cap if a single
-// source node has more than ~400 neighbours in ONE direction (10000/25) summed
-// over every rel type, far beyond anything in this domain (a company's directors
-// + owners + address, a person's directorships, an address's residents).
-// Requests now scale with (ceil(N/25) x 2 directions) instead of rel types, but
-// for a typical canvas of a few dozen leaf nodes that is one or two chunks.
-// Results merge safely because they are keyed by source pk (see
-// fetchNeighborNodesBatched).
+// 25 leaves generous headroom against the default 10000-row cap: a chunk only
+// risks it if a single source node has more than ~400 neighbours in ONE
+// direction (10000/25) summed over every rel type, far beyond anything in this
+// domain (a company's directors + owners + address, a person's directorships, an
+// address's residents). Requests now scale with (ceil(N/25) x 2 directions)
+// instead of rel types, but for a typical canvas of a few dozen leaf nodes that
+// is one or two chunks. Results merge safely because they are keyed by source pk
+// (see fetchNeighborNodesBatched).
 //
-// Assumes the default KUZU_QUERY_SIZE_LIMIT of 10000; the server-only limit is
-// not cleanly readable from this client-side fetcher, so an operator who sets
-// that env var substantially lower would need a correspondingly smaller chunk
-// size to keep chunks under the cap. Undercounting only degrades an advisory
-// badge, so this is an accepted LOW-severity tradeoff.
+// This chunk size only affects how likely a request is to hit the cap; it is not
+// relied on for detecting truncation. `fetchNeighborsBatched` reads the server's
+// authoritative `truncated` flag, so a chunk that is clipped is reported
+// correctly whatever the operator sets KUZU_QUERY_SIZE_LIMIT to.
 const NEIGHBOR_COUNT_PK_CHUNK_SIZE = 25;
-
-// Row count at (or above) which a batched neighbour query is ASSUMED to have hit
-// the server's silent KUZU_QUERY_SIZE_LIMIT and dropped rows. The exact limit is
-// a server-only env var not cleanly readable from this client, so we use its
-// documented default (10000). `fetchNeighborsBatched` also projects `dst`, so a
-// dense chunk can approach the cap; a chunk returning >= this many rows flags the
-// merged result `truncated` (the batched analogue of the per-direction
-// `rows.length >= sizeLimit` check in `fetchNeighbors`). An operator who sets
-// KUZU_QUERY_SIZE_LIMIT lower should lower NEIGHBOR_COUNT_PK_CHUNK_SIZE to match.
-const NEIGHBOR_BATCH_ROW_CAP = 10000;
 
 // A wildcard relationship variable (`-[r]-`) now binds ACROSS all edge tables
 // incident to a node in a single query: the graph build unified the previously
@@ -125,12 +115,8 @@ class NeighborsFetcher {
     tableName,
     primaryKeyName,
     primaryKeyValue,
-    relTables,
     sizeLimit = 100,
   }) {
-    if (!Array.isArray(relTables)) {
-      throw new Error("fetchNeighbors requires relTables (schema.relTables)");
-    }
     // sizeLimit is interpolated into the query text, so it must be a number
     sizeLimit = Number(sizeLimit);
     if (!Number.isInteger(sizeLimit) || sizeLimit <= 0) {
@@ -141,11 +127,11 @@ class NeighborsFetcher {
     const params = { pk: this._unwrapPrimaryKeyValue(primaryKeyValue) };
 
     // One wildcard query per direction binds EVERY rel type incident to this
-    // node table at once (relTables is no longer needed to pick queries — the
-    // wildcard match walks whatever concrete types actually exist). The LIMIT is
-    // applied in-query per direction so a high-degree node can't ship more than
-    // sizeLimit rows for a direction; `_mergeResults` re-caps defensively. Only
-    // escaped identifiers are interpolated; the pk value rides as $pk.
+    // node table at once — the wildcard match walks whatever concrete types
+    // actually exist. The LIMIT is applied in-query per direction so a
+    // high-degree node can't ship more than sizeLimit rows for a direction;
+    // `_mergeResults` re-caps defensively. Only escaped identifiers are
+    // interpolated; the pk value rides as $pk.
     const inboundQuery =
       `MATCH (dst) -[r]-> (src:${escapedTable}) WHERE src.${escapedPk} = $pk RETURN r, dst LIMIT ${sizeLimit};`;
     const outboundQuery =
@@ -201,17 +187,12 @@ class NeighborsFetcher {
   // query, each taking the whole pk list via `UNWIND $pks AS pk` and returning
   // one row per (source pk, neighbour node) pair as `pk, dst`.
   //
-  // A wildcard `-[]-` binds every rel type incident to the node in one query
-  // (relTables is no longer needed to enumerate types — kept only for the caller
-  // signature and the array-shape guard). We project the neighbour NODE (`dst`)
-  // rather than a raw `count(*)` so the caller can encode each neighbour's
-  // internal id and apply the same "new neighbours only" filter the per-node
-  // path uses. The relationship is bound anonymously (no `r`), so only NODE
-  // columns cross the wire here.
-  _buildNeighborCountQueries({ tableName, primaryKeyName, relTables }) {
-    if (!Array.isArray(relTables)) {
-      throw new Error("_buildNeighborCountQueries requires relTables (schema.relTables)");
-    }
+  // A wildcard `-[]-` binds every rel type incident to the node in one query.
+  // We project the neighbour NODE (`dst`) rather than a raw `count(*)` so the
+  // caller can encode each neighbour's internal id and apply the same "new
+  // neighbours only" filter the per-node path uses. The relationship is bound
+  // anonymously (no `r`), so only NODE columns cross the wire here.
+  _buildNeighborCountQueries({ tableName, primaryKeyName }) {
     const escapedTable = DataDefinitionLanguage._escapeName(tableName);
     const escapedPk = DataDefinitionLanguage._escapeName(primaryKeyName);
 
@@ -235,7 +216,6 @@ class NeighborsFetcher {
     tableName,
     primaryKeyName,
     primaryKeyValues,
-    relTables,
   }) {
     if (!Array.isArray(primaryKeyValues)) {
       throw new Error("fetchNeighborNodesBatched requires primaryKeyValues array");
@@ -248,7 +228,6 @@ class NeighborsFetcher {
     const queries = this._buildNeighborCountQueries({
       tableName,
       primaryKeyName,
-      relTables,
     });
     const unwrappedPks = primaryKeyValues.map(v => this._unwrapPrimaryKeyValue(v));
 
@@ -300,13 +279,9 @@ class NeighborsFetcher {
   // A wildcard `-[r]-` binds every rel type incident to the node in one query;
   // the graph build unified the divergent same-named STRUCT properties, so a
   // heterogeneous `r` serializes cleanly and its column reports as REL for the
-  // extractor. relTables is no longer needed to enumerate types (kept only for
-  // the signature and the array-shape guard). Pure over its inputs (no I/O), so
-  // it is unit-testable without a DB.
-  _buildNeighborQueries({ tableName, primaryKeyName, relTables }) {
-    if (!Array.isArray(relTables)) {
-      throw new Error("_buildNeighborQueries requires relTables (schema.relTables)");
-    }
+  // extractor. Pure over its inputs (no I/O), so it is unit-testable without a
+  // DB.
+  _buildNeighborQueries({ tableName, primaryKeyName }) {
     const escapedTable = DataDefinitionLanguage._escapeName(tableName);
     const escapedPk = DataDefinitionLanguage._escapeName(primaryKeyName);
 
@@ -333,16 +308,16 @@ class NeighborsFetcher {
   //
   // - `incomplete` is true if ANY constituent sub-query failed (a shed/timeout/
   //   error), so the caller can bail all-or-nothing before touching the canvas.
-  // - `truncated` is true if any chunk hit NEIGHBOR_BATCH_ROW_CAP (the server
-  //   silently capped that chunk). There is deliberately NO per-source LIMIT: an
-  //   UNWIND query can't cheaply apply one, and the caller pre-filters
-  //   high-degree ("profligate") sources before calling, so per-source fan-out
-  //   is already bounded.
+  // - `truncated` is true if any chunk carried the server's authoritative
+  //   `truncated` flag (the server clipped that chunk at its result-size or
+  //   row-budget limit). There is deliberately NO per-source LIMIT: an UNWIND
+  //   query can't cheaply apply one, and the caller pre-filters high-degree
+  //   ("profligate") sources before calling, so per-source fan-out is already
+  //   bounded.
   async fetchNeighborsBatched({
     tableName,
     primaryKeyName,
     primaryKeyValues,
-    relTables,
   }) {
     if (!Array.isArray(primaryKeyValues)) {
       throw new Error("fetchNeighborsBatched requires primaryKeyValues array");
@@ -354,7 +329,6 @@ class NeighborsFetcher {
     const queries = this._buildNeighborQueries({
       tableName,
       primaryKeyName,
-      relTables,
     });
     const unwrappedPks = primaryKeyValues.map(v => this._unwrapPrimaryKeyValue(v));
 
@@ -372,12 +346,13 @@ class NeighborsFetcher {
       )
     );
 
-    // A chunk that returned at least the cap is assumed to have been truncated
-    // by the server. Checked on the raw results (before _mergeResults) alongside
-    // the incomplete flag it computes.
-    const truncated = results.some(
-      result => result && result.rows && result.rows.length >= NEIGHBOR_BATCH_ROW_CAP
-    );
+    // The server sets an authoritative `truncated` flag on any response it
+    // clipped (at KUZU_QUERY_SIZE_LIMIT or a row-budget limit); if any chunk
+    // carries it, the merged result is truncated. Cap-agnostic: correct even
+    // when an operator sets KUZU_QUERY_SIZE_LIMIT below the chunking headroom.
+    // Checked on the raw results (before _mergeResults) alongside the incomplete
+    // flag it computes.
+    const truncated = results.some(r => r && r.truncated === true);
 
     // No sizeLimit: per-source fan-out is bounded by the caller's profligate
     // pre-filter, so a global slice would arbitrarily drop some sources' edges.
