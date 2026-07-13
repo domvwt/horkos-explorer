@@ -32,19 +32,22 @@ const relTables = [
 ];
 
 describe("_buildNeighborCountQueries", () => {
-  it("emits one query per relevant rel type (never per node)", () => {
+  it("emits exactly two queries (one per direction), independent of rel-type count", () => {
     const queries = NeighborsFetcher._buildNeighborCountQueries({
       tableName: "Company",
       primaryKeyName: "id",
       relTables,
     });
-    // Company is dst of Directorship (inbound), and src of CorporateOwnership
-    // + RegisteredAddress (outbound). CorporateOwnership has Company as BOTH
-    // src and dst, so it appears inbound AND outbound (both directions are
-    // distinct traversals). ResidentialAddress touches neither -> excluded.
-    // inbound: Directorship, CorporateOwnership  (2)
-    // outbound: CorporateOwnership, RegisteredAddress (2)
-    expect(queries).toHaveLength(4);
+    // A wildcard `-[]-` binds every incident rel type in one traversal, so the
+    // query count is one inbound + one outbound regardless of how many rel types
+    // touch Company. The same holds for a single rel type or a dozen.
+    expect(queries).toHaveLength(2);
+    const single = NeighborsFetcher._buildNeighborCountQueries({
+      tableName: "Company",
+      primaryKeyName: "id",
+      relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
+    });
+    expect(single).toHaveLength(2);
   });
 
   it("does not scale query count with the number of source nodes", () => {
@@ -72,11 +75,12 @@ describe("_buildNeighborCountQueries", () => {
       // Returns pk + dst node only.
       expect(q).toContain("RETURN src.`id` AS pk, dst;");
       // Never binds or returns the relationship variable `r` or a `sources`
-      // struct (the divergent-STRUCT binding hazard).
+      // struct — the relationship is bound anonymously, so only NODE columns
+      // cross the wire.
       expect(q).not.toMatch(/\br\b/);
       expect(q).not.toContain("sources");
-      // The relationship is bound anonymously, one concrete type at a time.
-      expect(q).toMatch(/-\[:`[A-Za-z]+`\]->/);
+      // The relationship is bound anonymously via a wildcard `-[]->`.
+      expect(q).toMatch(/-\[\]->/);
     });
   });
 
@@ -86,34 +90,23 @@ describe("_buildNeighborCountQueries", () => {
       primaryKeyName: "pk name",
       relTables: [{ name: "Rel Type", connectivity: [{ src: "Weird Table", dst: "Other" }] }],
     });
-    expect(queries).toHaveLength(1);
-    expect(queries[0]).toContain("(src:`Weird Table`)");
-    expect(queries[0]).toContain("`pk name`");
-    expect(queries[0]).toContain("-[:`Rel Type`]->");
+    expect(queries).toHaveLength(2);
+    queries.forEach(q => {
+      expect(q).toContain("(src:`Weird Table`)");
+      expect(q).toContain("`pk name`");
+    });
   });
 
-  it("produces a correct inbound query shape", () => {
+  it("produces the correct inbound and outbound wildcard query shapes", () => {
     const queries = NeighborsFetcher._buildNeighborCountQueries({
       tableName: "Company",
       primaryKeyName: "id",
-      relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
+      relTables,
     });
-    expect(queries).toHaveLength(1);
-    expect(queries[0]).toBe(
-      "UNWIND $pks AS pk MATCH (dst) -[:`Directorship`]-> (src:`Company`) WHERE src.`id` = pk RETURN src.`id` AS pk, dst;"
-    );
-  });
-
-  it("produces a correct outbound query shape", () => {
-    const queries = NeighborsFetcher._buildNeighborCountQueries({
-      tableName: "Company",
-      primaryKeyName: "id",
-      relTables: [{ name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] }],
-    });
-    expect(queries).toHaveLength(1);
-    expect(queries[0]).toBe(
-      "UNWIND $pks AS pk MATCH (src:`Company`) -[:`RegisteredAddress`]-> (dst) WHERE src.`id` = pk RETURN src.`id` AS pk, dst;"
-    );
+    expect(queries).toEqual([
+      "UNWIND $pks AS pk MATCH (dst) -[]-> (src:`Company`) WHERE src.`id` = pk RETURN src.`id` AS pk, dst;",
+      "UNWIND $pks AS pk MATCH (src:`Company`) -[]-> (dst) WHERE src.`id` = pk RETURN src.`id` AS pk, dst;",
+    ]);
   });
 
   it("throws when relTables is not an array", () => {
@@ -140,11 +133,30 @@ describe("fetchNeighborNodesBatched", () => {
       ],
     });
 
-    // 2 rel types -> exactly 2 requests, regardless of the 3 pks.
+    // One wildcard query per direction (inbound + outbound) -> exactly 2
+    // requests, regardless of the 2 rel types or the 3 pks.
     expect(runSpy).toHaveBeenCalledTimes(2);
     runSpy.mock.calls.forEach(([, params]) => {
       expect(params).toEqual({ pks: ["c1", "c2", "c3"] });
     });
+    runSpy.mockRestore();
+  });
+
+  it("issues two requests per chunk regardless of how many rel types touch the node", async () => {
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValue({ rows: [], dataTypes: {} });
+
+    // The full Horkos-shaped set touches Company via several rel types, but the
+    // wildcard collapses them to one inbound + one outbound query -> 2 requests
+    // for a single chunk of pks.
+    await NeighborsFetcher.fetchNeighborNodesBatched({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValues: ["c1", "c2", "c3"],
+      relTables,
+    });
+    expect(runSpy).toHaveBeenCalledTimes(2);
     runSpy.mockRestore();
   });
 
@@ -190,8 +202,8 @@ describe("fetchNeighborNodesBatched", () => {
       .spyOn(NeighborsFetcher, "_runQuery")
       .mockResolvedValue({ rows: [], dataTypes: {} });
 
-    // 60 pks with a chunk size of 25 -> 3 chunks (25 + 25 + 10). One rel type
-    // means one query per chunk, so 3 requests total (not 1, and not 60).
+    // 60 pks with a chunk size of 25 -> 3 chunks (25 + 25 + 10). Two wildcard
+    // direction-queries per chunk -> 6 requests total (not 3, and never 60).
     const pks = Array.from({ length: 60 }, (_, i) => `c${i}`);
     await NeighborsFetcher.fetchNeighborNodesBatched({
       tableName: "Company",
@@ -202,12 +214,16 @@ describe("fetchNeighborNodesBatched", () => {
       ],
     });
 
-    expect(runSpy).toHaveBeenCalledTimes(3);
-    // Each chunk stays at or below the chunk size, and the chunks partition the
-    // full pk list exactly (no pk dropped, none duplicated across chunks).
+    expect(runSpy).toHaveBeenCalledTimes(6);
+    // Each direction-query for a chunk carries that chunk's pks; the DISTINCT
+    // chunks partition the full pk list exactly (no pk dropped, none duplicated).
+    // Two queries per chunk means each chunk's pk list appears twice, so dedupe
+    // consecutive pairs before checking the partition.
     const chunks = runSpy.mock.calls.map(([, params]) => params.pks);
-    expect(chunks.map(c => c.length)).toEqual([25, 25, 10]);
-    expect(chunks.flat()).toEqual(pks);
+    // Chunk boundaries: [25, 25, 10] each appearing twice (inbound + outbound).
+    expect(chunks.map(c => c.length)).toEqual([25, 25, 25, 25, 10, 10]);
+    const distinctChunks = [chunks[0], chunks[2], chunks[4]];
+    expect(distinctChunks.flat()).toEqual(pks);
     runSpy.mockRestore();
   });
 
@@ -246,7 +262,10 @@ describe("fetchNeighborNodesBatched", () => {
       ],
     });
 
-    expect(runSpy).toHaveBeenCalledTimes(2);
+    // 2 chunks x 2 wildcard direction-queries = 4 requests; only the first two
+    // return rows (the rest resolve undefined and are tolerated). Rows key by
+    // their source pk, so which query returned them is irrelevant to the merge.
+    expect(runSpy).toHaveBeenCalledTimes(4);
     expect(byPk.c0.map(n => encodeId(n._id)).sort()).toEqual(["1_10", "1_11"]);
     expect(byPk.c25.map(n => encodeId(n._id))).toEqual(["1_12"]);
     runSpy.mockRestore();
@@ -256,7 +275,7 @@ describe("fetchNeighborNodesBatched", () => {
     const nodeA = { _id: { table: 1, offset: 10 }, _label: "Address" };
     const nodeP = { _id: { table: 2, offset: 5 }, _label: "Person" };
 
-    // A single pk with two rel types produces two queries * one chunk = two
+    // A single pk with two wildcard direction-queries * one chunk = two
     // requests. Both results carry the same source pk and must accumulate.
     const runSpy = vi
       .spyOn(NeighborsFetcher, "_runQuery")
@@ -703,6 +722,83 @@ describe("new-only neighbour count semantics", () => {
   });
 });
 
+describe("fetchNeighbors query collapse", () => {
+  // A schema-realistic set where the focus table is incident to MANY rel types
+  // in both directions — the fan-out the wildcard collapse targets. Company is
+  // src of RegisteredAddress + both self-referential rels, and dst of two more.
+  const denseRels = [
+    { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
+    { name: "PersonOwnership", connectivity: [{ src: "Person", dst: "Company" }] },
+    { name: "PersonInfluence", connectivity: [{ src: "Person", dst: "Company" }] },
+    { name: "CorporateOwnership", connectivity: [{ src: "Company", dst: "Company" }] },
+    { name: "CorporateInfluence", connectivity: [{ src: "Company", dst: "Company" }] },
+    { name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] },
+    { name: "CompanyAmbiguousLink", connectivity: [{ src: "Company", dst: "VirtualHub" }] },
+  ];
+
+  it("issues exactly two queries (one per direction) instead of one per rel type", async () => {
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValue({ rows: [], dataTypes: { r: "REL", dst: "NODE" } });
+
+    // Pre-collapse this would have been ~9 queries (one per incident rel type
+    // per direction); the wildcard collapses it to a fixed 2.
+    await NeighborsFetcher.fetchNeighbors({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValue: "c1",
+      relTables: denseRels,
+      sizeLimit: 100,
+    });
+
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    // One inbound wildcard, one outbound wildcard — no rel-type label bound.
+    const [inboundQuery] = runSpy.mock.calls[0];
+    const [outboundQuery] = runSpy.mock.calls[1];
+    expect(inboundQuery).toBe(
+      "MATCH (dst) -[r]-> (src:`Company`) WHERE src.`id` = $pk RETURN r, dst LIMIT 100;"
+    );
+    expect(outboundQuery).toBe(
+      "MATCH (src:`Company`) -[r]-> (dst) WHERE src.`id` = $pk RETURN r, dst LIMIT 100;"
+    );
+    // The pk value is always bound, never interpolated.
+    runSpy.mock.calls.forEach(([, params]) => expect(params).toEqual({ pk: "c1" }));
+    runSpy.mockRestore();
+  });
+
+  it("merges a heterogeneous wildcard result (edges of several rel types) into one row set", async () => {
+    // The core premise of the collapse: a single wildcard query returns edges of
+    // MULTIPLE rel types (with divergent property shapes) in one REL column. The
+    // fetcher must merge them without dropping any, keyed only by row shape.
+    const ownership = { r: { _id: { table: 7, offset: 1 }, _label: "CorporateOwnership" }, dst: { _id: { table: 3, offset: 1 }, _label: "Company" } };
+    const influence = { r: { _id: { table: 8, offset: 1 }, _label: "CorporateInfluence" }, dst: { _id: { table: 3, offset: 2 }, _label: "Company" } };
+    const address = { r: { _id: { table: 6, offset: 1 }, _label: "RegisteredAddress" }, dst: { _id: { table: 1, offset: 1 }, _label: "Address" } };
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      // inbound: empty; outbound: a single wildcard result carrying 3 rel types.
+      .mockResolvedValueOnce({ rows: [], dataTypes: { r: "REL", dst: "NODE" } })
+      .mockResolvedValueOnce({
+        rows: [ownership, influence, address],
+        dataTypes: { r: "REL", dst: "NODE" },
+      });
+
+    const result = await NeighborsFetcher.fetchNeighbors({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValue: "c1",
+      relTables: denseRels,
+      sizeLimit: 100,
+    });
+
+    expect(result.rows).toHaveLength(3);
+    const relLabels = result.rows.map(row => row.r._label).sort();
+    expect(relLabels).toEqual(["CorporateInfluence", "CorporateOwnership", "RegisteredAddress"]);
+    expect(result.truncated).toBe(false);
+    expect(result.incomplete).toBeFalsy();
+    runSpy.mockRestore();
+  });
+});
+
 describe("fetchNeighbors truncation flag", () => {
   // Neighbour fixtures: a handful of DISTINCT nodes that many edge rows point
   // at, so a full fetch window can collapse to far fewer entities.
@@ -719,12 +815,14 @@ describe("fetchNeighbors truncation flag", () => {
     // 5 edge rows (= sizeLimit) over only 2 distinct neighbours: an
     // entity-level consumer collapsing these lands well below any entity cap,
     // but edges beyond the window were never fetched — truncated must be true.
+    // The inbound wildcard query fills the window; the outbound one is empty.
     const runSpy = vi
       .spyOn(NeighborsFetcher, "_runQuery")
       .mockResolvedValueOnce({
         rows: makeRows(5, [person1, person2]),
         dataTypes: { r: "REL", dst: "NODE" },
-      });
+      })
+      .mockResolvedValueOnce({ rows: [], dataTypes: { r: "REL", dst: "NODE" } });
 
     const result = await NeighborsFetcher.fetchNeighbors({
       tableName: "Company",
@@ -811,16 +909,22 @@ describe("fetchNeighbors truncation flag", () => {
 });
 
 describe("_buildNeighborQueries", () => {
-  it("emits one query per relevant rel type per direction (never per node)", () => {
+  it("emits exactly two queries (one per direction), independent of rel-type count", () => {
     const queries = NeighborsFetcher._buildNeighborQueries({
       tableName: "Company",
       primaryKeyName: "id",
       relTables,
     });
-    // Same connectivity accounting as _buildNeighborCountQueries:
-    // inbound: Directorship, CorporateOwnership (2)
-    // outbound: CorporateOwnership, RegisteredAddress (2)
-    expect(queries).toHaveLength(4);
+    // A wildcard `-[r]-` binds every incident rel type in one traversal, so it
+    // is one inbound + one outbound query regardless of how many rel types touch
+    // Company — and the same for a single rel type.
+    expect(queries).toHaveLength(2);
+    const single = NeighborsFetcher._buildNeighborQueries({
+      tableName: "Company",
+      primaryKeyName: "id",
+      relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
+    });
+    expect(single).toHaveLength(2);
   });
 
   it("projects the pk, the edge r, AND the neighbour node dst", () => {
@@ -832,42 +936,36 @@ describe("_buildNeighborQueries", () => {
     queries.forEach(q => {
       expect(q).toContain("UNWIND $pks AS pk");
       // Unlike the count builder, this one binds AND returns the edge var `r`
-      // alongside dst so edges draw.
+      // alongside dst so edges draw. `r` is a wildcard (no rel-type label), which
+      // binds all incident rel types at once.
       expect(q).toContain("RETURN src.`id` AS pk, r, dst;");
-      expect(q).toMatch(/-\[r:`[A-Za-z]+`\]->/);
+      expect(q).toMatch(/-\[r\]->/);
     });
   });
 
-  it("produces correct inbound and outbound query shapes", () => {
-    const inbound = NeighborsFetcher._buildNeighborQueries({
+  it("produces correct inbound and outbound wildcard query shapes", () => {
+    const queries = NeighborsFetcher._buildNeighborQueries({
       tableName: "Company",
       primaryKeyName: "id",
-      relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
+      relTables,
     });
-    expect(inbound).toEqual([
-      "UNWIND $pks AS pk MATCH (dst) -[r:`Directorship`]-> (src:`Company`) WHERE src.`id` = pk RETURN src.`id` AS pk, r, dst;",
-    ]);
-
-    const outbound = NeighborsFetcher._buildNeighborQueries({
-      tableName: "Company",
-      primaryKeyName: "id",
-      relTables: [{ name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] }],
-    });
-    expect(outbound).toEqual([
-      "UNWIND $pks AS pk MATCH (src:`Company`) -[r:`RegisteredAddress`]-> (dst) WHERE src.`id` = pk RETURN src.`id` AS pk, r, dst;",
+    expect(queries).toEqual([
+      "UNWIND $pks AS pk MATCH (dst) -[r]-> (src:`Company`) WHERE src.`id` = pk RETURN src.`id` AS pk, r, dst;",
+      "UNWIND $pks AS pk MATCH (src:`Company`) -[r]-> (dst) WHERE src.`id` = pk RETURN src.`id` AS pk, r, dst;",
     ]);
   });
 
-  it("escapes the node table, primary-key, and rel-type identifiers", () => {
+  it("escapes the node table and primary-key identifiers", () => {
     const queries = NeighborsFetcher._buildNeighborQueries({
       tableName: "Weird Table",
       primaryKeyName: "pk name",
       relTables: [{ name: "Rel Type", connectivity: [{ src: "Weird Table", dst: "Other" }] }],
     });
-    expect(queries).toHaveLength(1);
-    expect(queries[0]).toContain("(src:`Weird Table`)");
-    expect(queries[0]).toContain("`pk name`");
-    expect(queries[0]).toContain("-[r:`Rel Type`]->");
+    expect(queries).toHaveLength(2);
+    queries.forEach(q => {
+      expect(q).toContain("(src:`Weird Table`)");
+      expect(q).toContain("`pk name`");
+    });
   });
 
   it("throws when relTables is not an array", () => {
@@ -916,7 +1014,8 @@ describe("fetchNeighborsBatched", () => {
       .spyOn(NeighborsFetcher, "_runQuery")
       .mockResolvedValue({ rows: [], dataTypes: { pk: "STRING", r: "REL", dst: "NODE" } });
 
-    // 60 pks, chunk size 25 -> 3 chunks. One rel type -> 3 requests.
+    // 60 pks, chunk size 25 -> 3 chunks. Two wildcard direction-queries per
+    // chunk -> 6 requests.
     const pks = Array.from({ length: 60 }, (_, i) => `c${i}`);
     await NeighborsFetcher.fetchNeighborsBatched({
       tableName: "Company",
@@ -925,10 +1024,13 @@ describe("fetchNeighborsBatched", () => {
       relTables: [{ name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] }],
     });
 
-    expect(runSpy).toHaveBeenCalledTimes(3);
+    expect(runSpy).toHaveBeenCalledTimes(6);
     const chunks = runSpy.mock.calls.map(([, params]) => params.pks);
-    expect(chunks.map(c => c.length)).toEqual([25, 25, 10]);
-    expect(chunks.flat()).toEqual(pks);
+    // Each chunk's pks appear twice (inbound + outbound). Dedupe consecutive
+    // pairs to recover the exact partition of the pk list.
+    expect(chunks.map(c => c.length)).toEqual([25, 25, 25, 25, 10, 10]);
+    const distinctChunks = [chunks[0], chunks[2], chunks[4]];
+    expect(distinctChunks.flat()).toEqual(pks);
     runSpy.mockRestore();
   });
 
@@ -976,9 +1078,12 @@ describe("fetchNeighborsBatched", () => {
       r: { _id: { table: 6, offset: i }, _label: "RegisteredAddress" },
       dst: { _id: { table: 1, offset: i }, _label: "Address" },
     }));
+    // The inbound wildcard query returns the capped chunk; the outbound one
+    // returns an honest empty result (so incomplete stays false).
     const runSpy = vi
       .spyOn(NeighborsFetcher, "_runQuery")
-      .mockResolvedValueOnce({ rows: capRows, dataTypes: { pk: "STRING", r: "REL", dst: "NODE" } });
+      .mockResolvedValueOnce({ rows: capRows, dataTypes: { pk: "STRING", r: "REL", dst: "NODE" } })
+      .mockResolvedValueOnce({ rows: [], dataTypes: { pk: "STRING", r: "REL", dst: "NODE" } });
 
     const result = await NeighborsFetcher.fetchNeighborsBatched({
       tableName: "Company",

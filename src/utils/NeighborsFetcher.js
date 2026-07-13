@@ -1,22 +1,24 @@
 import Axios from "@/utils/AxiosWrapper";
 import DataDefinitionLanguage from "./DataDefinitionLanguage";
 
-// Max number of source pks bound into a single batched neighbour-count query.
+// Max number of source pks bound into a single batched neighbour query.
 //
-// Each batched query returns ONE row per (source pk, neighbour node) pair for a
-// single rel type, and the server hard-caps every result to
+// Each batched query is ONE wildcard traversal per direction, so it returns one
+// row per (source pk, neighbour node) pair across ALL rel types incident to the
+// source in that direction, and the server hard-caps every result to
 // KUZU_QUERY_SIZE_LIMIT (default 10000 rows) and SILENTLY truncates the rest.
-// So a chunk's row count is `chunkSize x (max neighbours of one rel type per
-// source node)`. Chunking the pk list keeps each request well under the cap so
-// a dense group can't be truncated and undercounted.
+// So a chunk's row count is `chunkSize x (total neighbours of the source across
+// all rel types, per direction)`. Chunking the pk list keeps each request well
+// under the cap so a dense group can't be truncated and undercounted.
 //
 // 25 leaves generous headroom: a chunk only risks the 10000-row cap if a single
-// source node has more than ~400 neighbours of ONE concrete rel type (10000/25),
-// far beyond anything in this domain (a company's directors, a person's
-// directorships, an address's residents). Requests now scale with
-// (ceil(N/25) x rel types) instead of rel types alone, but for a typical canvas
-// of a few dozen leaf nodes that is one or two chunks. Results merge safely
-// because they are keyed by source pk (see fetchNeighborNodesBatched).
+// source node has more than ~400 neighbours in ONE direction (10000/25) summed
+// over every rel type, far beyond anything in this domain (a company's directors
+// + owners + address, a person's directorships, an address's residents).
+// Requests now scale with (ceil(N/25) x 2 directions) instead of rel types, but
+// for a typical canvas of a few dozen leaf nodes that is one or two chunks.
+// Results merge safely because they are keyed by source pk (see
+// fetchNeighborNodesBatched).
 //
 // Assumes the default KUZU_QUERY_SIZE_LIMIT of 10000; the server-only limit is
 // not cleanly readable from this client-side fetcher, so an operator who sets
@@ -35,10 +37,19 @@ const NEIGHBOR_COUNT_PK_CHUNK_SIZE = 25;
 // KUZU_QUERY_SIZE_LIMIT lower should lower NEIGHBOR_COUNT_PK_CHUNK_SIZE to match.
 const NEIGHBOR_BATCH_ROW_CAP = 10000;
 
-// Kuzu cannot bind a wildcard relationship variable across edge tables whose
-// same-named STRUCT properties differ in shape (e.g. the Ownership vs
-// Influence `sources` structs), so every fetch here runs one query per
-// concrete relationship type and merges the rows client-side.
+// A wildcard relationship variable (`-[r]-`) now binds ACROSS all edge tables
+// incident to a node in a single query: the graph build unified the previously
+// divergent same-named STRUCT properties (e.g. the Ownership vs Influence
+// `sources` structs) into one shape, so a heterogeneous `r` — edges of several
+// rel types with different destination node tables — serializes cleanly and its
+// column reports as REL, which the graph extractor already handles per row.
+//
+// The neighbour-expansion fetches below therefore issue ONE query per direction
+// (inbound + outbound) instead of one per concrete rel type per direction, which
+// on the Horkos schema collapses a single-node expand from ~9 sub-queries to 2.
+// The rel-relating fetches (`fetchRelsBetween*`) still bind one concrete type at
+// a time: they filter to the rel types connecting a specific pair of node tables
+// and match undirected, so per-type binding stays simplest there.
 class NeighborsFetcher {
   // A failed sub-query returns this sentinel instead of a bare `null`, so a
   // transport failure (load-shed 503, rate-limit 429, timeout 408, bad query
@@ -120,31 +131,30 @@ class NeighborsFetcher {
     const escapedPk = DataDefinitionLanguage._escapeName(primaryKeyName);
     const params = { pk: this._unwrapPrimaryKeyValue(primaryKeyValue) };
 
-    // Connectivity is matched on the raw table name; only escaped names are
-    // interpolated into queries.
-    const inboundQueries = relTables
-      .filter(t => (t.connectivity || []).some(c => c.dst === tableName))
-      .map(t =>
-        `MATCH (dst) -[r:${DataDefinitionLanguage._escapeName(t.name)}]-> (src:${escapedTable}) WHERE src.${escapedPk} = $pk RETURN r, dst LIMIT ${sizeLimit};`
-      );
-    const outboundQueries = relTables
-      .filter(t => (t.connectivity || []).some(c => c.src === tableName))
-      .map(t =>
-        `MATCH (src:${escapedTable}) -[r:${DataDefinitionLanguage._escapeName(t.name)}]-> (dst) WHERE src.${escapedPk} = $pk RETURN r, dst LIMIT ${sizeLimit};`
-      );
+    // One wildcard query per direction binds EVERY rel type incident to this
+    // node table at once (relTables is no longer needed to pick queries — the
+    // wildcard match walks whatever concrete types actually exist). The LIMIT is
+    // applied in-query per direction so a high-degree node can't ship more than
+    // sizeLimit rows for a direction; `_mergeResults` re-caps defensively. Only
+    // escaped identifiers are interpolated; the pk value rides as $pk.
+    const inboundQuery =
+      `MATCH (dst) -[r]-> (src:${escapedTable}) WHERE src.${escapedPk} = $pk RETURN r, dst LIMIT ${sizeLimit};`;
+    const outboundQuery =
+      `MATCH (src:${escapedTable}) -[r]-> (dst) WHERE src.${escapedPk} = $pk RETURN r, dst LIMIT ${sizeLimit};`;
 
-    const [inboundResults, outboundResults] = await Promise.all([
-      Promise.all(inboundQueries.map(query => this._runQuery(query, params))),
-      Promise.all(outboundQueries.map(query => this._runQuery(query, params))),
+    const [inboundResult, outboundResult] = await Promise.all([
+      this._runQuery(inboundQuery, params),
+      this._runQuery(outboundQuery, params),
     ]);
 
-    // Cap each direction at sizeLimit so the per-type LIMITs don't multiply
-    // the per-direction total.
-    const inbound = this._mergeResults(inboundResults, sizeLimit);
-    const outbound = this._mergeResults(outboundResults, sizeLimit);
-    // A direction whose merged rows fill the whole window may have had edges
-    // cut off by the per-type LIMITs or the merge cap, so the returned rows
-    // cannot be treated as the node's complete edge set. Surfaced as
+    // Each direction is a single wildcard result now, but route it through
+    // _mergeResults so the `__failed` sentinel -> `incomplete` and the sizeLimit
+    // cap keep working exactly as before (a one-element results array).
+    const inbound = this._mergeResults([inboundResult], sizeLimit);
+    const outbound = this._mergeResults([outboundResult], sizeLimit);
+    // A direction whose rows fill the whole window may have had edges cut off by
+    // the in-query LIMIT, so the returned rows cannot be treated as the node's
+    // complete edge set. Surfaced as
     // `truncated` because callers that derive ENTITY counts from these EDGE
     // rows can collapse below any entity-level cap even when edges were
     // dropped — raw row counts are the only honest truncation signal.
@@ -177,18 +187,18 @@ class NeighborsFetcher {
     return inbound;
   }
 
-  // Build one count-query per relationship type for a batch of source nodes
-  // that all share a single node table + primary-key column. Each query takes
-  // the whole pk list via `UNWIND $pks AS pk` and returns one row per
-  // (source pk, neighbour node) pair as `pk, dst`.
+  // Build the batched neighbour-count queries for a set of source nodes that all
+  // share a single node table + primary-key column: ONE inbound + ONE outbound
+  // query, each taking the whole pk list via `UNWIND $pks AS pk` and returning
+  // one row per (source pk, neighbour node) pair as `pk, dst`.
   //
-  // We project the neighbour NODE (`dst`) — never the relationship `r` or its
-  // `sources` STRUCT — so the divergent-struct binding problem never arises: a
-  // single concrete rel type has one shape, and we bind it anonymously. This is
-  // what lets us count all N nodes in M requests (one per rel type) instead of
-  // N x M. The neighbour node is needed (rather than a raw `count(*)`) so the
-  // caller can encode each neighbour's internal id and apply the same
-  // "new neighbours only" filter the per-node path uses.
+  // A wildcard `-[]-` binds every rel type incident to the node in one query
+  // (relTables is no longer needed to enumerate types — kept only for the caller
+  // signature and the array-shape guard). We project the neighbour NODE (`dst`)
+  // rather than a raw `count(*)` so the caller can encode each neighbour's
+  // internal id and apply the same "new neighbours only" filter the per-node
+  // path uses. The relationship is bound anonymously (no `r`), so only NODE
+  // columns cross the wire here.
   _buildNeighborCountQueries({ tableName, primaryKeyName, relTables }) {
     if (!Array.isArray(relTables)) {
       throw new Error("_buildNeighborCountQueries requires relTables (schema.relTables)");
@@ -196,28 +206,22 @@ class NeighborsFetcher {
     const escapedTable = DataDefinitionLanguage._escapeName(tableName);
     const escapedPk = DataDefinitionLanguage._escapeName(primaryKeyName);
 
-    // Connectivity is matched on the raw table name; only escaped names are
-    // interpolated into queries.
-    const inbound = relTables
-      .filter(t => (t.connectivity || []).some(c => c.dst === tableName))
-      .map(t =>
-        `UNWIND $pks AS pk MATCH (dst) -[:${DataDefinitionLanguage._escapeName(t.name)}]-> (src:${escapedTable}) WHERE src.${escapedPk} = pk RETURN src.${escapedPk} AS pk, dst;`
-      );
-    const outbound = relTables
-      .filter(t => (t.connectivity || []).some(c => c.src === tableName))
-      .map(t =>
-        `UNWIND $pks AS pk MATCH (src:${escapedTable}) -[:${DataDefinitionLanguage._escapeName(t.name)}]-> (dst) WHERE src.${escapedPk} = pk RETURN src.${escapedPk} AS pk, dst;`
-      );
+    // Only escaped identifiers are interpolated; pk values ride as $pks.
+    const inbound =
+      `UNWIND $pks AS pk MATCH (dst) -[]-> (src:${escapedTable}) WHERE src.${escapedPk} = pk RETURN src.${escapedPk} AS pk, dst;`;
+    const outbound =
+      `UNWIND $pks AS pk MATCH (src:${escapedTable}) -[]-> (dst) WHERE src.${escapedPk} = pk RETURN src.${escapedPk} AS pk, dst;`;
 
-    return [...inbound, ...outbound];
+    return [inbound, outbound];
   }
 
   // Batched neighbour lookup for a set of source nodes that all live in one
   // node table. Returns a map of `primaryKeyValue -> [neighbourNode, ...]`
   // (every distinct neighbour node found across all rel types for that source),
   // so the caller can encode ids, drop neighbours already on the canvas, and
-  // count. Requests scale with the number of rel types, NOT the number of
-  // source nodes.
+  // count. Requests scale with the two traversal directions x chunk count
+  // (two wildcard queries per chunk), NOT with the number of source nodes or
+  // rel types.
   async fetchNeighborNodesBatched({
     tableName,
     primaryKeyName,
@@ -277,14 +281,19 @@ class NeighborsFetcher {
     return neighborsByPk;
   }
 
-  // Build one query per relationship type per direction that projects BOTH the
-  // edge `r` AND the neighbour node `dst` — the batched analogue of the
-  // per-node `fetchNeighbors` queries. `src.pk` is projected so the caller can
-  // re-associate each neighbour/edge with the source node that introduced it
-  // (needed for `nodeIntroducedBy` provenance, per-source `expansions` undo
-  // entries, and the batch-expand history entry). Each query binds a single
-  // concrete rel type, so the divergent-STRUCT wildcard-binding hazard never
-  // arises. Pure over its inputs (no I/O), so it is unit-testable without a DB.
+  // Build the batched neighbour-expansion queries — the batched analogue of the
+  // per-node `fetchNeighbors` queries: ONE inbound + ONE outbound query, each
+  // projecting BOTH the edge `r` AND the neighbour node `dst`. `src.pk` is
+  // projected so the caller can re-associate each neighbour/edge with the source
+  // node that introduced it (needed for `nodeIntroducedBy` provenance, per-source
+  // `expansions` undo entries, and the batch-expand history entry).
+  //
+  // A wildcard `-[r]-` binds every rel type incident to the node in one query;
+  // the graph build unified the divergent same-named STRUCT properties, so a
+  // heterogeneous `r` serializes cleanly and its column reports as REL for the
+  // extractor. relTables is no longer needed to enumerate types (kept only for
+  // the signature and the array-shape guard). Pure over its inputs (no I/O), so
+  // it is unit-testable without a DB.
   _buildNeighborQueries({ tableName, primaryKeyName, relTables }) {
     if (!Array.isArray(relTables)) {
       throw new Error("_buildNeighborQueries requires relTables (schema.relTables)");
@@ -292,33 +301,26 @@ class NeighborsFetcher {
     const escapedTable = DataDefinitionLanguage._escapeName(tableName);
     const escapedPk = DataDefinitionLanguage._escapeName(primaryKeyName);
 
-    // Connectivity is matched on the raw table name; only escaped names are
-    // interpolated into queries.
-    const inbound = relTables
-      .filter(t => (t.connectivity || []).some(c => c.dst === tableName))
-      .map(t =>
-        `UNWIND $pks AS pk MATCH (dst) -[r:${DataDefinitionLanguage._escapeName(t.name)}]-> (src:${escapedTable}) WHERE src.${escapedPk} = pk RETURN src.${escapedPk} AS pk, r, dst;`
-      );
-    const outbound = relTables
-      .filter(t => (t.connectivity || []).some(c => c.src === tableName))
-      .map(t =>
-        `UNWIND $pks AS pk MATCH (src:${escapedTable}) -[r:${DataDefinitionLanguage._escapeName(t.name)}]-> (dst) WHERE src.${escapedPk} = pk RETURN src.${escapedPk} AS pk, r, dst;`
-      );
+    // Only escaped identifiers are interpolated; pk values ride as $pks.
+    const inbound =
+      `UNWIND $pks AS pk MATCH (dst) -[r]-> (src:${escapedTable}) WHERE src.${escapedPk} = pk RETURN src.${escapedPk} AS pk, r, dst;`;
+    const outbound =
+      `UNWIND $pks AS pk MATCH (src:${escapedTable}) -[r]-> (dst) WHERE src.${escapedPk} = pk RETURN src.${escapedPk} AS pk, r, dst;`;
 
-    return [...inbound, ...outbound];
+    return [inbound, outbound];
   }
 
   // Batched neighbour expansion for a set of source nodes that all live in one
   // node table. Runs the `UNWIND $pks` queries from `_buildNeighborQueries`
-  // (one per rel type per direction, chunked at NEIGHBOR_COUNT_PK_CHUNK_SIZE)
+  // (one wildcard traversal per direction, chunked at NEIGHBOR_COUNT_PK_CHUNK_SIZE)
   // and merges them into a SINGLE `{ rows, dataTypes, incomplete, truncated }`
   // result the caller can feed straight into the same `addDataWithQueryResult`
   // path the per-node expand uses — each row is `{ pk, r, dst }`, so the graph
   // extractor draws both the edge and the neighbour node.
   //
-  // Request count scales with (rel types x directions x chunks), NOT with the
-  // number of source nodes, so a large multi-node expand can no longer trip the
-  // server's in-flight-query load-shed guard.
+  // Request count scales with (2 directions x chunks), NOT with the number of
+  // source nodes or rel types, so a large multi-node expand can no longer trip
+  // the server's in-flight-query load-shed guard.
   //
   // - `incomplete` is true if ANY constituent sub-query failed (a shed/timeout/
   //   error), so the caller can bail all-or-nothing before touching the canvas.
