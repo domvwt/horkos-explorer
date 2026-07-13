@@ -396,11 +396,18 @@ export function extractGraphFromQueryResult(queryResult, schema, settingsStore, 
     }
 
     const relId = encodeId(rawRel._id);
-    const numberOfOverlappingRels = increaseRelCounter(rawRel._src, rawRel._dst);
 
+    // Dedup before bumping the overlap counter. One edge _id can arrive more
+    // than once — e.g. an undirected self-pair match (`-[r]-` with the same pk
+    // list on both ends) returns each edge in both orientations. A discarded
+    // duplicate must not advance the per-node-pair overlap count, or it would
+    // over-curve the genuinely-parallel edges sharing that pair. Counting only
+    // edges we actually build keeps the offset one step per distinct _id.
     if (edges[relId]) {
       return;
     }
+
+    const numberOfOverlappingRels = increaseRelCounter(rawRel._src, rawRel._dst);
 
     const relTable = schema.relTables.find((table) => table.name === rawRel._label);
     if (!relTable) {

@@ -6,7 +6,7 @@ import {
   buildG6Edge,
   extractGraphFromQueryResult,
 } from "./GraphResultExtractor";
-import { DATA_TYPES, POSSIBLE_MATCH_STYLE } from "./Constants";
+import { DATA_TYPES, POSSIBLE_MATCH_STYLE, ARC_CURVE_OFFSETS } from "./Constants";
 
 // The extractor degrades (warn + skip) instead of crashing when the schema or
 // per-label settings haven't loaded yet; these tests pin that contract.
@@ -265,6 +265,93 @@ describe("extractGraphFromQueryResult", () => {
     expect(result.nodes).toHaveLength(2);
     expect(result.edges).toHaveLength(0);
     expect(result.counters.total).toEqual({ node: 2, rel: 0 });
+  });
+});
+
+describe("extractGraphFromQueryResult parallel-edge overlap offsetting", () => {
+  // Two people so every rel below sits between the SAME node pair (0_0, 1_0).
+  const personA = { _id: { table: 0, offset: 0 }, _label: "Person", name: "A" };
+  const personB = { _id: { table: 0, offset: 1 }, _label: "Person", name: "B" };
+
+  const overlapStore = makeSettingsStore({
+    Person: personSettings,
+    PersonOwnership: ownershipSettings,
+  });
+
+  // The overlap counter (per node pair) is not exposed directly; its effect
+  // surfaces on the built edge: the 1st edge between a pair is a plain `line`
+  // (overlapIndex 1), and each subsequent DISTINCT edge becomes a `quadratic`
+  // with curveOffset = ARC_CURVE_OFFSETS[overlapIndex - 1]. So the offset index
+  // is fully observable via edge.type + edge.style.curveOffset.
+  const makeRel = (offset, src, dst) => ({
+    _id: { table: 2, offset },
+    _label: "PersonOwnership",
+    _src: src,
+    _dst: dst,
+  });
+
+  it("fans two DISTINCT parallel edges apart at offsets 1 and 2 (no regression)", () => {
+    // Two different _id edges between the same pair — both must increment.
+    const rel0 = makeRel(0, personA._id, personB._id);
+    const rel1 = makeRel(1, personA._id, personB._id);
+    const queryResult = {
+      rows: [
+        { a: personA, r: rel0, b: personB },
+        { a: personA, r: rel1, b: personB },
+      ],
+      dataTypes: { a: DATA_TYPES.NODE, r: DATA_TYPES.REL, b: DATA_TYPES.NODE },
+    };
+
+    const result = extractGraphFromQueryResult(queryResult, schema, overlapStore, performanceSettings);
+
+    expect(result.edges).toHaveLength(2);
+    const edge0 = result.edgesMap[encodeId(rel0._id)];
+    const edge1 = result.edgesMap[encodeId(rel1._id)];
+
+    // overlapIndex 1 -> plain line, no curve.
+    expect(edge0.type).toBe("line");
+    expect(edge0.style.curveOffset).toBeUndefined();
+    // overlapIndex 2 -> quadratic with the 2nd curve offset.
+    expect(edge1.type).toBe("quadratic");
+    expect(edge1.style.curveOffset).toBe(ARC_CURVE_OFFSETS[1]);
+  });
+
+  it("does not let a duplicate edge _id inflate the overlap offset (self-pair regression)", () => {
+    // rel0 arrives TWICE, in both orientations — this simulates an undirected
+    // self-pair match (`-[r]-` with the same pk list on both ends) where Kuzu
+    // returns each edge once per orientation. rel1 is a genuinely distinct
+    // parallel edge between the same pair. The duplicate must NOT bump the
+    // counter, so the distinct edges land on offsets 1 and 2, never 1 and 3.
+    const rel0 = makeRel(0, personA._id, personB._id);
+    const rel0Reversed = makeRel(0, personB._id, personA._id); // same _id, flipped
+    const rel1 = makeRel(1, personA._id, personB._id);
+    const queryResult = {
+      rows: [
+        { a: personA, r: rel0, b: personB },
+        { a: personB, r: rel0Reversed, b: personA }, // duplicate _id, discarded
+        { a: personA, r: rel1, b: personB },
+      ],
+      dataTypes: { a: DATA_TYPES.NODE, r: DATA_TYPES.REL, b: DATA_TYPES.NODE },
+    };
+
+    const result = extractGraphFromQueryResult(queryResult, schema, overlapStore, performanceSettings);
+
+    // Only one g6 edge per distinct _id survives dedup.
+    expect(result.edges).toHaveLength(2);
+    expect(result.counters.rel).toEqual({ PersonOwnership: 2 });
+
+    const edge0 = result.edgesMap[encodeId(rel0._id)];
+    const edge1 = result.edgesMap[encodeId(rel1._id)];
+
+    // First distinct edge stays at overlapIndex 1 (plain line).
+    expect(edge0.type).toBe("line");
+    expect(edge0.style.curveOffset).toBeUndefined();
+    // Second distinct edge is at overlapIndex 2, NOT 3: the discarded duplicate
+    // did not advance the counter. Offset index 2 -> ARC_CURVE_OFFSETS[1] (60);
+    // the bug would have produced ARC_CURVE_OFFSETS[2] (-60).
+    expect(edge1.type).toBe("quadratic");
+    expect(edge1.style.curveOffset).toBe(ARC_CURVE_OFFSETS[1]);
+    expect(edge1.style.curveOffset).not.toBe(ARC_CURVE_OFFSETS[2]);
   });
 });
 
