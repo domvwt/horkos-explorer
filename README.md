@@ -1,6 +1,6 @@
-![Horkos Explorer — a browser-based network explorer for corporate-transparency research](src/assets/hero.png)
-
 # Horkos Explorer
+
+![Horkos Explorer — a browser-based network explorer for corporate-transparency research](src/assets/hero.png)
 
 Horkos Explorer is a browser-based, read-only-by-default web UI for exploring
 graph databases built by the [Horkos OSINT toolkit](https://github.com/domvwt/horkos).
