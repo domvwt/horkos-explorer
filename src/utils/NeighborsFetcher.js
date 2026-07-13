@@ -41,7 +41,7 @@ const NEIGHBOR_BATCH_ROW_CAP = 10000;
 // incident to a node in a single query: the graph build unified the previously
 // divergent same-named STRUCT properties (e.g. the Ownership vs Influence
 // `sources` structs) into one shape, so a heterogeneous `r` — edges of several
-// rel types with different destination node tables — serializes cleanly and its
+// rel types with different endpoint node tables — serializes cleanly and its
 // column reports as REL, which the graph extractor already handles per row.
 //
 // The neighbour-expansion fetches below therefore issue ONE query per direction
@@ -112,6 +112,15 @@ class NeighborsFetcher {
     return value;
   }
 
+  // Per-node neighbour expansion: every edge incident to one source node plus
+  // the node on the other end, in both directions. Issues ONE wildcard query
+  // per direction (inbound + outbound), each capped at `sizeLimit` rows, and
+  // merges them into a single `{ rows: [{ r, dst }], dataTypes, truncated,
+  // incomplete }` result. `truncated` is set when a direction fills its whole
+  // window (edges may have been cut off); `incomplete` is set when either
+  // direction's sub-query failed (shed/timeout), so the caller can distinguish
+  // a partial expansion from a genuinely empty neighbour set. Returns null only
+  // when both directions succeeded and matched zero rows.
   async fetchNeighbors({
     tableName,
     primaryKeyName,
@@ -154,10 +163,10 @@ class NeighborsFetcher {
     const outbound = this._mergeResults([outboundResult], sizeLimit);
     // A direction whose rows fill the whole window may have had edges cut off by
     // the in-query LIMIT, so the returned rows cannot be treated as the node's
-    // complete edge set. Surfaced as
-    // `truncated` because callers that derive ENTITY counts from these EDGE
-    // rows can collapse below any entity-level cap even when edges were
-    // dropped — raw row counts are the only honest truncation signal.
+    // complete edge set. Surfaced as `truncated` because callers that derive
+    // ENTITY counts from these EDGE rows can collapse below any entity-level cap
+    // even when edges were dropped — raw row counts are the only honest
+    // truncation signal.
     const truncated =
       Boolean(inbound && inbound.rows.length >= sizeLimit) ||
       Boolean(outbound && outbound.rows.length >= sizeLimit);
@@ -389,9 +398,10 @@ class NeighborsFetcher {
   // table to `otherTable`, matching in EITHER direction. The focus node is
   // pinned by its single primary key ($pk1); the other endpoints are bound as a
   // list ($pks2) via UNWIND so all edges between the focus node and every canvas
-  // node of one table are fetched in a single request per rel type. Each query
-  // projects only the relationship `r` — a single concrete type has one property
-  // shape, so the divergent-STRUCT binding hazard never arises.
+  // node of one table are fetched in a single request per rel type. Per-type
+  // binding stays simplest here: filtering to the rel types that connect this
+  // specific table pair is exactly the schema lookup below, and each query
+  // projects only the relationship `r`.
   //
   // Pure over its inputs (no I/O), so it is unit-testable without a DB.
   _buildRelsBetweenNodeAndPksQueries({
@@ -482,8 +492,9 @@ class NeighborsFetcher {
   // `tableB`, matching in EITHER direction. BOTH endpoint sets are bound as
   // lists ($pksA / $pksB) via nested UNWIND so every edge whose endpoints both
   // fall inside the two pk lists is fetched in a single request per rel type.
-  // Each query projects only the relationship `r` — a single concrete type has
-  // one property shape, so the divergent-STRUCT binding hazard never arises.
+  // Per-type binding stays simplest here: filtering to the rel types that
+  // connect this specific table pair is exactly the schema lookup below, and
+  // each query projects only the relationship `r`.
   //
   // Pure over its inputs (no I/O), so it is unit-testable without a DB.
   _buildRelsAmongPkListsQueries({

@@ -117,7 +117,7 @@ describe("_buildNeighborCountQueries", () => {
 });
 
 describe("fetchNeighborNodesBatched", () => {
-  it("binds the whole pk list as a single $pks param, once per rel type", async () => {
+  it("binds the whole pk list as a single $pks param, once per direction", async () => {
     const runSpy = vi
       .spyOn(NeighborsFetcher, "_runQuery")
       .mockResolvedValue({ rows: [], dataTypes: {} });
@@ -197,7 +197,7 @@ describe("fetchNeighborNodesBatched", () => {
     runSpy.mockRestore();
   });
 
-  it("chunks a pk list larger than the chunk size into multiple requests per rel type", async () => {
+  it("chunks a pk list larger than the chunk size into multiple requests per direction", async () => {
     const runSpy = vi
       .spyOn(NeighborsFetcher, "_runQuery")
       .mockResolvedValue({ rows: [], dataTypes: {} });
@@ -981,7 +981,7 @@ describe("fetchNeighborsBatched", () => {
     { name: "RegisteredAddress", connectivity: [{ src: "Company", dst: "Address" }] },
   ];
 
-  it("binds the whole pk list as a single $pks param, once per rel type, and merges rows", async () => {
+  it("binds the whole pk list as a single $pks param, once per direction, and merges rows", async () => {
     const rowP = { pk: "c1", r: { _id: { table: 5, offset: 1 }, _label: "Directorship" }, dst: { _id: { table: 2, offset: 1 }, _label: "Person" } };
     const rowA = { pk: "c1", r: { _id: { table: 6, offset: 1 }, _label: "RegisteredAddress" }, dst: { _id: { table: 1, offset: 1 }, _label: "Address" } };
     const runSpy = vi
@@ -1009,7 +1009,7 @@ describe("fetchNeighborsBatched", () => {
     runSpy.mockRestore();
   });
 
-  it("chunks a pk list larger than the chunk size into multiple requests per rel type", async () => {
+  it("chunks a pk list larger than the chunk size into multiple requests per direction", async () => {
     const runSpy = vi
       .spyOn(NeighborsFetcher, "_runQuery")
       .mockResolvedValue({ rows: [], dataTypes: { pk: "STRING", r: "REL", dst: "NODE" } });
