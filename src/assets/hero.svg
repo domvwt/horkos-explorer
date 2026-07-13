@@ -22,8 +22,8 @@
   <circle cx="141" cy="128" r="7" fill="#d97f27"/>
   <circle cx="165" cy="128" r="7" fill="#af7aa1"/>
   <text x="108" y="218" font-family="Lexend, Inter, 'DejaVu Sans', sans-serif" font-size="78" font-weight="700" fill="#E8EDF7">Horkos Explorer</text>
-  <text x="110" y="264" font-family="Lexend, Inter, 'DejaVu Sans', sans-serif" font-size="20" font-weight="300" fill="#8A8C91">Browser-based network explorer</text>
-  <text x="110" y="294" font-family="Lexend, Inter, 'DejaVu Sans', sans-serif" font-size="20" font-weight="300" fill="#8A8C91">for corporate-transparency research</text>
+  <text x="110" y="264" font-family="Lexend, Inter, 'DejaVu Sans', sans-serif" font-size="24" font-weight="400" fill="#B8BEC9">Browser-based network explorer</text>
+  <text x="110" y="298" font-family="Lexend, Inter, 'DejaVu Sans', sans-serif" font-size="24" font-weight="400" fill="#B8BEC9">for corporate-transparency research</text>
 
   <!-- Network motif (synthetic) -->
   <g>
