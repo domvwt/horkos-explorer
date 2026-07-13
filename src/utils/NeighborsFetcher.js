@@ -37,9 +37,11 @@ const NEIGHBOR_COUNT_PK_CHUNK_SIZE = 25;
 // The neighbour-expansion fetches below therefore issue ONE query per direction
 // (inbound + outbound) instead of one per concrete rel type per direction, which
 // on the Horkos schema collapses a single-node expand from ~9 sub-queries to 2.
-// The rel-relating fetches (`fetchRelsBetween*`) still bind one concrete type at
-// a time: they filter to the rel types connecting a specific pair of node tables
-// and match undirected, so per-type binding stays simplest there.
+// The rel-relating fetches (`fetchRelsBetween*`) likewise use the wildcard: they
+// keep the rel-table connectivity as a cheap pre-filter (does this pair of node
+// tables connect at all?) but emit ONE undirected `-[r]-` query per connected
+// table pair instead of one per surviving rel type, so a densely connected pair
+// collapses from N sub-queries to 1.
 class NeighborsFetcher {
   // A failed sub-query returns this sentinel instead of a bare `null`, so a
   // transport failure (load-shed 503, rate-limit 429, timeout 408, bad query
@@ -369,13 +371,14 @@ class NeighborsFetcher {
     };
   }
 
-  // Build one query per relationship type that can connect the focus node's
-  // table to `otherTable`, matching in EITHER direction. The focus node is
-  // pinned by its single primary key ($pk1); the other endpoints are bound as a
-  // list ($pks2) via UNWIND so all edges between the focus node and every canvas
-  // node of one table are fetched in a single request per rel type. Per-type
-  // binding stays simplest here: filtering to the rel types that connect this
-  // specific table pair is exactly the schema lookup below, and each query
+  // Build ONE wildcard query (or none) for the focus node's table paired with
+  // `otherTable`, matching in EITHER direction. The focus node is pinned by its
+  // single primary key ($pk1); the other endpoints are bound as a list ($pks2)
+  // via UNWIND so all edges between the focus node and every canvas node of one
+  // table are fetched in a single request. The rel-table connectivity is kept
+  // as a cheap pre-filter — if no rel type connects this table pair we emit no
+  // query — but the wildcard `-[r]-` binds every incident rel type at once, so a
+  // pair connected via several rel types still costs a single query. Each query
   // projects only the relationship `r`.
   //
   // Pure over its inputs (no I/O), so it is unit-testable without a DB.
@@ -394,20 +397,25 @@ class NeighborsFetcher {
     const escapedFocusPk = DataDefinitionLanguage._escapeName(focusPkName);
     const escapedOtherPk = DataDefinitionLanguage._escapeName(otherPkName);
 
-    // Connectivity is matched on the raw table names; only escaped names are
-    // interpolated into queries. A rel type is relevant if it connects the two
-    // tables in either direction.
-    return relTables
-      .filter(t =>
-        (t.connectivity || []).some(
-          c =>
-            (c.src === focusTable && c.dst === otherTable) ||
-            (c.src === otherTable && c.dst === focusTable)
-        )
+    // Connectivity is matched on the raw table names as a cheap pre-filter; a
+    // rel type is relevant if it connects the two tables in either direction.
+    // If ANY rel type connects the pair we emit ONE wildcard `-[r]-` query for
+    // it — the wildcard binds every incident rel type in a single traversal, so
+    // a pair connected via N rel types costs 1 query, not N. If nothing connects
+    // the pair we emit no query. Only escaped identifiers are interpolated; all
+    // pk values ride as bound params ($pk1/$pks2).
+    const connects = relTables.some(t =>
+      (t.connectivity || []).some(
+        c =>
+          (c.src === focusTable && c.dst === otherTable) ||
+          (c.src === otherTable && c.dst === focusTable)
       )
-      .map(t =>
-        `UNWIND $pks2 AS pk2 MATCH (a:${escapedFocus}) -[r:${DataDefinitionLanguage._escapeName(t.name)}]- (b:${escapedOther}) WHERE a.${escapedFocusPk} = $pk1 AND b.${escapedOtherPk} = pk2 RETURN r;`
-      );
+    );
+    return connects
+      ? [
+          `UNWIND $pks2 AS pk2 MATCH (a:${escapedFocus}) -[r]- (b:${escapedOther}) WHERE a.${escapedFocusPk} = $pk1 AND b.${escapedOtherPk} = pk2 RETURN r;`,
+        ]
+      : [];
   }
 
   // All edges between one focus node and a set of other nodes already on the
@@ -417,8 +425,9 @@ class NeighborsFetcher {
   // shape `{ rows: [{ r }], dataTypes }` (or null if nothing connects), matching
   // fetchRelsBetween so callers can reuse the same row-handling path.
   //
-  // Requests scale with (rel types per table pairing) x (distinct canvas
-  // tables), NOT with the number of canvas nodes.
+  // Requests scale with the number of CONNECTED canvas table pairings (one
+  // wildcard query each), NOT with the rel types per pairing nor the number of
+  // canvas nodes.
   //
   // Unlike fetchNeighborNodesBatched, $pks2 is deliberately NOT chunked: every
   // returned row is an edge incident to the ONE focus node, so a query's row
@@ -463,13 +472,14 @@ class NeighborsFetcher {
     return this._mergeResults(results);
   }
 
-  // Build one query per relationship type that can connect `tableA` to
-  // `tableB`, matching in EITHER direction. BOTH endpoint sets are bound as
-  // lists ($pksA / $pksB) via nested UNWIND so every edge whose endpoints both
-  // fall inside the two pk lists is fetched in a single request per rel type.
-  // Per-type binding stays simplest here: filtering to the rel types that
-  // connect this specific table pair is exactly the schema lookup below, and
-  // each query projects only the relationship `r`.
+  // Build ONE wildcard query (or none) for the `tableA`/`tableB` pairing,
+  // matching in EITHER direction. BOTH endpoint sets are bound as lists
+  // ($pksA / $pksB) via nested UNWIND so every edge whose endpoints both fall
+  // inside the two pk lists is fetched in a single request. The rel-table
+  // connectivity is kept as a cheap pre-filter — if no rel type connects this
+  // table pair we emit no query — but the wildcard `-[r]-` binds every incident
+  // rel type at once, so a pair connected via several rel types still costs a
+  // single query. Each query projects only the relationship `r`.
   //
   // Pure over its inputs (no I/O), so it is unit-testable without a DB.
   _buildRelsAmongPkListsQueries({
@@ -487,20 +497,25 @@ class NeighborsFetcher {
     const escapedPkA = DataDefinitionLanguage._escapeName(pkNameA);
     const escapedPkB = DataDefinitionLanguage._escapeName(pkNameB);
 
-    // Connectivity is matched on the raw table names; only escaped names are
-    // interpolated into queries. A rel type is relevant if it connects the two
-    // tables in either direction.
-    return relTables
-      .filter(t =>
-        (t.connectivity || []).some(
-          c =>
-            (c.src === tableA && c.dst === tableB) ||
-            (c.src === tableB && c.dst === tableA)
-        )
+    // Connectivity is matched on the raw table names as a cheap pre-filter; a
+    // rel type is relevant if it connects the two tables in either direction.
+    // If ANY rel type connects the pair we emit ONE wildcard `-[r]-` query for
+    // it — the wildcard binds every incident rel type in a single traversal, so
+    // a pair connected via N rel types costs 1 query, not N. If nothing connects
+    // the pair we emit no query. Only escaped identifiers are interpolated; all
+    // pk values ride as bound params ($pksA/$pksB).
+    const connects = relTables.some(t =>
+      (t.connectivity || []).some(
+        c =>
+          (c.src === tableA && c.dst === tableB) ||
+          (c.src === tableB && c.dst === tableA)
       )
-      .map(t =>
-        `UNWIND $pksA AS a_pk UNWIND $pksB AS b_pk MATCH (a:${escapedA}) -[r:${DataDefinitionLanguage._escapeName(t.name)}]- (b:${escapedB}) WHERE a.${escapedPkA} = a_pk AND b.${escapedPkB} = b_pk RETURN r;`
-      );
+    );
+    return connects
+      ? [
+          `UNWIND $pksA AS a_pk UNWIND $pksB AS b_pk MATCH (a:${escapedA}) -[r]- (b:${escapedB}) WHERE a.${escapedPkA} = a_pk AND b.${escapedPkB} = b_pk RETURN r;`,
+        ]
+      : [];
   }
 
   // All edges AMONG a set of nodes — i.e. every edge whose BOTH endpoints are
@@ -512,12 +527,12 @@ class NeighborsFetcher {
   // fetchRelsBetween/fetchRelsBetweenNodeAndMany so callers reuse the same
   // row-handling path.
   //
-  // Requests scale with (rel types per table pairing) x (unordered table
-  // pairings, including each table with itself), NOT with the number of batch
-  // nodes: one query binds two whole pk lists via nested UNWIND. Each unordered
-  // table pair is visited once (self-pairs handle same-table edges), and the
-  // undirected `-[r]-` match catches both stored directions, so no pairing is
-  // queried twice.
+  // Requests scale with the number of CONNECTED unordered table pairings
+  // (including each table with itself) — one wildcard query each — NOT with the
+  // rel types per pairing nor the number of batch nodes: one query binds two
+  // whole pk lists via nested UNWIND. Each unordered table pair is visited once
+  // (self-pairs handle same-table edges), and the undirected `-[r]-` match
+  // catches both stored directions, so no pairing is queried twice.
   async fetchRelsAmongNodes({
     nodes,
     relTables,
@@ -565,8 +580,10 @@ class NeighborsFetcher {
     return this._mergeResults(results);
   }
 
-  // All edges between two specific nodes, in either direction. Undirected
-  // per-type matches are safe: a single bound type has one property shape.
+  // All edges between two specific nodes, in either direction. One wildcard
+  // `-[r]-` query binds every incident rel type at once; both endpoints are
+  // pinned by label+pk, so it is a single hop that matches exactly the edges
+  // between the two nodes (no path expansion).
   async fetchRelsBetween({
     tableA,
     primaryKeyNameA,
@@ -587,17 +604,23 @@ class NeighborsFetcher {
       pk1: this._unwrapPrimaryKeyValue(primaryKeyValueA),
       pk2: this._unwrapPrimaryKeyValue(primaryKeyValueB),
     };
-    const queries = relTables
-      .filter(t =>
-        (t.connectivity || []).some(
-          c =>
-            (c.src === tableA && c.dst === tableB) ||
-            (c.src === tableB && c.dst === tableA)
-        )
+    // Connectivity is a cheap pre-filter: if ANY rel type connects the pair we
+    // run ONE wildcard `-[r]-` query (both endpoints pinned by label+pk, so it
+    // binds exactly the edges between them across every incident rel type in one
+    // hop); if nothing connects, we run none. Only escaped identifiers are
+    // interpolated; both pk values ride as bound params ($pk1/$pk2).
+    const connects = relTables.some(t =>
+      (t.connectivity || []).some(
+        c =>
+          (c.src === tableA && c.dst === tableB) ||
+          (c.src === tableB && c.dst === tableA)
       )
-      .map(t =>
-        `MATCH (a:${escapedA}) -[r:${DataDefinitionLanguage._escapeName(t.name)}]- (b:${escapedB}) WHERE a.${escapedPkA} = $pk1 AND b.${escapedPkB} = $pk2 RETURN r;`
-      );
+    );
+    const queries = connects
+      ? [
+          `MATCH (a:${escapedA}) -[r]- (b:${escapedB}) WHERE a.${escapedPkA} = $pk1 AND b.${escapedPkB} = $pk2 RETURN r;`,
+        ]
+      : [];
 
     const results = await Promise.all(
       queries.map(query => this._runQuery(query, params))

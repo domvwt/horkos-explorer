@@ -297,11 +297,11 @@ describe("fetchNeighborNodesBatched", () => {
 });
 
 describe("_buildRelsBetweenNodeAndPksQueries", () => {
-  it("emits one query per rel type that connects the two tables, in either direction", () => {
+  it("emits one wildcard query per connected pair, in either direction", () => {
     // Directorship connects Person<->Company (Person is focus here, Company the
     // other), CorporateOwnership is Company<->Company (irrelevant to a Person
     // focus), ResidentialAddress is Person<->Address (irrelevant to a Company
-    // other). Only Directorship qualifies.
+    // other). The pair connects, so exactly one wildcard query is emitted.
     const queries = NeighborsFetcher._buildRelsBetweenNodeAndPksQueries({
       focusTable: "Person",
       focusPkName: "id",
@@ -310,7 +310,28 @@ describe("_buildRelsBetweenNodeAndPksQueries", () => {
       relTables,
     });
     expect(queries).toHaveLength(1);
-    expect(queries[0]).toContain("-[r:`Directorship`]-");
+    expect(queries[0]).toContain("-[r]-");
+  });
+
+  it("collapses a pair connected via >=2 rel types to a single wildcard query", () => {
+    // Both Directorship and PersonOwnership connect Person<->Company. Pre-
+    // collapse this pair produced 2 per-type queries; the wildcard collapses it
+    // to exactly 1.
+    const multiRel = [
+      { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
+      { name: "PersonOwnership", connectivity: [{ src: "Person", dst: "Company" }] },
+    ];
+    const queries = NeighborsFetcher._buildRelsBetweenNodeAndPksQueries({
+      focusTable: "Person",
+      focusPkName: "id",
+      otherTable: "Company",
+      otherPkName: "id",
+      relTables: multiRel,
+    });
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toContain("(a:`Person`) -[r]- (b:`Company`)");
+    // No concrete rel-type label is bound.
+    expect(queries[0]).not.toMatch(/-\[r:/);
   });
 
   it("binds the focus pk as $pk1 and the other endpoints as an UNWIND $pks2 list", () => {
@@ -322,7 +343,7 @@ describe("_buildRelsBetweenNodeAndPksQueries", () => {
       relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
     });
     expect(queries[0]).toBe(
-      "UNWIND $pks2 AS pk2 MATCH (a:`Person`) -[r:`Directorship`]- (b:`Company`) WHERE a.`id` = $pk1 AND b.`id` = pk2 RETURN r;"
+      "UNWIND $pks2 AS pk2 MATCH (a:`Person`) -[r]- (b:`Company`) WHERE a.`id` = $pk1 AND b.`id` = pk2 RETURN r;"
     );
   });
 
@@ -338,7 +359,7 @@ describe("_buildRelsBetweenNodeAndPksQueries", () => {
       relTables: [{ name: "CorporateOwnership", connectivity: [{ src: "Company", dst: "Company" }] }],
     });
     expect(queries).toHaveLength(1);
-    expect(queries[0]).toContain("(a:`Company`) -[r:`CorporateOwnership`]- (b:`Company`)");
+    expect(queries[0]).toContain("(a:`Company`) -[r]- (b:`Company`)");
   });
 
   it("escapes identifiers and returns no queries for an unconnected table pair", () => {
@@ -363,7 +384,7 @@ describe("_buildRelsBetweenNodeAndPksQueries", () => {
     expect(escaped[0]).toContain("(b:`Other Table`)");
     expect(escaped[0]).toContain("a.`pk name` = $pk1");
     expect(escaped[0]).toContain("b.`other pk` = pk2");
-    expect(escaped[0]).toContain("-[r:`Rel Type`]-");
+    expect(escaped[0]).toContain("-[r]-");
   });
 
   it("throws when relTables is not an array", () => {
@@ -379,14 +400,14 @@ describe("_buildRelsBetweenNodeAndPksQueries", () => {
 });
 
 describe("fetchRelsBetweenNodeAndMany", () => {
-  it("runs one request per (rel type x other-table) and merges the rows", async () => {
+  it("runs one wildcard request per connected other-table and merges the rows", async () => {
     const rel1 = { _id: { table: 5, offset: 1 }, _label: "Directorship" };
     const rel2 = { _id: { table: 6, offset: 2 }, _label: "ResidentialAddress" };
     const runSpy = vi
       .spyOn(NeighborsFetcher, "_runQuery")
-      // Person focus -> Company others (Directorship)
+      // Person focus -> Company others (wildcard)
       .mockResolvedValueOnce({ rows: [{ r: rel1 }], dataTypes: { r: "REL" } })
-      // Person focus -> Address others (ResidentialAddress)
+      // Person focus -> Address others (wildcard)
       .mockResolvedValueOnce({ rows: [{ r: rel2 }], dataTypes: { r: "REL" } });
 
     const merged = await NeighborsFetcher.fetchRelsBetweenNodeAndMany({
@@ -400,15 +421,44 @@ describe("fetchRelsBetweenNodeAndMany", () => {
       relTables,
     });
 
-    // Person connects to Company via Directorship (1 query) and to Address via
-    // ResidentialAddress (1 query) -> 2 requests.
+    // Person connects to Company (1 wildcard query) and to Address (1 wildcard
+    // query) -> 2 requests, one per connected other-table.
     expect(runSpy).toHaveBeenCalledTimes(2);
-    // Focus pk is bound once as $pk1; the other endpoints ride as $pks2.
-    runSpy.mock.calls.forEach(([, params]) => {
+    // Every emitted query is a wildcard (no rel-type label bound).
+    runSpy.mock.calls.forEach(([query, params]) => {
+      expect(query).toContain("-[r]-");
+      expect(query).not.toMatch(/-\[r:/);
+      // Focus pk is bound once as $pk1; the other endpoints ride as $pks2.
       expect(params.pk1).toBe("p1");
       expect(Array.isArray(params.pks2)).toBe(true);
     });
     expect(merged.rows.map(row => encodeId(row.r._id)).sort()).toEqual(["5_1", "6_2"]);
+    runSpy.mockRestore();
+  });
+
+  it("collapses an other-table connected via >=2 rel types to a single wildcard request", async () => {
+    // Person<->Company connects via BOTH Directorship and PersonOwnership. Pre-
+    // collapse that was 2 per-type requests; the wildcard collapses to exactly 1.
+    const rel = { _id: { table: 5, offset: 1 }, _label: "Directorship" };
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValueOnce({ rows: [{ r: rel }], dataTypes: { r: "REL" } });
+
+    const merged = await NeighborsFetcher.fetchRelsBetweenNodeAndMany({
+      focusTable: "Person",
+      focusPkName: "id",
+      focusPkValue: "p1",
+      others: [{ table: "Company", primaryKeyName: "id", primaryKeyValues: ["c1"] }],
+      relTables: [
+        { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
+        { name: "PersonOwnership", connectivity: [{ src: "Person", dst: "Company" }] },
+      ],
+    });
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy.mock.calls[0][0]).toContain("(a:`Person`) -[r]- (b:`Company`)");
+    // A>B pair returns each edge exactly once: no phantom second orientation.
+    expect(merged.rows.map(row => encodeId(row.r._id))).toEqual(["5_1"]);
     runSpy.mockRestore();
   });
 
@@ -442,9 +492,9 @@ describe("fetchRelsBetweenNodeAndMany", () => {
       ],
       relTables,
     });
-    // Company has no pks -> only the Address (ResidentialAddress) query runs.
+    // Company has no pks -> only the Address wildcard query runs.
     expect(runSpy).toHaveBeenCalledTimes(1);
-    expect(runSpy.mock.calls[0][0]).toContain("-[r:`ResidentialAddress`]-");
+    expect(runSpy.mock.calls[0][0]).toContain("(a:`Person`) -[r]- (b:`Address`)");
     runSpy.mockRestore();
   });
 
@@ -461,8 +511,9 @@ describe("fetchRelsBetweenNodeAndMany", () => {
 });
 
 describe("_buildRelsAmongPkListsQueries", () => {
-  it("emits one query per rel type that connects the two tables, in either direction", () => {
-    // Person<->Company is connected only by Directorship among the set.
+  it("emits one wildcard query per connected pair, in either direction", () => {
+    // Person<->Company is connected only by Directorship among the set, but the
+    // wildcard collapses any number of connecting rel types to a single query.
     const queries = NeighborsFetcher._buildRelsAmongPkListsQueries({
       tableA: "Person",
       pkNameA: "id",
@@ -471,7 +522,26 @@ describe("_buildRelsAmongPkListsQueries", () => {
       relTables,
     });
     expect(queries).toHaveLength(1);
-    expect(queries[0]).toContain("-[r:`Directorship`]-");
+    expect(queries[0]).toContain("-[r]-");
+  });
+
+  it("collapses a pair connected via >=2 rel types to a single wildcard query", () => {
+    // Directorship AND PersonOwnership both connect Person<->Company. Pre-
+    // collapse this yielded 2 per-type queries; the wildcard collapses to 1.
+    const multiRel = [
+      { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
+      { name: "PersonOwnership", connectivity: [{ src: "Person", dst: "Company" }] },
+    ];
+    const queries = NeighborsFetcher._buildRelsAmongPkListsQueries({
+      tableA: "Person",
+      pkNameA: "id",
+      tableB: "Company",
+      pkNameB: "id",
+      relTables: multiRel,
+    });
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).toContain("(a:`Person`) -[r]- (b:`Company`)");
+    expect(queries[0]).not.toMatch(/-\[r:/);
   });
 
   it("binds both endpoint sets as UNWIND $pksA / $pksB lists", () => {
@@ -483,7 +553,7 @@ describe("_buildRelsAmongPkListsQueries", () => {
       relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
     });
     expect(queries[0]).toBe(
-      "UNWIND $pksA AS a_pk UNWIND $pksB AS b_pk MATCH (a:`Person`) -[r:`Directorship`]- (b:`Company`) WHERE a.`id` = a_pk AND b.`id` = b_pk RETURN r;"
+      "UNWIND $pksA AS a_pk UNWIND $pksB AS b_pk MATCH (a:`Person`) -[r]- (b:`Company`) WHERE a.`id` = a_pk AND b.`id` = b_pk RETURN r;"
     );
   });
 
@@ -496,7 +566,7 @@ describe("_buildRelsAmongPkListsQueries", () => {
       relTables: [{ name: "CorporateOwnership", connectivity: [{ src: "Company", dst: "Company" }] }],
     });
     expect(queries).toHaveLength(1);
-    expect(queries[0]).toContain("(a:`Company`) -[r:`CorporateOwnership`]- (b:`Company`)");
+    expect(queries[0]).toContain("(a:`Company`) -[r]- (b:`Company`)");
   });
 
   it("escapes identifiers and returns no queries for an unconnected table pair", () => {
@@ -521,7 +591,7 @@ describe("_buildRelsAmongPkListsQueries", () => {
     expect(escaped[0]).toContain("(b:`Other Table`)");
     expect(escaped[0]).toContain("a.`pk name` = a_pk");
     expect(escaped[0]).toContain("b.`other pk` = b_pk");
-    expect(escaped[0]).toContain("-[r:`Rel Type`]-");
+    expect(escaped[0]).toContain("-[r]-");
   });
 
   it("throws when relTables is not an array", () => {
@@ -558,15 +628,47 @@ describe("fetchRelsAmongNodes", () => {
       relTables,
     });
 
-    // Pairings: Person-Person (0), Person-Company (Directorship, 1),
-    // Company-Company (CorporateOwnership, 1) -> 2 requests total. Crucially
-    // this is independent of the 5 pk values in the batch.
+    // Pairings: Person-Person (unconnected, 0), Person-Company (connected, 1
+    // wildcard), Company-Company (connected, 1 wildcard) -> 2 requests total.
+    // Crucially this is independent of the 5 pk values in the batch.
     expect(runSpy).toHaveBeenCalledTimes(2);
-    runSpy.mock.calls.forEach(([, params]) => {
+    runSpy.mock.calls.forEach(([query, params]) => {
+      expect(query).toContain("-[r]-");
+      expect(query).not.toMatch(/-\[r:/);
       expect(Array.isArray(params.pksA)).toBe(true);
       expect(Array.isArray(params.pksB)).toBe(true);
     });
     expect(merged.rows.map(row => encodeId(row.r._id)).sort()).toEqual(["5_1", "7_3"]);
+    runSpy.mockRestore();
+  });
+
+  it("collapses a table pair connected via >=2 rel types to a single wildcard query, one edge per A!=B match", async () => {
+    // Person<->Company connects via BOTH Directorship and PersonOwnership. Pre-
+    // collapse the Person-Company pairing was 2 per-type queries; the wildcard
+    // collapses it to 1. The A!=B pairing binds Person on one end and Company on
+    // the other, so the single edge is returned exactly once (no phantom second
+    // orientation).
+    const edge = { _id: { table: 5, offset: 1 }, _label: "Directorship" };
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValueOnce({ rows: [{ r: edge }], dataTypes: { r: "REL" } });
+
+    const merged = await NeighborsFetcher.fetchRelsAmongNodes({
+      nodes: [
+        { table: "Person", primaryKeyName: "id", primaryKeyValues: ["p1"] },
+        { table: "Company", primaryKeyName: "id", primaryKeyValues: ["c1"] },
+      ],
+      relTables: [
+        { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
+        { name: "PersonOwnership", connectivity: [{ src: "Person", dst: "Company" }] },
+      ],
+    });
+
+    // Only the Person-Company pairing connects (Person-Person and Company-
+    // Company do not under this rel set) -> exactly 1 wildcard query.
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy.mock.calls[0][0]).toContain("(a:`Person`) -[r]- (b:`Company`)");
+    expect(merged.rows.map(row => encodeId(row.r._id))).toEqual(["5_1"]);
     runSpy.mockRestore();
   });
 
@@ -625,6 +727,94 @@ describe("fetchRelsAmongNodes", () => {
   it("throws when nodes is not an array", async () => {
     await expect(
       NeighborsFetcher.fetchRelsAmongNodes({ relTables })
+    ).rejects.toThrow();
+  });
+});
+
+describe("fetchRelsBetween", () => {
+  it("issues exactly one wildcard query for a connected pair, even with >=2 rel types", async () => {
+    // Company<->Company connects via CorporateOwnership AND CorporateInfluence.
+    // Pre-collapse that was 2 per-type queries; the wildcard collapses to 1.
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValue({ rows: [], dataTypes: { r: "REL" } });
+
+    await NeighborsFetcher.fetchRelsBetween({
+      tableA: "Company",
+      primaryKeyNameA: "id",
+      primaryKeyValueA: "c1",
+      tableB: "Company",
+      primaryKeyNameB: "id",
+      primaryKeyValueB: "c2",
+      relTables: [
+        { name: "CorporateOwnership", connectivity: [{ src: "Company", dst: "Company" }] },
+        { name: "CorporateInfluence", connectivity: [{ src: "Company", dst: "Company" }] },
+      ],
+    });
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    const [query, params] = runSpy.mock.calls[0];
+    expect(query).toBe(
+      "MATCH (a:`Company`) -[r]- (b:`Company`) WHERE a.`id` = $pk1 AND b.`id` = $pk2 RETURN r;"
+    );
+    // No concrete rel-type label bound; both pk values ride as bound params.
+    expect(query).not.toMatch(/-\[r:/);
+    expect(params).toEqual({ pk1: "c1", pk2: "c2" });
+    runSpy.mockRestore();
+  });
+
+  it("returns each edge exactly once for an A!=B pair (no phantom second orientation)", async () => {
+    const edge = { _id: { table: 5, offset: 1 }, _label: "Directorship" };
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValueOnce({ rows: [{ r: edge }], dataTypes: { r: "REL" } });
+
+    const result = await NeighborsFetcher.fetchRelsBetween({
+      tableA: "Person",
+      primaryKeyNameA: "id",
+      primaryKeyValueA: "p1",
+      tableB: "Company",
+      primaryKeyNameB: "id",
+      primaryKeyValueB: "c1",
+      relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
+    });
+
+    // A!=B pins Person on one end and Company on the other, so the single edge
+    // is bound exactly once.
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(result.rows.map(row => encodeId(row.r._id))).toEqual(["5_1"]);
+    runSpy.mockRestore();
+  });
+
+  it("issues no query and returns null when nothing connects the pair", async () => {
+    const runSpy = vi.spyOn(NeighborsFetcher, "_runQuery");
+    const result = await NeighborsFetcher.fetchRelsBetween({
+      tableA: "Person",
+      primaryKeyNameA: "id",
+      primaryKeyValueA: "p1",
+      tableB: "Address",
+      primaryKeyNameB: "id",
+      primaryKeyValueB: "a1",
+      // Only Directorship (Person<->Company) is given; it never touches Address.
+      relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
+    });
+    // The retained connectivity pre-filter emits 0 queries; _mergeResults of an
+    // empty array returns null.
+    expect(runSpy).not.toHaveBeenCalled();
+    expect(result).toBeNull();
+    runSpy.mockRestore();
+  });
+
+  it("throws when relTables is not an array", async () => {
+    await expect(
+      NeighborsFetcher.fetchRelsBetween({
+        tableA: "Person",
+        primaryKeyNameA: "id",
+        primaryKeyValueA: "p1",
+        tableB: "Company",
+        primaryKeyNameB: "id",
+        primaryKeyValueB: "c1",
+      })
     ).rejects.toThrow();
   });
 });

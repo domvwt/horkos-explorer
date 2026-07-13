@@ -86,9 +86,11 @@ describe("complete-edge convergence (ResultGraph.completeEdgesAmongCurrentNodes)
 
     const runSpy = vi
       .spyOn(NeighborsFetcher, "_runQuery")
-      // Person-Company pairing (Directorship) returns the leaf<->pre-existing edge.
+      // The Person<->Company pairing now emits a single wildcard `-[r]-` query
+      // (no rel-type label); match on the endpoint labels instead. It returns
+      // the leaf<->pre-existing Directorship edge.
       .mockImplementation((query) => {
-        if (query.includes("`Directorship`")) {
+        if (query.includes("(a:`Person`) -[r]- (b:`Company`)")) {
           return Promise.resolve({ rows: [{ r: leafToPreexistingRel }], dataTypes: { r: "REL" } });
         }
         return Promise.resolve({ rows: [], dataTypes: { r: "REL" } });
@@ -107,7 +109,7 @@ describe("complete-edge convergence (ResultGraph.completeEdgesAmongCurrentNodes)
     runSpy.mockRestore();
   });
 
-  it("keeps the among-nodes pass bounded — one request per rel-type x table pairing, not per node", async () => {
+  it("keeps the among-nodes pass bounded — one request per connected table pairing, not per node", async () => {
     const runSpy = vi
       .spyOn(NeighborsFetcher, "_runQuery")
       .mockResolvedValue({ rows: [], dataTypes: { r: "REL" } });
