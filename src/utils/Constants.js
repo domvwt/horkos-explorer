@@ -35,33 +35,6 @@ export const DATA_TYPES = {
   UUID: "UUID",
 };
 
-export const NESTED_DATA_TYPES = [
-  DATA_TYPES.MAP,
-  DATA_TYPES.STRUCT,
-  DATA_TYPES.UNION,
-  DATA_TYPES.FIXED_LIST,
-  DATA_TYPES.VAR_LIST,
-];
-
-export const INTERNAL_DATA_TYPES = [
-  DATA_TYPES.ANY,
-  DATA_TYPES.NODE,
-  DATA_TYPES.REL,
-  DATA_TYPES.RECURSIVE_REL,
-  DATA_TYPES.INTERNAL_ID,
-  DATA_TYPES.ARROW_COLUMN,
-];
-
-const basicDataTypes = JSON.parse(JSON.stringify(DATA_TYPES));
-for (const internalType of INTERNAL_DATA_TYPES) {
-  delete basicDataTypes[internalType];
-}
-for (const nestedType of NESTED_DATA_TYPES) {
-  delete basicDataTypes[nestedType];
-}
-delete basicDataTypes.SERIAL;
-export const BASIC_DATA_TYPES = basicDataTypes;
-
 export const UI_SIZE = {
   DEFAULT_MARGIN: 20,
   SHELL_TOOL_BAR_WIDTH: 40,

@@ -378,15 +378,6 @@ export const useSettingsStore = defineStore("settings", {
       delete this.graphViz.nodes[label];
     },
 
-    renameNodeTable(oldName, newName) {
-      const node = this.graphViz.nodes[oldName];
-      if (node) {
-        node.name = newName;
-        this.graphViz.nodes[newName] = node;
-        delete this.graphViz.nodes[oldName];
-      }
-    },
-
     updateNodeTableLabel(name, label) {
       const node = this.graphViz.nodes[name];
       if (node) {
@@ -396,15 +387,6 @@ export const useSettingsStore = defineStore("settings", {
 
     removeRelTable(label) {
       delete this.graphViz.rels[label];
-    },
-
-    renameRelTable(oldName, newName) {
-      const rel = this.graphViz.rels[oldName];
-      if (rel) {
-        rel.name = newName;
-        this.graphViz.rels[newName] = rel;
-        delete this.graphViz.rels[oldName];
-      }
     },
 
     loadSettingsFromLocalStorage() {

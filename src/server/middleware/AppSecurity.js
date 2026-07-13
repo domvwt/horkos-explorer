@@ -129,19 +129,20 @@ function applyAppSecurity(app) {
       reportOnly: CSP_REPORT_ONLY,
       // useDefaults:false so we ship EXACTLY the directives below (helmet's
       // defaults include e.g. block-all-mixed-content / upgrade-insecure-requests
-      // and a stricter script-src that would break WASM). Every directive beyond
-      // default-src is justified inline against actual frontend usage.
+      // that this policy does not intend). Every directive beyond default-src is
+      // justified inline against actual frontend usage.
       useDefaults: false,
       directives: {
         // Baseline: only same-origin resources unless a directive widens it.
         defaultSrc: ["'self'"],
-        // Scripts are served same-origin (webpack bundles + lazily-loaded chunks,
-        // Monaco worker files under js/). 'wasm-unsafe-eval' is retained as a
-        // conservative allowance for WebAssembly compilation (it is far narrower
-        // than 'unsafe-eval'); the in-browser query engines that required it have
-        // been removed, so it can be dropped after the policy is re-validated in
-        // a browser. No application code calls eval()/new Function().
-        scriptSrc: ["'self'", "'wasm-unsafe-eval'"],
+        // Scripts are served same-origin only (webpack bundles + lazily-loaded
+        // chunks, Monaco worker files under js/). No eval allowances of any
+        // kind: the app never calls eval()/new Function(), and nothing compiles
+        // WebAssembly since the in-browser query engines were removed
+        // ('wasm-unsafe-eval' was dropped after a report-only browser
+        // re-validation of Monaco, the G6 canvas, search and the privacy page
+        // showed zero violations).
+        scriptSrc: ["'self'"],
         // Web Workers: Monaco editor workers load from same-origin js/ files;
         // blob: is included because Monaco/webpack worker bootstrapping can wrap
         // workers in blob URLs.

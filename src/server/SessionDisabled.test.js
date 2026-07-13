@@ -119,10 +119,12 @@ describe("API.js — DISABLE_SESSION_DB=true mounts the JSON-404 stub (env gatin
     process.env.DISABLE_SESSION_DB = "true";
     process.env.NODE_ENV = "test";
 
-    // API.js calls database.getAccessModeString() at require time and the real
-    // Database module loads the native Kuzu engine — far too heavy for a unit
-    // test. Pre-populate the require cache with a minimal fake BEFORE requiring
-    // API.js so the REAL router module (and its session gating) loads untouched.
+    // API.js pulls in ./utils/Database transitively (Schema.js, Cypher.js and
+    // Mode.js all require it at module top level), and that module loads the
+    // native Kuzu addon AND constructs its singleton at require time — far too
+    // heavy for a unit test. Pre-populate the require cache with a minimal fake
+    // BEFORE requiring API.js so the REAL router module (and its session
+    // gating) loads untouched.
     require.cache[databaseId] = {
       id: databaseId,
       filename: databaseId,
