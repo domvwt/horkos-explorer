@@ -1,3 +1,5 @@
+![Horkos Explorer — a browser-based network explorer for corporate-transparency research](src/assets/hero.png)
+
 # Horkos Explorer
 
 Horkos Explorer is a browser-based, read-only-by-default web UI for exploring

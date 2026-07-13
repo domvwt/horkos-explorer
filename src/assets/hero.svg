@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="420" viewBox="0 0 1600 420">
+  <!-- Palette and node conventions follow the Horkos Explorer app:
+       Person #76b7b2 / Company #d97f27 / Address #af7aa1, all nodes circles with
+       a 20%-darker stroke; edges neutral grey with triangle arrowheads; ambiguous
+       links grey dashed, thin, arrowless via a neutral hub; brand navy #1E2A44,
+       off-white #E8EDF7; type Lexend. Adapted from the Horkos toolkit hero
+       (docs/assets/hero.svg): same brand mark and motif, explorer wording. -->
+  <defs>
+    <linearGradient id="herobg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#16171A"/>
+      <stop offset="1" stop-color="#1E2A44"/>
+    </linearGradient>
+    <marker id="heroarr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#666666"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="420" fill="url(#herobg)"/>
+
+  <!-- Wordmark block; entity-colour dots echo the favicon brand mark -->
+  <circle cx="117" cy="128" r="7" fill="#76b7b2"/>
+  <circle cx="141" cy="128" r="7" fill="#d97f27"/>
+  <circle cx="165" cy="128" r="7" fill="#af7aa1"/>
+  <text x="108" y="218" font-family="Lexend, Inter, 'DejaVu Sans', sans-serif" font-size="78" font-weight="700" fill="#E8EDF7">Horkos Explorer</text>
+  <text x="110" y="264" font-family="Lexend, Inter, 'DejaVu Sans', sans-serif" font-size="20" font-weight="300" fill="#8A8C91">Browser-based network explorer</text>
+  <text x="110" y="294" font-family="Lexend, Inter, 'DejaVu Sans', sans-serif" font-size="20" font-weight="300" fill="#8A8C91">for corporate-transparency research</text>
+
+  <!-- Network motif (synthetic) -->
+  <g>
+    <!-- faint depth dots/lines -->
+    <line x1="900" y1="150" x2="967" y2="112" stroke="#2c3a52" stroke-width="1.5"/>
+    <line x1="1300" y1="370" x2="1105" y2="338" stroke="#2c3a52" stroke-width="1.5"/>
+    <line x1="1060" y1="60" x2="985" y2="90" stroke="#2c3a52" stroke-width="1.5"/>
+    <circle cx="900" cy="150" r="4" fill="#2c3a52"/>
+    <circle cx="1060" cy="60" r="4" fill="#2c3a52"/>
+    <circle cx="1300" cy="370" r="4" fill="#2c3a52"/>
+
+    <!-- solid edges, neutral grey, arrowheads -->
+    <line x1="1384" y1="112" x2="1215" y2="186" stroke="#666666" stroke-width="2.5" marker-end="url(#heroarr)"/>
+    <line x1="1423" y1="279" x2="1216" y2="203" stroke="#666666" stroke-width="2.5" marker-end="url(#heroarr)"/>
+    <line x1="998" y1="111" x2="1175" y2="186" stroke="#666666" stroke-width="2.5" marker-end="url(#heroarr)"/>
+    <line x1="1181" y1="212" x2="1096" y2="317" stroke="#666666" stroke-width="2.5" marker-end="url(#heroarr)"/>
+
+    <!-- ambiguous links: grey dashed, thin, arrowless, via neutral hub -->
+    <line x1="1452" y1="272" x2="1524" y2="194" stroke="#666666" stroke-width="2" stroke-dasharray="4,4"/>
+    <line x1="1522" y1="179" x2="1415" y2="114" stroke="#666666" stroke-width="2" stroke-dasharray="4,4"/>
+
+    <!-- company (orange circle, single focal accent) -->
+    <circle cx="1195" cy="195" r="22" fill="#d97f27" stroke="#ad661f" stroke-width="3"/>
+
+    <!-- persons (teal circles) -->
+    <circle cx="1400" cy="105" r="18" fill="#76b7b2" stroke="#5e928e" stroke-width="3"/>
+    <circle cx="1440" cy="285" r="18" fill="#76b7b2" stroke="#5e928e" stroke-width="3"/>
+    <circle cx="985" cy="105" r="14" fill="#76b7b2" stroke="#5e928e" stroke-width="3"/>
+
+    <!-- address (purple circle) -->
+    <circle cx="1085" cy="330" r="17" fill="#af7aa1" stroke="#8c6281" stroke-width="3"/>
+
+    <!-- ambiguity hub (neutral circle) -->
+    <circle cx="1532" cy="185" r="12" fill="#d9d9d9" stroke="#aeaeae" stroke-width="3"/>
+  </g>
+</svg>
