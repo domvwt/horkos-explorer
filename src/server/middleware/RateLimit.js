@@ -15,9 +15,14 @@ const isDevelopment = process.env.NODE_ENV === 'development';
 // the middleware AND logged/validated below — express-rate-limit v8 does not
 // expose windowMs/max back on the returned middleware object.
 const apiWindowMs = parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 60 * 1000; // 1 minute window
-const apiMax = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || (isDevelopment ? 1000 : 60); // Relaxed in dev
+const apiMax = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || (isDevelopment ? 1000 : 300); // Relaxed in dev
 const queryWindowMs = parseInt(process.env.QUERY_RATE_LIMIT_WINDOW_MS) || 60 * 1000; // 1 minute window
-const queryMax = parseInt(process.env.QUERY_RATE_LIMIT_MAX_REQUESTS) || (isDevelopment ? 500 : 30); // Relaxed in dev
+// A single graph expansion fans out one sub-query per (rel type x direction x
+// pk-chunk) in a Promise.all burst — with ~9 rel types that is 9-18 queries per
+// expand — so a low per-minute cap trips on normal interactive use. The per-IP
+// row budget (RowBudget.js) is the real anti-scrape backstop; this cap only
+// needs to stop request floods, not bound data volume.
+const queryMax = parseInt(process.env.QUERY_RATE_LIMIT_MAX_REQUESTS) || (isDevelopment ? 500 : 300); // Relaxed in dev
 const suggestWindowMs = parseInt(process.env.SUGGEST_RATE_LIMIT_WINDOW_MS) || 60 * 1000; // 1 minute window
 const suggestMax = parseInt(process.env.SUGGEST_RATE_LIMIT_MAX_REQUESTS) || (isDevelopment ? 2000 : 120); // Relaxed in dev
 
