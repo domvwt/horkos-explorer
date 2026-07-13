@@ -225,9 +225,15 @@ export default {
         if (!this.hasFetched) {
           await this.fetchConnectedEntities();
         }
-        // Scroll panel into view after expansion
+        // Reveal the newly-expanded panel within its own scrollable side
+        // panel. Use block: 'nearest' rather than 'start': 'start' aligns the
+        // panel to the top of the *viewport*, which forces every scroll
+        // ancestor to move and drags the shell editor's top margin up under
+        // the header, collapsing the header-to-search gap. 'nearest' scrolls
+        // only the minimum needed to bring the panel into view, leaving the
+        // outer layout untouched.
         this.$nextTick(() => {
-          this.$refs.panel?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          this.$refs.panel?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         });
       }
     },
