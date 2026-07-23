@@ -3665,22 +3665,32 @@ export default {
         this.fetchConnectionSearch(q);
       }, 250);
     },
+    // Staged like NodeSearch: the cheap prefix stage lands immediately so
+    // typing never blocks on BM25, then the ranked stage merges in the
+    // word-boundary matches the prefix stage can't see (typing "smith" must
+    // still surface "John Smith" — investigators search by surname). Both
+    // stages share one requestId, so a stale rank upgrade can never clobber a
+    // newer keystroke's results.
     async fetchConnectionSearch(query) {
       const requestId = ++this.connectionSearchRequestId;
-      try {
+      const fetchStage = async stage => {
         const response = await Axios.get("/api/suggest", {
-          params: { q: query, type: this.connectionSearchType, limit: 10, stage: "fast" },
+          params: { q: query, type: this.connectionSearchType, limit: 10, stage },
         });
-        // Ignore stale responses so a slower earlier request can't clobber a
-        // newer one (same guard NodeSearch uses).
-        if (requestId !== this.connectionSearchRequestId) return;
-        this.connectionSearchResults = (response.data || [])
+        return (response.data || [])
           .filter(item => item.cluster_id)
           .map(item => ({
             label: this.connectionSearchType,
             pk: item.cluster_id,
             name: item.name || item.cluster_id,
           }));
+      };
+      try {
+        const fastResults = await fetchStage("fast");
+        // Ignore stale responses so a slower earlier request can't clobber a
+        // newer one (same guard NodeSearch uses).
+        if (requestId !== this.connectionSearchRequestId) return;
+        this.connectionSearchResults = fastResults;
       } catch (e) {
         if (requestId !== this.connectionSearchRequestId) return;
         // 404 => the autocomplete endpoint isn't configured; hide the search and
@@ -3689,6 +3699,19 @@ export default {
           this.connectionSearchUnavailable = true;
         }
         this.connectionSearchResults = [];
+        return;
+      }
+      try {
+        const rankResults = await fetchStage("rank");
+        if (requestId !== this.connectionSearchRequestId) return;
+        // An empty rank upgrade keeps the fast baseline (same policy as
+        // NodeSearch): rank can 500/timeout independently without wiping
+        // already-shown prefix matches.
+        if (rankResults.length > 0) {
+          this.connectionSearchResults = rankResults;
+        }
+      } catch (e) {
+        // Rank upgrade is best-effort; the fast results already shown stand.
       }
     },
     pickConnectionTarget(target) {

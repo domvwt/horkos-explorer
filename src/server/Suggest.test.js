@@ -187,19 +187,25 @@ describe("suggest stage routing default", () => {
     duckdb.query = realQuery;
   });
 
-  function stubDuckDb() {
-    const executed = { sql: null };
+  // Records EVERY executed SQL, not just the last one: the routing invariants
+  // below assert on the full list so a regression that ran BM25 first and then
+  // fell through to LIKE (the exact shape the old unstaged default had) cannot
+  // hide behind a LIKE query executing last.
+  function stubDuckDb({ contract = true } = {}) {
+    const executed = { sqls: [] };
     duckdb.isEnabled = () => true;
     duckdb.getCapabilities = async () => ({
       tables: {
         person_names: {
-          columns: new Set(["doc_id", "cluster_id", "canonical_name"]),
-          fts: true,
+          columns: contract
+            ? new Set(["doc_id", "cluster_id", "canonical_name"])
+            : new Set(["name", "name_normalized"]),
+          fts: contract,
         },
       },
     });
     duckdb.query = async (sql) => {
-      executed.sql = sql;
+      executed.sqls.push(sql);
       return [];
     };
     return executed;
@@ -223,7 +229,7 @@ describe("suggest stage routing default", () => {
     };
   }
 
-  it("routes an unstaged request to the fast LIKE-prefix SQL", async () => {
+  it("routes an unstaged request to the fast LIKE-prefix SQL and issues no BM25 query at all", async () => {
     const executed = stubDuckDb();
     const res = fakeRes();
     await handleSuggest(
@@ -231,9 +237,13 @@ describe("suggest stage routing default", () => {
       res
     );
     expect(res.statusCode).toBe(200);
-    // LIKE SQL, not the BM25 ranked SQL.
-    expect(executed.sql).toContain("0.0 AS score");
-    expect(executed.sql).not.toContain("match_bm25");
+    // Exactly one query, the LIKE SQL — an unstaged request must never touch
+    // match_bm25, not even before falling through to LIKE.
+    expect(executed.sqls).toHaveLength(1);
+    expect(executed.sqls[0]).toContain("0.0 AS score");
+    for (const sql of executed.sqls) {
+      expect(sql).not.toContain("match_bm25");
+    }
   });
 
   it("routes stage=rank to the BM25 ranked SQL", async () => {
@@ -244,6 +254,22 @@ describe("suggest stage routing default", () => {
       res
     );
     expect(res.statusCode).toBe(200);
-    expect(executed.sql).toContain("match_bm25");
+    expect(executed.sqls).toHaveLength(1);
+    expect(executed.sqls[0]).toContain("match_bm25");
+  });
+
+  it("routes an unstaged request on a legacy pre-contract table to the legacy name-only SQL", async () => {
+    const executed = stubDuckDb({ contract: false });
+    const res = fakeRes();
+    await handleSuggest(
+      { query: { q: "smith", type: "Person" } },
+      res
+    );
+    expect(res.statusCode).toBe(200);
+    // Legacy SQL: name-only projection, no contract columns, no BM25.
+    expect(executed.sqls).toHaveLength(1);
+    expect(executed.sqls[0]).toContain("SELECT name");
+    expect(executed.sqls[0]).not.toContain("cluster_id");
+    expect(executed.sqls[0]).not.toContain("match_bm25");
   });
 });
