@@ -51,7 +51,7 @@ export MODE=READ_ONLY                                         # Access mode. If 
                                                              # writes (Cypher writes through the editor) you MUST set
                                                              # MODE=READ_WRITE explicitly; a bare run is read-only.
 export KUZU_DIR=/home/domvwt/projects/horkos/data            # Directory containing .kuzu database
-export KUZU_FILE=horkos_dev_pl_graph.kuzu                    # Database filename (use dev database for development)
+export KUZU_FILE=horkos_dev_sl.kuzu                           # Database filename (use dev database for development)
 
 # Optional configurations
 export DUCKDB_FILE=/home/domvwt/projects/horkos/data/horkos_dev_sl.duckdb  # DuckDB file with search.* tables - enables /api/suggest
@@ -342,27 +342,38 @@ when touching a surface that predates these rules, bring it into line.
 
 ## Horkos Graph Schema
 
-The Horkos database contains entity resolution results from UK corporate data sources (Companies House, PSC Register, ICIJ Offshore Leaks).
+The Horkos database contains entity resolution results from UK corporate data sources (Companies House, PSC Register, ICIJ Offshore Leaks). Schema below is derived from the live `/api/schema` response — treat it as authoritative over any prose description.
 
 ### Node Types
 
 **Person**
 - `id` (STRING, PRIMARY KEY): Cluster ID from entity resolution
 - `name` (STRING): Resolved canonical name
-- `birth_date` (DATE): Date of birth
-- `birth_year` (INT64): Birth year
-- `birth_month` (INT64): Birth month
+- `birth_date` (STRING): Date of birth
 - `nationality` (STRING): Nationality code
+- `country` (STRING): Country code
 - `source_records` (STRING[]): Array of source record IDs (e.g., `["psc_rec_123", "icij_rec_456"]`)
+- `record_count` (INT64): Number of source records merged into this cluster
+- `source_systems` (STRING[]): Source systems contributing to this cluster
+- `quality_level` (STRING): Entity resolution quality tier
+- `quality_concerns` (STRING): Notes on data quality issues, if any
 
 **Company**
 - `id` (STRING, PRIMARY KEY): Cluster ID
 - `name` (STRING): Company name
 - `company_number` (STRING): Official registration number
-- `jurisdiction` (STRING): Jurisdiction code (e.g., "GB", "CYM")
+- `incorporation_date` (STRING): Date of incorporation
 - `status` (STRING): Company status (active, dissolved, etc.)
-- `incorporation_date` (DATE): Date of incorporation
+- `jurisdiction` (STRING): Jurisdiction code (e.g., "GB", "CYM")
+- `category` (STRING): Company category/type
+- `sic_codes` (STRING[]): SIC classification codes
+- `dissolution_date` (STRING): Date of dissolution, if applicable
+- `legal_form` (STRING): Legal form of the entity
 - `source_records` (STRING[]): Source record IDs (e.g., `["ch_rec_789"]`)
+- `record_count` (INT64): Number of source records merged into this cluster
+- `source_systems` (STRING[]): Source systems contributing to this cluster
+- `quality_level` (STRING): Entity resolution quality tier
+- `quality_concerns` (STRING): Notes on data quality issues, if any
 
 **Address**
 - `id` (STRING, PRIMARY KEY): Cluster ID
@@ -370,49 +381,98 @@ The Horkos database contains entity resolution results from UK corporate data so
 - `post_code` (STRING): Postcode
 - `city` (STRING): City name
 - `country` (STRING): Country code
+- `record_count` (INT64): Number of source records merged into this cluster
 - `source_records` (STRING[]): Source record IDs
+- `source_systems` (STRING[]): Source systems contributing to this cluster
+- `quality_level` (STRING): Entity resolution quality tier
+- `quality_concerns` (STRING): Notes on data quality issues, if any
+
+**VirtualHub**
+- `id` (STRING, PRIMARY KEY): Hub ID
+- `name` (STRING): Hub display name
+- `entity_type` (STRING): Type of entity the hub represents (Person/Company/Address)
+- `original_cluster_id` (STRING): Cluster ID this hub was derived from
+
+VirtualHub nodes are synthetic collision points used by the `*AmbiguousLink` edges below (e.g. shared addresses or names that entity resolution could not confidently merge or split); they are not sourced from a single corporate record.
 
 ### Edge Types
 
 **CorporateOwnership** (Company → Company)
-- `percentage` (DOUBLE): Ownership percentage
+- `id` (STRING)
+- `sources` (STRUCT[]): array of `{role, percentage, control_type, start_date, end_date, source_record, source_system}`
+- `start_date` (DATE)
+- `end_date` (DATE)
 
 **PersonOwnership** (Person → Company)
-- `percentage` (DOUBLE): Ownership percentage
+- `id` (STRING)
+- `sources` (STRUCT[]): array of `{role, percentage, control_type, start_date, end_date, source_record, source_system}`
+- `start_date` (DATE)
+- `end_date` (DATE)
 
-**Directorship** (Person → Company)
-- `roles` (STRING[]): Director roles (e.g., `["director", "secretary"]`)
+**CorporateInfluence** (Company → Company)
+- `id` (STRING)
+- `sources` (STRUCT[]): array of `{role, percentage, control_type, start_date, end_date, source_record, source_system}`
+- `start_date` (DATE)
+- `end_date` (DATE)
+
+**PersonInfluence** (Person → Company)
+- `id` (STRING)
+- `sources` (STRUCT[]): array of `{role, percentage, control_type, start_date, end_date, source_record, source_system}`
+- `start_date` (DATE)
+- `end_date` (DATE)
 
 **RegisteredAddress** (Company → Address)
-- Simple edge, no properties
+- `id` (STRING)
+- `sources` (STRUCT[]): array of `{role, percentage, control_type, start_date, end_date, source_record, source_system}`
+- `start_date` (DATE)
+- `end_date` (DATE)
 
-**ResidentialAddress** (Person → Address)
-- Simple edge, no properties
+**CorrespondenceAddress** (Person → Address)
+- `id` (STRING)
+- `sources` (STRUCT[]): array of `{role, percentage, control_type, start_date, end_date, source_record, source_system}`
+- `start_date` (DATE)
+- `end_date` (DATE)
+
+**PersonAmbiguousLink** (Person → VirtualHub)
+- `id` (STRING)
+- `evidence` (STRUCT[]): array of `{from_record_id, to_record_id}`
+
+**CompanyAmbiguousLink** (Company → VirtualHub)
+- `id` (STRING)
+- `evidence` (STRUCT[]): array of `{from_record_id, to_record_id}`
+
+**AddressAmbiguousLink** (Address → VirtualHub)
+- `id` (STRING)
+- `evidence` (STRUCT[]): array of `{from_record_id, to_record_id}`
+
+There is no `Directorship` or `ResidentialAddress` edge table — director/officer roles and residential-address links are carried via `PersonInfluence`/`PersonOwnership` (`role` inside `sources`) and `CorrespondenceAddress` respectively.
 
 ### Provenance
 
-All entities include `source_records` arrays containing record IDs from the source systems:
+Person, Company, and Address nodes all include `source_records` arrays containing record IDs from the source systems:
 - `ch_rec_*`: Companies House
 - `psc_rec_*`: PSC (Persons with Significant Control) Register
 - `icij_rec_*`: ICIJ Offshore Leaks Database
 
-This enables tracing back to original data sources for validation.
+This enables tracing back to original data sources for validation. `record_count` and `source_systems` on each node summarize how many records and which systems fed the cluster; `quality_level`/`quality_concerns` capture entity-resolution confidence.
 
 ## Testing Database
 
 **Always use the development database for local development:**
 
-Development testing uses `horkos_dev_pl_graph.kuzu`:
-- **Location**: `/home/domvwt/projects/horkos/data/horkos_dev_pl_graph.kuzu`
-- **Size**: 48MB (PL postcode area)
-- **Contents**: ~25K companies, persons, addresses
+Development testing uses `horkos_dev_sl.kuzu`:
+- **Location**: `/home/domvwt/projects/horkos/data/horkos_dev_sl.kuzu`
+- **Size**: ~100MB (SL = Slough postcode area)
+- **Contents**: companies, persons, addresses for the Slough area
 - **Schema**: See "Horkos Graph Schema" section above
 
 Set via environment variables:
 ```bash
 export KUZU_DIR=/home/domvwt/projects/horkos/data
-export KUZU_FILE=horkos_dev_pl_graph.kuzu
+export KUZU_FILE=horkos_dev_sl.kuzu
 ```
+
+The full UK production pair (graph + suggest DB) lives at `/home/domvwt/projects/horkos/data/publish_trial/` as `horkos_uk_national_fresh-2026-07-23-graph.kuzu` and its matching `_suggest.duckdb` file.
 
 ## Deployment
 
