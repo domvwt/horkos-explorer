@@ -1,9 +1,16 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { createRequire } from "module";
 
 // The server code under test is CommonJS; load it the same way the server does.
 const require = createRequire(import.meta.url);
-const { toSuggestion, ENTITY_TYPES } = require("./Suggest");
+const {
+  toSuggestion,
+  ENTITY_TYPES,
+  buildLikeSql,
+  buildRankedSql,
+  handleSuggest,
+} = require("./Suggest");
+const duckdb = require("./utils/DuckDB");
 
 // Regression coverage for the "/api/suggest" JSON-serialization boundary.
 //
@@ -128,5 +135,115 @@ describe("toSuggestion serialization", () => {
     const s = toSuggestion(row, ENTITY_TYPES.Person);
     expect(s.score).toBeNull();
     expect(serializes(s)).toBe(true);
+  });
+});
+
+// The fast/LIKE stage must stay prefix-only. A leading-wildcard `% word%`
+// arm forces a full scan of the name_normalized-sorted table and defeats its
+// zonemap pruning, so it was removed; mid-name word matches now come from the
+// BM25 ranked stage (stage=rank), not from the LIKE SQL. These assert the
+// word-boundary pattern is ABSENT and only the prefix `?%` predicate remains.
+describe("suggest SQL is prefix-only", () => {
+  // Count occurrences of the leading-wildcard word pattern. The builders use
+  // bound `?` params, so a leftover `% word%` arm shows up as a second
+  // `name_normalized LIKE ?` inside an OR (fast) or the OR arm (ranked). We
+  // assert on the OR structure directly, which is unambiguous.
+  it("fast (LIKE) SQL has a single prefix LIKE and no OR word arm", () => {
+    for (const type of Object.keys(ENTITY_TYPES)) {
+      const sql = buildLikeSql(ENTITY_TYPES[type]);
+      // Exactly one LIKE predicate against name_normalized (the prefix).
+      const likeCount = (sql.match(/name_normalized LIKE \?/g) || []).length;
+      expect(likeCount).toBe(1);
+      // No disjunction of LIKE predicates (the removed `% word%` arm).
+      expect(sql).not.toMatch(/LIKE \?\s+OR\s+.*LIKE \?/s);
+    }
+  });
+
+  it("ranked SQL's LIKE arm is prefix-only (BM25 covers word matches)", () => {
+    for (const type of Object.keys(ENTITY_TYPES)) {
+      const sql = buildRankedSql(ENTITY_TYPES[type]);
+      // The prefix_match expression must be a single name_normalized LIKE ?,
+      // not a `LIKE ? OR LIKE ?` disjunction.
+      const likeCount = (sql.match(/name_normalized LIKE \?/g) || []).length;
+      expect(likeCount).toBe(1);
+      expect(sql).not.toMatch(/name_normalized LIKE \? OR/);
+      // BM25 is still the word-boundary source.
+      expect(sql).toContain("match_bm25");
+    }
+  });
+});
+
+// Route-level: an unstaged request (no `stage` param) must now serve the fast
+// LIKE-prefix path, NOT the ranked BM25 path. stage=rank keeps serving ranked.
+// We stub the duckdb singleton to record which builder SQL was executed.
+describe("suggest stage routing default", () => {
+  const realIsEnabled = duckdb.isEnabled;
+  const realGetCaps = duckdb.getCapabilities;
+  const realQuery = duckdb.query;
+
+  afterEach(() => {
+    duckdb.isEnabled = realIsEnabled;
+    duckdb.getCapabilities = realGetCaps;
+    duckdb.query = realQuery;
+  });
+
+  function stubDuckDb() {
+    const executed = { sql: null };
+    duckdb.isEnabled = () => true;
+    duckdb.getCapabilities = async () => ({
+      tables: {
+        person_names: {
+          columns: new Set(["doc_id", "cluster_id", "canonical_name"]),
+          fts: true,
+        },
+      },
+    });
+    duckdb.query = async (sql) => {
+      executed.sql = sql;
+      return [];
+    };
+    return executed;
+  }
+
+  function fakeRes() {
+    return {
+      statusCode: 200,
+      body: undefined,
+      status(code) {
+        this.statusCode = code;
+        return this;
+      },
+      json(payload) {
+        this.body = payload;
+        return this;
+      },
+      set() {
+        return this;
+      },
+    };
+  }
+
+  it("routes an unstaged request to the fast LIKE-prefix SQL", async () => {
+    const executed = stubDuckDb();
+    const res = fakeRes();
+    await handleSuggest(
+      { query: { q: "smith", type: "Person" } },
+      res
+    );
+    expect(res.statusCode).toBe(200);
+    // LIKE SQL, not the BM25 ranked SQL.
+    expect(executed.sql).toContain("0.0 AS score");
+    expect(executed.sql).not.toContain("match_bm25");
+  });
+
+  it("routes stage=rank to the BM25 ranked SQL", async () => {
+    const executed = stubDuckDb();
+    const res = fakeRes();
+    await handleSuggest(
+      { query: { q: "smith", type: "Person", stage: "rank" } },
+      res
+    );
+    expect(res.statusCode).toBe(200);
+    expect(executed.sql).toContain("match_bm25");
   });
 });

@@ -3669,7 +3669,7 @@ export default {
       const requestId = ++this.connectionSearchRequestId;
       try {
         const response = await Axios.get("/api/suggest", {
-          params: { q: query, type: this.connectionSearchType, limit: 10 },
+          params: { q: query, type: this.connectionSearchType, limit: 10, stage: "fast" },
         });
         // Ignore stale responses so a slower earlier request can't clobber a
         // newer one (same guard NodeSearch uses).

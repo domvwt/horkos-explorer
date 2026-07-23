@@ -40,7 +40,12 @@ function sendShed(res) {
  * Hybrid ranked query: BM25 full-text score from the table's FTS index,
  * unioned with LIKE-prefix matches so partially-typed tokens still hit
  * ("john smi" -> "John Smith"). Prefix matches rank first (existing
- * autocomplete UX), then BM25 score. One row per cluster: the
+ * autocomplete UX), then BM25 score. The LIKE arm is prefix-only
+ * (`name_normalized LIKE 'prefix%'`): a leading-wildcard `% word%`
+ * pattern would force a full scan of the name_normalized-sorted table,
+ * defeating its zonemap pruning, and mid-name word matches are already
+ * covered here by BM25 (it tokenizes on words), so the extra arm was
+ * redundant. One row per cluster: the
  * best-ranked name variant represents the cluster, but distinct clusters
  * sharing a name are never collapsed - disambiguators tell them apart.
  * Tiebreaks are deterministic (LENGTH(name), name, cluster_id).
@@ -62,7 +67,7 @@ function buildRankedSql(config) {
     WITH scored AS (
       SELECT s.*,
              fts_search_${config.table}.match_bm25(doc_id, ?, conjunctive := 1) AS fts_score,
-             (s.name_normalized LIKE ? OR s.name_normalized LIKE ?) AS prefix_match
+             (s.name_normalized LIKE ?) AS prefix_match
       FROM search.${config.table} s
     )
     SELECT cluster_id, name, canonical_name, ${disambiguatorCols},
@@ -83,26 +88,29 @@ function buildRankedSql(config) {
  * columns but no usable FTS index (extension failed to load, or index
  * schemas absent). Same response shape as the ranked query, score 0.
  *
- * This cheap prefix/word-boundary scan (~30ms) is also the `stage=fast`
- * path: /api/suggest serves it immediately so typing is never blocked on
- * match_bm25, with the ranked query following as an asynchronous upgrade.
+ * This cheap prefix scan (~30ms) is also the `stage=fast` path and the
+ * default when no `stage` is given: /api/suggest serves it immediately so
+ * typing is never blocked on match_bm25, with the ranked query following
+ * as an asynchronous upgrade (stage=rank).
+ *
+ * The LIKE predicate is prefix-only (`name_normalized LIKE 'prefix%'`): a
+ * leading-wildcard `% word%` arm would force a full column scan and defeat
+ * the zonemap pruning on the name_normalized-sorted table. Mid-name word
+ * matches are supplied by the BM25 ranked stage (it tokenizes on words),
+ * so the word-boundary arm here was redundant.
  */
 function buildLikeSql(config) {
   const disambiguatorCols = config.disambiguators.join(", ");
   return `
-    WITH matched AS (
-      SELECT s.*, (s.name_normalized LIKE ?) AS prefix_start
-      FROM search.${config.table} s
-      WHERE s.name_normalized LIKE ? OR s.name_normalized LIKE ?
-    )
     SELECT cluster_id, name, canonical_name, ${disambiguatorCols},
-           0.0 AS score, prefix_start
-    FROM matched
+           0.0 AS score
+    FROM search.${config.table} s
+    WHERE s.name_normalized LIKE ?
     QUALIFY row_number() OVER (
       PARTITION BY cluster_id
-      ORDER BY prefix_start DESC, LENGTH(name), name
+      ORDER BY LENGTH(name), name
     ) = 1
-    ORDER BY prefix_start DESC, LENGTH(name), name, cluster_id
+    ORDER BY LENGTH(name), name, cluster_id
     LIMIT ?
   `;
 }
@@ -197,13 +205,18 @@ function isDuckDbNumericWrapper(value) {
  * Staged responsiveness: the match_bm25 scan is ~0.6-1.7s at national
  * scale, so the client stages it out of the keystroke path via the
  * `stage` parameter:
- *   - stage=fast : cheap LIKE-prefix/word query only (~30ms) so typing is
- *                  never blocked on BM25. Served immediately.
+ *   - stage=fast : cheap LIKE-prefix query only (~30ms) so typing is never
+ *                  blocked on BM25. Served immediately.
  *   - stage=rank : the full BM25-ranked query, fired as an asynchronous
  *                  upgrade and merged into the dropdown when it arrives.
- *   - (absent)   : today's capability-driven behaviour (ranked when FTS is
- *                  available, else LIKE, else legacy) - preserved for
- *                  back-compat and the legacy pre-contract path.
+ *                  This stage supplies the mid-name word-boundary matches
+ *                  (BM25 tokenizes on words); the fast stage is prefix-only.
+ *   - (absent)   : same as stage=fast on contract tables - the cheap
+ *                  LIKE-prefix path. (It used to fall through to the BM25
+ *                  path, but a leading-wildcard LIKE arm made that full-scan
+ *                  slow at national scale; unstaged callers now get the fast
+ *                  path and can issue stage=rank for word matches.) Legacy
+ *                  pre-contract tables still degrade to the name-only path.
  * A stage=rank failure is isolated: it does NOT flip the process-wide FTS
  * capability flag, so one slow/timed-out upgrade cannot disable ranking
  * for every user for the process lifetime.
@@ -271,16 +284,16 @@ async function handleSuggest(req, res) {
   // usable FTS index; otherwise there is no ranked query to run, so the
   // client's fast stage already carries the best result and we return an
   // empty upgrade rather than re-running LIKE. Failures here are isolated:
-  // a rank-stage error/timeout must NOT flip the process-wide FTS flag
-  // (unlike the non-staged path below), because rapid typing can time a
-  // single upgrade out without FTS being genuinely broken.
+  // a rank-stage error/timeout must NOT flip the process-wide FTS flag,
+  // because rapid typing can time a single upgrade out without FTS being
+  // genuinely broken.
   if (stage === "rank") {
     if (!(hasContractColumns && tableCaps.fts)) {
       return res.json([]);
     }
     try {
       const rows = await duckdb.query(
-        buildRankedSql(config), query, startPattern, wordPattern, limit
+        buildRankedSql(config), query, startPattern, limit
       );
       return res.json(rows.map((r) => toSuggestion(r, config)));
     } catch (err) {
@@ -292,12 +305,15 @@ async function handleSuggest(req, res) {
     }
   }
 
-  // stage=fast: cheap LIKE-only path so typing is never blocked on BM25.
+  // stage=fast (or no stage at all): cheap LIKE-prefix path so typing is
+  // never blocked on BM25. This is now the default for unstaged requests too
+  // (the leading-wildcard word arm that made the old default fall through to
+  // BM25 is gone; word-boundary matches come from the stage=rank upgrade).
   // Falls through to legacy for pre-contract tables that have no cluster ids.
-  if (stage === "fast" && hasContractColumns) {
+  if (stage !== "rank" && hasContractColumns) {
     try {
       const rows = await duckdb.query(
-        buildLikeSql(config), startPattern, startPattern, wordPattern, limit
+        buildLikeSql(config), startPattern, limit
       );
       return res.json(rows.map((r) => toSuggestion(r, config)));
     } catch (err) {
@@ -309,34 +325,11 @@ async function handleSuggest(req, res) {
     }
   }
 
-  // No stage (capability-driven default) or stage=fast on a legacy table.
+  // Reached only by requests on legacy pre-contract tables (no cluster ids):
+  // both stage=fast and the unstaged default serve the LIKE-prefix path above
+  // when the contract columns exist, and stage=rank returned earlier. Legacy
+  // tables have no FTS and no contract columns, so this is name-only.
   try {
-    if (stage === undefined && hasContractColumns && tableCaps.fts) {
-      try {
-        const rows = await duckdb.query(
-          buildRankedSql(config), query, startPattern, wordPattern, limit
-        );
-        return res.json(rows.map((r) => toSuggestion(r, config)));
-      } catch (err) {
-        // A shed error is transient backpressure, not a broken FTS index: do
-        // not flip the process-wide FTS flag off, just tell the client to retry.
-        if (isShedError(err)) {
-          return sendShed(res);
-        }
-        // e.g. FTS index dropped/rebuilt out from under us - degrade for
-        // the rest of this process lifetime rather than failing every call
-        logger.error(`Ranked suggest query failed (${err.message}) - degrading to LIKE-only`);
-        tableCaps.fts = false;
-      }
-    }
-
-    if (hasContractColumns) {
-      const rows = await duckdb.query(
-        buildLikeSql(config), startPattern, startPattern, wordPattern, limit
-      );
-      return res.json(rows.map((r) => toSuggestion(r, config)));
-    }
-
     const rows = await duckdb.query(
       buildLegacySql(config), startPattern, wordPattern, startPattern, limit
     );
