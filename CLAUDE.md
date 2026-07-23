@@ -51,7 +51,7 @@ export MODE=READ_ONLY                                         # Access mode. If 
                                                              # writes (Cypher writes through the editor) you MUST set
                                                              # MODE=READ_WRITE explicitly; a bare run is read-only.
 export KUZU_DIR=/home/domvwt/projects/horkos/data            # Directory containing .kuzu database
-export KUZU_FILE=horkos_dev_sl.kuzu                           # Database filename (use dev database for development)
+export KUZU_FILE=horkos_dev_sl.kuzu                          # Database filename (use dev database for development)
 
 # Optional configurations
 export DUCKDB_FILE=/home/domvwt/projects/horkos/data/horkos_dev_sl.duckdb  # DuckDB file with search.* tables - enables /api/suggest

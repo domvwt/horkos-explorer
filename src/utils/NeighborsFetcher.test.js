@@ -43,7 +43,7 @@ describe("_buildNeighborCountQueries", () => {
     expect(queries).toHaveLength(2);
   });
 
-  it("does not scale query count with the number of source nodes", () => {
+  it("binds the whole pk list as one $pks param instead of per-pk queries", () => {
     // The pk list is bound as a single $pks param, so the number of generated
     // queries is identical whether we count 1 node or 25.
     const queries = NeighborsFetcher._buildNeighborCountQueries({
