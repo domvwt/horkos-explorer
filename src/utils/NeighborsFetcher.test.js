@@ -50,10 +50,10 @@ describe("_buildNeighborCountQueries", () => {
       tableName: "Company",
       primaryKeyName: "id",
     });
-    // No query contains any literal pk value; all use UNWIND $pks.
+    // No query contains any literal pk value; all bind the list via IN $pks.
     queries.forEach(q => {
-      expect(q).toContain("UNWIND $pks AS pk");
-      expect(q).toContain("WHERE src.`id` = pk");
+      expect(q).toContain("IN $pks");
+      expect(q).toContain("WHERE src.`id` IN $pks");
     });
   });
 
@@ -93,8 +93,8 @@ describe("_buildNeighborCountQueries", () => {
       primaryKeyName: "id",
     });
     expect(queries).toEqual([
-      "UNWIND $pks AS pk MATCH (dst) -[]-> (src:`Company`) WHERE src.`id` = pk RETURN src.`id` AS pk, dst;",
-      "UNWIND $pks AS pk MATCH (src:`Company`) -[]-> (dst) WHERE src.`id` = pk RETURN src.`id` AS pk, dst;",
+      "MATCH (dst) -[]-> (src:`Company`) WHERE src.`id` IN $pks RETURN src.`id` AS pk, dst;",
+      "MATCH (src:`Company`) -[]-> (dst) WHERE src.`id` IN $pks RETURN src.`id` AS pk, dst;",
     ]);
   });
 });
@@ -334,7 +334,7 @@ describe("_buildRelsBetweenNodeAndPksQueries", () => {
     expect(queries[0]).not.toMatch(/-\[r:/);
   });
 
-  it("binds the focus pk as $pk1 and the other endpoints as an UNWIND $pks2 list", () => {
+  it("binds the focus pk as $pk1 and the other endpoints as an IN $pks2 list", () => {
     const queries = NeighborsFetcher._buildRelsBetweenNodeAndPksQueries({
       focusTable: "Person",
       focusPkName: "id",
@@ -343,7 +343,7 @@ describe("_buildRelsBetweenNodeAndPksQueries", () => {
       relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
     });
     expect(queries[0]).toBe(
-      "UNWIND $pks2 AS pk2 MATCH (a:`Person`) -[r]- (b:`Company`) WHERE a.`id` = $pk1 AND b.`id` = pk2 RETURN r;"
+      "MATCH (a:`Person`) -[r]- (b:`Company`) WHERE a.`id` = $pk1 AND b.`id` IN $pks2 RETURN r;"
     );
   });
 
@@ -383,7 +383,7 @@ describe("_buildRelsBetweenNodeAndPksQueries", () => {
     expect(escaped[0]).toContain("(a:`Weird Table`)");
     expect(escaped[0]).toContain("(b:`Other Table`)");
     expect(escaped[0]).toContain("a.`pk name` = $pk1");
-    expect(escaped[0]).toContain("b.`other pk` = pk2");
+    expect(escaped[0]).toContain("b.`other pk` IN $pks2");
     expect(escaped[0]).toContain("-[r]-");
   });
 
@@ -544,7 +544,7 @@ describe("_buildRelsAmongPkListsQueries", () => {
     expect(queries[0]).not.toMatch(/-\[r:/);
   });
 
-  it("binds both endpoint sets as UNWIND $pksA / $pksB lists", () => {
+  it("binds both endpoint sets as IN $pksA / $pksB lists", () => {
     const queries = NeighborsFetcher._buildRelsAmongPkListsQueries({
       tableA: "Person",
       pkNameA: "id",
@@ -553,7 +553,7 @@ describe("_buildRelsAmongPkListsQueries", () => {
       relTables: [{ name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] }],
     });
     expect(queries[0]).toBe(
-      "UNWIND $pksA AS a_pk UNWIND $pksB AS b_pk MATCH (a:`Person`) -[r]- (b:`Company`) WHERE a.`id` = a_pk AND b.`id` = b_pk RETURN r;"
+      "MATCH (a:`Person`) -[r]- (b:`Company`) WHERE a.`id` IN $pksA AND b.`id` IN $pksB RETURN r;"
     );
   });
 
@@ -589,8 +589,8 @@ describe("_buildRelsAmongPkListsQueries", () => {
     });
     expect(escaped[0]).toContain("(a:`Weird Table`)");
     expect(escaped[0]).toContain("(b:`Other Table`)");
-    expect(escaped[0]).toContain("a.`pk name` = a_pk");
-    expect(escaped[0]).toContain("b.`other pk` = b_pk");
+    expect(escaped[0]).toContain("a.`pk name` IN $pksA");
+    expect(escaped[0]).toContain("b.`other pk` IN $pksB");
     expect(escaped[0]).toContain("-[r]-");
   });
 
@@ -1049,7 +1049,7 @@ describe("_buildNeighborQueries", () => {
       primaryKeyName: "id",
     });
     queries.forEach(q => {
-      expect(q).toContain("UNWIND $pks AS pk");
+      expect(q).toContain("IN $pks");
       // Unlike the count builder, this one binds AND returns the edge var `r`
       // alongside dst so edges draw. `r` is a wildcard (no rel-type label), which
       // binds all incident rel types at once.
@@ -1064,8 +1064,8 @@ describe("_buildNeighborQueries", () => {
       primaryKeyName: "id",
     });
     expect(queries).toEqual([
-      "UNWIND $pks AS pk MATCH (dst) -[r]-> (src:`Company`) WHERE src.`id` = pk RETURN src.`id` AS pk, r, dst;",
-      "UNWIND $pks AS pk MATCH (src:`Company`) -[r]-> (dst) WHERE src.`id` = pk RETURN src.`id` AS pk, r, dst;",
+      "MATCH (dst) -[r]-> (src:`Company`) WHERE src.`id` IN $pks RETURN src.`id` AS pk, r, dst;",
+      "MATCH (src:`Company`) -[r]-> (dst) WHERE src.`id` IN $pks RETURN src.`id` AS pk, r, dst;",
     ]);
   });
 

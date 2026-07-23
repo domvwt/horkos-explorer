@@ -186,7 +186,7 @@ class NeighborsFetcher {
 
   // Build the batched neighbour-count queries for a set of source nodes that all
   // share a single node table + primary-key column: ONE inbound + ONE outbound
-  // query, each taking the whole pk list via `UNWIND $pks AS pk` and returning
+  // query, each taking the whole pk list via `IN $pks` and returning
   // one row per (source pk, neighbour node) pair as `pk, dst`.
   //
   // A wildcard `-[]-` binds every rel type incident to the node in one query.
@@ -194,15 +194,22 @@ class NeighborsFetcher {
   // caller can encode each neighbour's internal id and apply the same "new
   // neighbours only" filter the per-node path uses. The relationship is bound
   // anonymously (no `r`), so only NODE columns cross the wire here.
+  //
+  // The pk list MUST be bound as `pk IN $pks`, never via `UNWIND $pks AS pk ...
+  // WHERE pk = ...`: Kuzu cannot push an equality against an UNWIND variable
+  // into the primary-key index, so the UNWIND form degrades to a full scan of
+  // every edge incident to the node table — on a national-scale graph that
+  // exhausts the server's buffer pool and the query dies. `IN $pks` keeps the
+  // predicate pushable and the scan bounded.
   _buildNeighborCountQueries({ tableName, primaryKeyName }) {
     const escapedTable = DataDefinitionLanguage._escapeName(tableName);
     const escapedPk = DataDefinitionLanguage._escapeName(primaryKeyName);
 
     // Only escaped identifiers are interpolated; pk values ride as $pks.
     const inbound =
-      `UNWIND $pks AS pk MATCH (dst) -[]-> (src:${escapedTable}) WHERE src.${escapedPk} = pk RETURN src.${escapedPk} AS pk, dst;`;
+      `MATCH (dst) -[]-> (src:${escapedTable}) WHERE src.${escapedPk} IN $pks RETURN src.${escapedPk} AS pk, dst;`;
     const outbound =
-      `UNWIND $pks AS pk MATCH (src:${escapedTable}) -[]-> (dst) WHERE src.${escapedPk} = pk RETURN src.${escapedPk} AS pk, dst;`;
+      `MATCH (src:${escapedTable}) -[]-> (dst) WHERE src.${escapedPk} IN $pks RETURN src.${escapedPk} AS pk, dst;`;
 
     return [inbound, outbound];
   }
@@ -288,16 +295,17 @@ class NeighborsFetcher {
     const escapedPk = DataDefinitionLanguage._escapeName(primaryKeyName);
 
     // Only escaped identifiers are interpolated; pk values ride as $pks.
+    // `IN $pks`, not UNWIND — see _buildNeighborCountQueries for why.
     const inbound =
-      `UNWIND $pks AS pk MATCH (dst) -[r]-> (src:${escapedTable}) WHERE src.${escapedPk} = pk RETURN src.${escapedPk} AS pk, r, dst;`;
+      `MATCH (dst) -[r]-> (src:${escapedTable}) WHERE src.${escapedPk} IN $pks RETURN src.${escapedPk} AS pk, r, dst;`;
     const outbound =
-      `UNWIND $pks AS pk MATCH (src:${escapedTable}) -[r]-> (dst) WHERE src.${escapedPk} = pk RETURN src.${escapedPk} AS pk, r, dst;`;
+      `MATCH (src:${escapedTable}) -[r]-> (dst) WHERE src.${escapedPk} IN $pks RETURN src.${escapedPk} AS pk, r, dst;`;
 
     return [inbound, outbound];
   }
 
   // Batched neighbour expansion for a set of source nodes that all live in one
-  // node table. Runs the `UNWIND $pks` queries from `_buildNeighborQueries`
+  // node table. Runs the `IN $pks` queries from `_buildNeighborQueries`
   // (one wildcard traversal per direction, chunked at NEIGHBOR_COUNT_PK_CHUNK_SIZE)
   // and merges them into a SINGLE `{ rows, dataTypes, incomplete, truncated }`
   // result the caller can feed straight into the same `addDataWithQueryResult`
@@ -312,8 +320,8 @@ class NeighborsFetcher {
   //   error), so the caller can bail all-or-nothing before touching the canvas.
   // - `truncated` is true if any chunk carried the server's authoritative
   //   `truncated` flag (the server clipped that chunk at its result-size or
-  //   row-budget limit). There is deliberately NO per-source LIMIT: an UNWIND
-  //   query can't cheaply apply one, and the caller pre-filters high-degree
+  //   row-budget limit). There is deliberately NO per-source LIMIT: a batched
+  //   IN-list query can't cheaply apply one, and the caller pre-filters high-degree
   //   ("profligate") sources before calling, so per-source fan-out is already
   //   bounded.
   async fetchNeighborsBatched({
@@ -374,7 +382,7 @@ class NeighborsFetcher {
   // Build ONE wildcard query (or none) for the focus node's table paired with
   // `otherTable`, matching in EITHER direction. The focus node is pinned by its
   // single primary key ($pk1); the other endpoints are bound as a list ($pks2)
-  // via UNWIND so all edges between the focus node and every canvas node of one
+  // via `IN` so all edges between the focus node and every canvas node of one
   // table are fetched in a single request. The rel-table connectivity is kept
   // as a cheap pre-filter — if no rel type connects this table pair we emit no
   // query — but the wildcard `-[r]-` binds every incident rel type at once, so a
@@ -411,9 +419,10 @@ class NeighborsFetcher {
           (c.src === otherTable && c.dst === focusTable)
       )
     );
+    // `IN $pks2`, not UNWIND — see _buildNeighborCountQueries for why.
     return connects
       ? [
-          `UNWIND $pks2 AS pk2 MATCH (a:${escapedFocus}) -[r]- (b:${escapedOther}) WHERE a.${escapedFocusPk} = $pk1 AND b.${escapedOtherPk} = pk2 RETURN r;`,
+          `MATCH (a:${escapedFocus}) -[r]- (b:${escapedOther}) WHERE a.${escapedFocusPk} = $pk1 AND b.${escapedOtherPk} IN $pks2 RETURN r;`,
         ]
       : [];
   }
@@ -474,7 +483,7 @@ class NeighborsFetcher {
 
   // Build ONE wildcard query (or none) for the `tableA`/`tableB` pairing,
   // matching in EITHER direction. BOTH endpoint sets are bound as lists
-  // ($pksA / $pksB) via nested UNWIND so every edge whose endpoints both fall
+  // ($pksA / $pksB) via `IN` predicates so every edge whose endpoints both fall
   // inside the two pk lists is fetched in a single request. The rel-table
   // connectivity is kept as a cheap pre-filter — if no rel type connects this
   // table pair we emit no query — but the wildcard `-[r]-` binds every incident
@@ -511,9 +520,12 @@ class NeighborsFetcher {
           (c.src === tableB && c.dst === tableA)
       )
     );
+    // `IN $pksA/$pksB`, not nested UNWIND — see _buildNeighborCountQueries for
+    // why (the nested-UNWIND form full-scans the entire rel table between the
+    // two node tables).
     return connects
       ? [
-          `UNWIND $pksA AS a_pk UNWIND $pksB AS b_pk MATCH (a:${escapedA}) -[r]- (b:${escapedB}) WHERE a.${escapedPkA} = a_pk AND b.${escapedPkB} = b_pk RETURN r;`,
+          `MATCH (a:${escapedA}) -[r]- (b:${escapedB}) WHERE a.${escapedPkA} IN $pksA AND b.${escapedPkB} IN $pksB RETURN r;`,
         ]
       : [];
   }
@@ -530,7 +542,7 @@ class NeighborsFetcher {
   // Requests scale with the number of CONNECTED unordered table pairings
   // (including each table with itself) — one wildcard query each — NOT with the
   // rel types per pairing nor the number of batch nodes: one query binds two
-  // whole pk lists via nested UNWIND. Each unordered table pair is visited once
+  // whole pk lists via `IN` predicates. Each unordered table pair is visited once
   // (self-pairs handle same-table edges), and the undirected `-[r]-` match
   // catches both stored directions, so no pairing is queried twice.
   async fetchRelsAmongNodes({
