@@ -1265,6 +1265,203 @@ describe("fetchNeighborsBatched", () => {
   });
 });
 
+describe("single-pk fast path", () => {
+  it("fetchNeighborNodesBatched: a 1-pk chunk uses `= $pk`, params { pk }", async () => {
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValue({ rows: [], dataTypes: {} });
+
+    await NeighborsFetcher.fetchNeighborNodesBatched({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValues: ["c1"],
+    });
+
+    // A single-node chunk drops the ~137ms IN-list form for the ~6ms pk-index
+    // lookup: `= $pk` bound as { pk }, both directions.
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    runSpy.mock.calls.forEach(([query, params]) => {
+      expect(query).toContain("WHERE src.`id` = $pk");
+      expect(query).not.toContain("IN $pks");
+      expect(params).toEqual({ pk: "c1" });
+    });
+    runSpy.mockRestore();
+  });
+
+  it("fetchNeighborNodesBatched: a multi-pk chunk keeps `IN $pks`, params { pks }", async () => {
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValue({ rows: [], dataTypes: {} });
+
+    await NeighborsFetcher.fetchNeighborNodesBatched({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValues: ["c1", "c2"],
+    });
+
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    runSpy.mock.calls.forEach(([query, params]) => {
+      expect(query).toContain("WHERE src.`id` IN $pks");
+      expect(query).not.toContain("= $pk");
+      expect(params).toEqual({ pks: ["c1", "c2"] });
+    });
+    runSpy.mockRestore();
+  });
+
+  it("fetchNeighborsBatched: a 1-pk chunk uses `= $pk` and keeps the RETURN alias", async () => {
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValue({ rows: [], dataTypes: { pk: "STRING", r: "REL", dst: "NODE" } });
+
+    await NeighborsFetcher.fetchNeighborsBatched({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValues: ["c1"],
+    });
+
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    runSpy.mock.calls.forEach(([query, params]) => {
+      expect(query).toContain("WHERE src.`id` = $pk");
+      expect(query).not.toContain("IN $pks");
+      // The pk-keyed merge relies on this alias, so it must survive the fast path.
+      expect(query).toContain("RETURN src.`id` AS pk, r, dst;");
+      expect(params).toEqual({ pk: "c1" });
+    });
+    runSpy.mockRestore();
+  });
+
+  it("fetchNeighborsBatched: a multi-pk chunk keeps `IN $pks`, params { pks }", async () => {
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValue({ rows: [], dataTypes: { pk: "STRING", r: "REL", dst: "NODE" } });
+
+    await NeighborsFetcher.fetchNeighborsBatched({
+      tableName: "Company",
+      primaryKeyName: "id",
+      primaryKeyValues: ["c1", "c2"],
+    });
+
+    expect(runSpy).toHaveBeenCalledTimes(2);
+    runSpy.mock.calls.forEach(([query, params]) => {
+      expect(query).toContain("WHERE src.`id` IN $pks");
+      expect(query).not.toContain("= $pk");
+      expect(params).toEqual({ pks: ["c1", "c2"] });
+    });
+    runSpy.mockRestore();
+  });
+
+  it("_buildNeighborCountQueries / _buildNeighborQueries honour the single flag", () => {
+    const [inCount] = NeighborsFetcher._buildNeighborCountQueries({
+      tableName: "Company",
+      primaryKeyName: "id",
+      single: true,
+    });
+    expect(inCount).toBe(
+      "MATCH (dst) -[]-> (src:`Company`) WHERE src.`id` = $pk RETURN src.`id` AS pk, dst;"
+    );
+    const [inRel] = NeighborsFetcher._buildNeighborQueries({
+      tableName: "Company",
+      primaryKeyName: "id",
+      single: true,
+    });
+    expect(inRel).toBe(
+      "MATCH (dst) -[r]-> (src:`Company`) WHERE src.`id` = $pk RETURN src.`id` AS pk, r, dst;"
+    );
+  });
+});
+
+describe("concurrency gate", () => {
+  it("admits at most MAX_CONCURRENT_QUERIES transports at once, then drains the queue", async () => {
+    // Control each transport with a deferred promise so we can hold requests
+    // open and watch how many the gate lets through. Every _runQuery routes
+    // through _runQueryTransport, so stubbing the transport exercises the gate.
+    let active = 0;
+    let peak = 0;
+    const resolvers = [];
+    const transportSpy = vi
+      .spyOn(NeighborsFetcher, "_runQueryTransport")
+      .mockImplementation(
+        () =>
+          new Promise(resolve => {
+            active += 1;
+            peak = Math.max(peak, active);
+            resolvers.push(() => {
+              active -= 1;
+              resolve({ rows: [], dataTypes: {} });
+            });
+          })
+      );
+
+    // Fire 20 gated requests concurrently — far more than the cap of 6.
+    const runs = Array.from({ length: 20 }, (_, i) =>
+      NeighborsFetcher._runQuery(`q${i}`, {})
+    );
+
+    // Let the microtask queue settle: exactly the cap should be in flight, the
+    // rest parked at the gate.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(active).toBe(6);
+    expect(resolvers).toHaveLength(6);
+
+    // Drain: each resolve frees a slot, which must admit a parked waiter, so the
+    // in-flight count never exceeds the cap across the whole run.
+    while (resolvers.length > 0) {
+      resolvers.shift()();
+      // Give the released waiter a tick to enter the transport.
+      // eslint-disable-next-line no-await-in-loop
+      await Promise.resolve();
+      // eslint-disable-next-line no-await-in-loop
+      await Promise.resolve();
+    }
+    await Promise.all(runs);
+
+    expect(peak).toBe(6);
+    transportSpy.mockRestore();
+  });
+});
+
+describe("_mergeResults truncation propagation", () => {
+  it("flags the merged result truncated when ANY constituent was truncated", () => {
+    const merged = NeighborsFetcher._mergeResults([
+      { rows: [{ r: 1 }], dataTypes: { r: "REL" } },
+      { rows: [{ r: 2 }], dataTypes: { r: "REL" }, truncated: true },
+    ]);
+    expect(merged.truncated).toBe(true);
+    expect(merged.rows).toHaveLength(2);
+  });
+
+  it("does not flag truncated when no constituent carried the flag", () => {
+    const merged = NeighborsFetcher._mergeResults([
+      { rows: [{ r: 1 }], dataTypes: { r: "REL" } },
+    ]);
+    expect(merged.truncated).toBeUndefined();
+  });
+
+  it("fetchRelsAmongNodes surfaces a truncated constituent through the merge", async () => {
+    const runSpy = vi
+      .spyOn(NeighborsFetcher, "_runQuery")
+      .mockResolvedValueOnce({
+        rows: [{ r: { _id: { table: 5, offset: 1 }, _label: "Directorship" } }],
+        dataTypes: { r: "REL" },
+        truncated: true,
+      });
+
+    const merged = await NeighborsFetcher.fetchRelsAmongNodes({
+      nodes: [
+        { table: "Person", primaryKeyName: "id", primaryKeyValues: ["p1"] },
+        { table: "Company", primaryKeyName: "id", primaryKeyValues: ["c1"] },
+      ],
+      relTables: [
+        { name: "Directorship", connectivity: [{ src: "Person", dst: "Company" }] },
+      ],
+    });
+
+    expect(merged.truncated).toBe(true);
+    runSpy.mockRestore();
+  });
+});
+
 describe("fetchNeighbors incomplete flag", () => {
   const person = { _id: { table: 2, offset: 1 }, _label: "Person" };
 

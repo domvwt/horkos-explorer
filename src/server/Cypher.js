@@ -303,7 +303,12 @@ router.post("/", QueryValidator.middleware(database), async (req, res) => {
   }
 });
 
-router.get("/progress/:uuid", (req, res) => {
+// Progress polling on its own router so API.js can mount it under the general
+// (not query) limiter: a slow query polled every 500ms fires ~60 GETs, which
+// would exhaust the query limit on polling alone. Each GET is just a Map lookup
+// (no Kuzu, no connection), so the general limiter is the right bucket.
+const progressRouter = express.Router();
+progressRouter.get("/:uuid", (req, res) => {
   let progress = queryMap.get(req.params.uuid);
   if (progress) {
     return res.send(progress);
@@ -313,3 +318,4 @@ router.get("/progress/:uuid", (req, res) => {
 });
 
 module.exports = router;
+module.exports.progressRouter = progressRouter;

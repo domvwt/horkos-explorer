@@ -1766,6 +1766,12 @@ export default {
           nodes: others,
           relTables: this.schema.relTables,
         });
+        // The edge query was clipped at the server row cap, so some inter-node
+        // edges may be missing — say so once rather than let a partly-connected
+        // canvas read as complete. Quiet toast, no danger styling.
+        if (amongResult && amongResult.truncated) {
+          this.showToast("Some connections may be missing — the result limit was reached.");
+        }
         if (!amongResult || !amongResult.rows || amongResult.rows.length === 0) {
           return [];
         }
@@ -3269,6 +3275,15 @@ export default {
               if (row.r && row.r._id) rawRels.push(row.r);
             });
           }
+          // Same honesty rule as completeEdgesAmongCurrentNodes: if the server
+          // capped the rel fetch, say so instead of rendering a silently
+          // partial connection set for the pinned node.
+          if (relResult && relResult.truncated) {
+            this.showToast(
+              "Some connections may be missing — the result limit was reached.",
+              4000
+            );
+          }
         } catch (e) {
           console.warn('Failed to fetch rels for pinned node:', e);
         }
@@ -3799,8 +3814,16 @@ export default {
         return;
       }
 
-      const nodePropsMap = await this.refetchNodeProperties(state.minimalNodes);
-      const edgePropsMap = await this.refetchEdgeProperties(state.minimalEdges);
+      // Refetch nodes and edges concurrently — independent request groups, so
+      // there's no reason to await one fully before starting the other. Promise
+      // .all still rejects fast on the first failure (refetchNodeProperties only
+      // throws when rethrowQueryErrors is set, which this caller doesn't pass —
+      // so its labels swallow errors — while refetchEdgeProperties never
+      // throws), preserving today's user-visible restore outcome.
+      const [nodePropsMap, edgePropsMap] = await Promise.all([
+        this.refetchNodeProperties(state.minimalNodes),
+        this.refetchEdgeProperties(state.minimalEdges),
+      ]);
 
       // Build G6 nodes from refetched data + saved positions
       const nodes = [];
@@ -4006,31 +4029,38 @@ export default {
       }
 
       const results = {};
-      for (const [label, pks] of Object.entries(nodesByLabel)) {
-        // pks are attacker-supplied (share code). Bind them as a LIST parameter
-        // instead of string-building the IN list, so a hostile pk (e.g. one with
-        // a trailing backslash defeating a quote-only escape) cannot break out
-        // into injected Cypher. `label` is NOT parameterizable (it's a table
-        // identifier), but it is already allowlisted against the DB schema above
-        // via validLabels.has(node.label), so interpolating it is safe.
-        const query = `MATCH (n:${label}) WHERE n.id IN $pkList RETURN n`;
-        const queryParams = { pkList: pks };
+      // One POST per label, fired in parallel. These direct posts bypass the
+      // NeighborsFetcher concurrency gate, but they are bounded by the schema's
+      // label count (<=8 on Horkos) — far under the server's 34-in-flight
+      // admission cap. Promise.all rejects fast on the first failure, so
+      // when rethrowQueryErrors is set the caller still fails the same way; when
+      // it's unset each label swallows its own error, so a bad label doesn't
+      // sink the rest.
+      await Promise.all(
+        Object.entries(nodesByLabel).map(async ([label, pks]) => {
+          // pks are attacker-supplied (share code). Bind them as a LIST param
+          // rather than string-building the IN list, so a hostile pk can't break
+          // out into injected Cypher. `label` is a table identifier (not
+          // parameterizable) but is already allowlisted via validLabels above.
+          const query = `MATCH (n:${label}) WHERE n.id IN $pkList RETURN n`;
+          const queryParams = { pkList: pks };
 
-        try {
-          const res = await Axios.post('/api/cypher', { query, params: queryParams, updateHistory: false });
-          const response = res.data;
-          if (response?.rows) {
-            response.rows.forEach(row => {
-              if (row.n?.id) results[row.n.id] = row.n;
-            });
+          try {
+            const res = await Axios.post('/api/cypher', { query, params: queryParams, updateHistory: false });
+            const response = res.data;
+            if (response?.rows) {
+              response.rows.forEach(row => {
+                if (row.n?.id) results[row.n.id] = row.n;
+              });
+            }
+          } catch (error) {
+            console.warn('[ResultGraph] Failed to refetch nodes for label:', label, error);
+            if (rethrowQueryErrors) {
+              throw error;
+            }
           }
-        } catch (error) {
-          console.warn('[ResultGraph] Failed to refetch nodes for label:', label, error);
-          if (rethrowQueryErrors) {
-            throw error;
-          }
-        }
-      }
+        })
+      );
       return results;
     },
 
@@ -4061,27 +4091,31 @@ export default {
       }
 
       const results = {};
-      for (const [label, pks] of Object.entries(edgesByLabel)) {
-        // pks are attacker-supplied (share code). Bind them as a LIST parameter
-        // instead of string-building the IN list, so a hostile pk cannot break
-        // out into injected Cypher. `label` is a rel-table identifier and cannot
-        // be parameterized, but it is already allowlisted against the DB schema
-        // above via validLabels.has(edge.label), so interpolating it is safe.
-        const query = `MATCH ()-[r:${label}]->() WHERE r.id IN $pkList RETURN r`;
-        const queryParams = { pkList: pks };
+      // One POST per label in parallel (<=8 labels). Each label swallows its own
+      // error (same as the serial loop did), so one bad rel-table doesn't sink
+      // the rest of the restore.
+      await Promise.all(
+        Object.entries(edgesByLabel).map(async ([label, pks]) => {
+          // pks are attacker-supplied (share code). Bind them as a LIST param
+          // rather than string-building the IN list, so a hostile pk can't break
+          // out into injected Cypher. `label` is a rel-table identifier (not
+          // parameterizable) but is already allowlisted via validLabels above.
+          const query = `MATCH ()-[r:${label}]->() WHERE r.id IN $pkList RETURN r`;
+          const queryParams = { pkList: pks };
 
-        try {
-          const res = await Axios.post('/api/cypher', { query, params: queryParams, updateHistory: false });
-          const response = res.data;
-          if (response?.rows) {
-            response.rows.forEach(row => {
-              if (row.r?.id) results[row.r.id] = row.r;
-            });
+          try {
+            const res = await Axios.post('/api/cypher', { query, params: queryParams, updateHistory: false });
+            const response = res.data;
+            if (response?.rows) {
+              response.rows.forEach(row => {
+                if (row.r?.id) results[row.r.id] = row.r;
+              });
+            }
+          } catch (error) {
+            console.warn('[ResultGraph] Failed to refetch edges for label:', label, error);
           }
-        } catch (error) {
-          console.warn('[ResultGraph] Failed to refetch edges for label:', label, error);
-        }
-      }
+        })
+      );
       return results;
     },
 

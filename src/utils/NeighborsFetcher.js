@@ -27,6 +27,14 @@ import DataDefinitionLanguage from "./DataDefinitionLanguage";
 // correctly whatever the operator sets KUZU_QUERY_SIZE_LIMIT to.
 const NEIGHBOR_COUNT_PK_CHUNK_SIZE = 25;
 
+// Cap on concurrent /api/cypher requests across ALL fan-outs of the singleton.
+// The batched fetchers Promise.all every (chunk x direction) sub-query at once,
+// so a dense canvas can exceed the server's 34-in-flight admission cap; the
+// resulting shed 503 marks the batch incomplete and rolls the expand back. 6
+// stays under that even with a couple of tabs, and tracks the server's 4 Kuzu
+// connections + queue headroom.
+const MAX_CONCURRENT_QUERIES = 6;
+
 // A wildcard relationship variable (`-[r]-`) now binds ACROSS all edge tables
 // incident to a node in a single query: the graph build unified the previously
 // divergent same-named STRUCT properties (e.g. the Ownership vs Influence
@@ -43,6 +51,33 @@ const NEIGHBOR_COUNT_PK_CHUNK_SIZE = 25;
 // table pair instead of one per surviving rel type, so a densely connected pair
 // collapses from N sub-queries to 1.
 class NeighborsFetcher {
+  constructor() {
+    // Concurrency-gate state, shared across every fan-out (singleton export).
+    this._inFlight = 0;
+    this._waiters = [];
+  }
+
+  // Tiny dependency-free semaphore: resolve now if a slot is free, else park in
+  // a FIFO queue for _release to wake.
+  _acquire() {
+    if (this._inFlight < MAX_CONCURRENT_QUERIES) {
+      this._inFlight += 1;
+      return Promise.resolve();
+    }
+    return new Promise(resolve => this._waiters.push(resolve));
+  }
+
+  // Hand the slot to the next waiter, or drop the count if none. Runs on every
+  // path (finally in _runQuery) so a failed request can't leak a slot.
+  _release() {
+    const next = this._waiters.shift();
+    if (next) {
+      next();
+    } else {
+      this._inFlight -= 1;
+    }
+  }
+
   // A failed sub-query returns this sentinel instead of a bare `null`, so a
   // transport failure (load-shed 503, rate-limit 429, timeout 408, bad query
   // 400, or a network error) is DISTINGUISHABLE from a query that legitimately
@@ -56,7 +91,9 @@ class NeighborsFetcher {
     return Boolean(result && result.__failed);
   }
 
-  async _runQuery(query, params) {
+  // The actual transport, split out so the gate below can wrap it and a test
+  // can stub it to observe how many requests the gate admits at once.
+  async _runQueryTransport(query, params) {
     try {
       const response = await Axios.post("api/cypher", { query, params });
       return response.data;
@@ -65,6 +102,17 @@ class NeighborsFetcher {
       // err.response.status is present for an HTTP error (503/429/408/400);
       // absent for a network/transport error (err.response is undefined).
       return { __failed: true, status: (err && err.response && err.response.status) || null };
+    }
+  }
+
+  // Every sub-query flows through here, so the gate covers all fan-outs with no
+  // caller change. Release in finally so a throw never leaks a slot.
+  async _runQuery(query, params) {
+    await this._acquire();
+    try {
+      return await this._runQueryTransport(query, params);
+    } finally {
+      this._release();
     }
   }
 
@@ -82,9 +130,19 @@ class NeighborsFetcher {
   // backward compatibility.
   _mergeResults(results, sizeLimit) {
     const incomplete = results.some(result => this._isFailure(result));
+    // Carry the server's authoritative `truncated` flag forward if ANY
+    // constituent had it, else the complete-edges callers (which route through
+    // here) drop it and a capped-at-10000 edge query renders as fully-connected.
+    const truncated = results.some(result => result && result.truncated === true);
     const valid = results.filter(result => result && result.rows);
     if (valid.length === 0) {
-      return incomplete ? { rows: [], dataTypes: [], incomplete: true } : null;
+      if (incomplete || truncated) {
+        const empty = { rows: [], dataTypes: [] };
+        if (incomplete) empty.incomplete = true;
+        if (truncated) empty.truncated = true;
+        return empty;
+      }
+      return null;
     }
     const merged = { rows: [], dataTypes: valid[0].dataTypes };
     valid.forEach(result => merged.rows.push(...result.rows));
@@ -94,6 +152,9 @@ class NeighborsFetcher {
     if (incomplete) {
       merged.incomplete = true;
     }
+    if (truncated) {
+      merged.truncated = true;
+    }
     return merged;
   }
 
@@ -102,6 +163,16 @@ class NeighborsFetcher {
       return value.valueOf();
     }
     return value;
+  }
+
+  // Dispatch a chunk's two direction-queries. A 1-element chunk takes the
+  // `= $pk` fast path (params `{ pk }`), a multi-element one keeps `IN $pks`
+  // (params `{ pks }`); `buildQueries(single)` yields the matching query pair.
+  // Shared so both batched fetchers make the same single-vs-list decision.
+  _runChunkQueries(chunk, buildQueries) {
+    const single = chunk.length === 1;
+    const params = single ? { pk: chunk[0] } : { pks: chunk };
+    return buildQueries(single).map(query => this._runQuery(query, params));
   }
 
   // Per-node neighbour expansion: every edge incident to one source node plus
@@ -201,15 +272,23 @@ class NeighborsFetcher {
   // every edge incident to the node table — on a national-scale graph that
   // exhausts the server's buffer pool and the query dies. `IN $pks` keeps the
   // predicate pushable and the scan bounded.
-  _buildNeighborCountQueries({ tableName, primaryKeyName }) {
+  //
+  // `single: true` swaps `IN $pks` for `= $pk`: on this Kuzu build a 1-element
+  // `IN` list still costs ~137ms (no pk-index lookup), vs ~6ms for `= $pk`, and
+  // single-node badge counts are the hottest path. RETURN (incl. `AS pk`) is
+  // unchanged, so the pk-keyed merge is untouched.
+  _buildNeighborCountQueries({ tableName, primaryKeyName, single = false }) {
     const escapedTable = DataDefinitionLanguage._escapeName(tableName);
     const escapedPk = DataDefinitionLanguage._escapeName(primaryKeyName);
 
-    // Only escaped identifiers are interpolated; pk values ride as $pks.
+    // Only escaped identifiers are interpolated; pk values ride as $pks / $pk.
+    const predicate = single
+      ? `src.${escapedPk} = $pk`
+      : `src.${escapedPk} IN $pks`;
     const inbound =
-      `MATCH (dst) -[]-> (src:${escapedTable}) WHERE src.${escapedPk} IN $pks RETURN src.${escapedPk} AS pk, dst;`;
+      `MATCH (dst) -[]-> (src:${escapedTable}) WHERE ${predicate} RETURN src.${escapedPk} AS pk, dst;`;
     const outbound =
-      `MATCH (src:${escapedTable}) -[]-> (dst) WHERE src.${escapedPk} IN $pks RETURN src.${escapedPk} AS pk, dst;`;
+      `MATCH (src:${escapedTable}) -[]-> (dst) WHERE ${predicate} RETURN src.${escapedPk} AS pk, dst;`;
 
     return [inbound, outbound];
   }
@@ -234,15 +313,11 @@ class NeighborsFetcher {
       return neighborsByPk;
     }
 
-    const queries = this._buildNeighborCountQueries({
-      tableName,
-      primaryKeyName,
-    });
     const unwrappedPks = primaryKeyValues.map(v => this._unwrapPrimaryKeyValue(v));
 
     // Split the pk list into chunks so each batched request stays well under the
     // server's silent KUZU_QUERY_SIZE_LIMIT row cap (see the constant above).
-    // The query text is identical across chunks — only the bound $pks param
+    // Query text is identical across same-shape chunks — only the bound param
     // varies — so pk VALUES are never interpolated, preserving injection safety.
     // Results merge into a single per-pk map, which is order-independent and
     // free of double-counting because rows are keyed by their source pk.
@@ -252,9 +327,9 @@ class NeighborsFetcher {
     }
 
     const results = await Promise.all(
-      chunks.flatMap(chunk =>
-        queries.map(query => this._runQuery(query, { pks: chunk }))
-      )
+      chunks.flatMap(chunk => this._runChunkQueries(chunk, single =>
+        this._buildNeighborCountQueries({ tableName, primaryKeyName, single })
+      ))
     );
 
     results.forEach(result => {
@@ -290,16 +365,23 @@ class NeighborsFetcher {
   // heterogeneous `r` serializes cleanly and its column reports as REL for the
   // extractor. Pure over its inputs (no I/O), so it is unit-testable without a
   // DB.
-  _buildNeighborQueries({ tableName, primaryKeyName }) {
+  //
+  // `single: true` swaps `IN $pks` for `= $pk` (137ms -> ~6ms per direction) —
+  // the single-node expand fast path, same as _buildNeighborCountQueries.
+  _buildNeighborQueries({ tableName, primaryKeyName, single = false }) {
     const escapedTable = DataDefinitionLanguage._escapeName(tableName);
     const escapedPk = DataDefinitionLanguage._escapeName(primaryKeyName);
 
-    // Only escaped identifiers are interpolated; pk values ride as $pks.
-    // `IN $pks`, not UNWIND — see _buildNeighborCountQueries for why.
+    // Only escaped identifiers are interpolated; pk values ride as $pks / $pk.
+    // `IN $pks` (multi) / `= $pk` (single), never UNWIND — see
+    // _buildNeighborCountQueries for why UNWIND full-scans.
+    const predicate = single
+      ? `src.${escapedPk} = $pk`
+      : `src.${escapedPk} IN $pks`;
     const inbound =
-      `MATCH (dst) -[r]-> (src:${escapedTable}) WHERE src.${escapedPk} IN $pks RETURN src.${escapedPk} AS pk, r, dst;`;
+      `MATCH (dst) -[r]-> (src:${escapedTable}) WHERE ${predicate} RETURN src.${escapedPk} AS pk, r, dst;`;
     const outbound =
-      `MATCH (src:${escapedTable}) -[r]-> (dst) WHERE src.${escapedPk} IN $pks RETURN src.${escapedPk} AS pk, r, dst;`;
+      `MATCH (src:${escapedTable}) -[r]-> (dst) WHERE ${predicate} RETURN src.${escapedPk} AS pk, r, dst;`;
 
     return [inbound, outbound];
   }
@@ -336,24 +418,20 @@ class NeighborsFetcher {
       return { rows: [], dataTypes: [], incomplete: false, truncated: false };
     }
 
-    const queries = this._buildNeighborQueries({
-      tableName,
-      primaryKeyName,
-    });
     const unwrappedPks = primaryKeyValues.map(v => this._unwrapPrimaryKeyValue(v));
 
     // Chunk the pk list so each request stays under the server's silent row cap.
-    // Query text is identical across chunks — only the bound $pks param varies —
-    // so pk VALUES are never interpolated, preserving injection safety.
+    // Query text is identical across same-shape chunks — only the bound param
+    // varies — so pk VALUES are never interpolated, preserving injection safety.
     const chunks = [];
     for (let i = 0; i < unwrappedPks.length; i += NEIGHBOR_COUNT_PK_CHUNK_SIZE) {
       chunks.push(unwrappedPks.slice(i, i + NEIGHBOR_COUNT_PK_CHUNK_SIZE));
     }
 
     const results = await Promise.all(
-      chunks.flatMap(chunk =>
-        queries.map(query => this._runQuery(query, { pks: chunk }))
-      )
+      chunks.flatMap(chunk => this._runChunkQueries(chunk, single =>
+        this._buildNeighborQueries({ tableName, primaryKeyName, single })
+      ))
     );
 
     // The server sets an authoritative `truncated` flag on any response it

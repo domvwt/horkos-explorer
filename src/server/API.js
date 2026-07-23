@@ -8,6 +8,11 @@ const cypher = require("./Cypher");
 const state = require("./State");
 
 router.use("/schema", apiLimiter, schema);
+// Progress polling under the general limiter, mounted BEFORE the query-limited
+// /cypher router so this more-specific path wins (Express matches in order). A
+// 30s query polled at 500ms would otherwise burn ~60 query-limit tokens on
+// polling alone. Helmet/body-limit sit on the parent app, so ordering is intact.
+router.use("/cypher/progress", apiLimiter, cypher.progressRouter);
 router.use("/cypher", queryLimiter, cypher);
 
 // Only enable session endpoints if session storage is not disabled
