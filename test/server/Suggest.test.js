@@ -57,10 +57,10 @@ describe("Suggest SQL builders", () => {
     expect(sql).toContain("match_bm25(doc_id, ?, conjunctive := 1)");
   });
 
-  it("buildRankedSql has four ? placeholders (query, start, word, limit)", () => {
+  it("buildRankedSql has three ? placeholders (query, start, limit)", () => {
     const sql = buildRankedSql(ENTITY_TYPES.Person);
     const placeholders = (sql.match(/\?/g) || []).length;
-    expect(placeholders).toBe(4);
+    expect(placeholders).toBe(3);
   });
 
   it("buildLikeSql is FTS-free (no match_bm25) and per-table", () => {
@@ -69,10 +69,10 @@ describe("Suggest SQL builders", () => {
     expect(sql).toContain("search.company_names");
   });
 
-  it("buildLikeSql has four ? placeholders (start, start, word, limit)", () => {
+  it("buildLikeSql has two ? placeholders (start, limit)", () => {
     const sql = buildLikeSql(ENTITY_TYPES.Address);
     const placeholders = (sql.match(/\?/g) || []).length;
-    expect(placeholders).toBe(4);
+    expect(placeholders).toBe(2);
   });
 
   it("buildLegacySql selects only name, no cluster_id / FTS", () => {
@@ -187,14 +187,17 @@ describe("handleSuggest non-staged / fallback paths (AC#5)", () => {
     vi.restoreAllMocks();
   });
 
-  it("no stage + FTS available runs the ranked query (back-compat)", async () => {
+  it("no stage + FTS available runs the fast LIKE query (unstaged default)", async () => {
     vi.spyOn(duckdb, "getCapabilities").mockResolvedValue(
       caps({ table: "person_names", columns: CONTRACT, fts: true })
     );
     const res = mockRes();
     await handleSuggest(mockReq({ q: "john smith", type: "Person" }), res);
     expect(res.statusCode).toBe(200);
-    expect(querySpy.mock.calls[0][0]).toContain("match_bm25");
+    // Unstaged requests serve the cheap prefix path; BM25 only runs when the
+    // client explicitly asks for the stage=rank upgrade.
+    expect(querySpy).toHaveBeenCalledTimes(1);
+    expect(querySpy.mock.calls[0][0]).not.toContain("match_bm25");
   });
 
   it("no stage + FTS unavailable runs the LIKE query", async () => {
@@ -207,23 +210,21 @@ describe("handleSuggest non-staged / fallback paths (AC#5)", () => {
     expect(querySpy.mock.calls[0][0]).not.toContain("match_bm25");
   });
 
-  it("no stage + FTS query failure degrades to LIKE and flips the FTS flag", async () => {
+  it("no stage + LIKE query failure returns 500 without touching the FTS flag", async () => {
     const capabilities = caps({
       table: "person_names",
       columns: CONTRACT,
       fts: true,
     });
     vi.spyOn(duckdb, "getCapabilities").mockResolvedValue(capabilities);
-    // First call (ranked) rejects, second call (LIKE fallback) resolves.
-    querySpy
-      .mockRejectedValueOnce(new Error("index gone"))
-      .mockResolvedValueOnce([]);
+    querySpy.mockRejectedValueOnce(new Error("db gone"));
     const res = mockRes();
     await handleSuggest(mockReq({ q: "john", type: "Person" }), res);
-    expect(res.statusCode).toBe(200);
-    expect(querySpy).toHaveBeenCalledTimes(2);
-    // The non-staged path keeps its documented process-wide degrade behaviour.
-    expect(capabilities.tables.person_names.fts).toBe(false);
+    // The unstaged default IS the LIKE path now; there is no ranked query to
+    // degrade from, and a LIKE failure must not disable FTS for other users.
+    expect(res.statusCode).toBe(500);
+    expect(querySpy).toHaveBeenCalledTimes(1);
+    expect(capabilities.tables.person_names.fts).toBe(true);
   });
 
   it("legacy pre-contract table runs the legacy query and nulls cluster ids", async () => {

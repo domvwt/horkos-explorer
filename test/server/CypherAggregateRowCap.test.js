@@ -182,18 +182,22 @@ function getPostHandler(router) {
   throw new Error("POST / route not found on router");
 }
 
+// The progress GET lives on its own sub-router (exported as `progressRouter`
+// beside the main router) so API.js can mount it under the general api
+// limiter instead of the query limiter — progress polling must not burn
+// query-rate-limit tokens.
 function getProgressHandler(router) {
-  for (const layer of router.stack) {
+  for (const layer of router.progressRouter.stack) {
     if (
       layer.route &&
-      layer.route.path === "/progress/:uuid" &&
+      layer.route.path === "/:uuid" &&
       layer.route.methods.get
     ) {
       const routeStack = layer.route.stack;
       return routeStack[routeStack.length - 1].handle;
     }
   }
-  throw new Error("GET /progress/:uuid route not found on router");
+  throw new Error("GET /:uuid route not found on progress router");
 }
 
 let savedSizeLimit;
